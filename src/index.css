@@ -1,0 +1,40 @@
+:root {
+  --bg: #0f1117;
+  --bg-card: #171a23;
+  --bg-card-muted: #12141b;
+  --text: #e6e6ea;
+  --text-muted: #9a9aa5;
+  --border: #2a2d3a;
+  --accent: #6366f1;
+  --accent-hover: #7c7ff5;
+  --warning: #e8c468;
+  --error: #f0a8a8;
+  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f7f7fa;
+    --bg-card: #ffffff;
+    --bg-card-muted: #f0f0f4;
+    --text: #1a1a22;
+    --text-muted: #666672;
+    --border: #dcdce3;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: var(--sans);
+  background: var(--bg);
+  color: var(--text);
+}
+
+button, input, select {
+  font-family: inherit;
+  font-size: inherit;
+}
