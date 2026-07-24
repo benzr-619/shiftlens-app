@@ -4,6 +4,116 @@
   padding: 32px 24px 80px;
 }
 
+.welcome-screen {
+  max-width: 560px;
+  padding-top: 96px;
+  text-align: center;
+}
+
+.welcome-logo {
+  width: 56px;
+  height: 56px;
+  margin-bottom: 20px;
+}
+
+.welcome-screen .subtitle {
+  margin-bottom: 28px;
+}
+
+/* Setup wizard step indicator */
+.step-indicator {
+  margin-bottom: 24px;
+}
+
+.step-indicator-title {
+  font-weight: 600;
+  margin-bottom: 10px;
+}
+
+.step-dots {
+  display: flex;
+  gap: 4px;
+}
+
+.step-dot-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  color: var(--text-muted);
+}
+
+.step-dot-wrap:not(:last-child)::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+  margin: 0 8px;
+}
+
+.step-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  font-size: 12px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.step-dot-wrap.active .step-dot {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+
+.step-dot-wrap.done .step-dot {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.step-dot-wrap.active .step-dot-label {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.step-dot-label {
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+/* Review step */
+.review-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.review-row:last-child {
+  border-bottom: none;
+}
+
+.review-label {
+  width: 180px;
+  flex-shrink: 0;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.review-value {
+  flex: 1;
+}
+
+.review-sub {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
 h1 {
   margin: 0 0 4px;
   font-size: 28px;
@@ -159,6 +269,54 @@ h1 {
   font-style: italic;
 }
 
+.field-row input[type='checkbox'] {
+  width: auto;
+}
+
+/* Data step (consolidated template + explainer) */
+.data-explainer-list {
+  list-style: none;
+  padding: 0;
+  margin: 16px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.data-explainer-list li p {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.data-status-list {
+  list-style: none;
+  padding: 0;
+  margin: 12px 0;
+  font-size: 13px;
+  color: var(--text-muted);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.data-team-copy-block {
+  background: var(--bg-card-muted);
+  border-style: dashed;
+}
+
+.data-team-copy-text {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px 16px;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-x: auto;
+}
+
 .upload-msgs {
   margin: 8px 0;
 }
@@ -171,12 +329,12 @@ h1 {
 }
 
 /* Arrivals grid (setup screen touch-up tool) */
-.arrivals-grid-wrap, .staffing-grid-wrap, .shortfall-table-wrap {
+.arrivals-grid-wrap, .staffing-grid-wrap, .whppv-heatmap-wrap, .boarding-coverage-table-wrap {
   overflow-x: auto;
   margin-top: 12px;
 }
 
-.arrivals-grid, .staffing-grid, .shortfall-table, .boarding-day-table {
+.arrivals-grid, .staffing-grid, .boarding-coverage-table {
   border-collapse: collapse;
   width: 100%;
   font-size: 13px;
@@ -184,11 +342,16 @@ h1 {
 
 .arrivals-grid th, .arrivals-grid td,
 .staffing-grid th, .staffing-grid td,
-.shortfall-table th, .shortfall-table td,
-.boarding-day-table th, .boarding-day-table td {
+.boarding-coverage-table th, .boarding-coverage-table td {
   border: 1px solid var(--border);
   padding: 4px 6px;
   text-align: center;
+}
+
+.boarding-coverage-table .day-cell {
+  white-space: nowrap;
+  font-weight: 600;
+  text-align: left;
 }
 
 .arrivals-grid .hour-col, .staffing-grid .day-cell {
@@ -255,28 +418,6 @@ h1 {
   justify-content: space-between;
   align-items: baseline;
   margin-bottom: 12px;
-}
-
-.tab-bar {
-  display: flex;
-  gap: 4px;
-  border-bottom: 1px solid var(--border);
-  margin-bottom: 20px;
-}
-
-.tab {
-  background: none;
-  border: none;
-  border-bottom: 2px solid transparent;
-  color: var(--text-muted);
-  padding: 10px 16px;
-  cursor: pointer;
-  font-weight: 500;
-}
-
-.tab.active {
-  color: var(--text);
-  border-bottom-color: var(--accent);
 }
 
 .banner {
@@ -346,16 +487,39 @@ h1 {
   font-style: italic;
 }
 
-.deficit-cell {
-  color: var(--warning);
-  font-weight: 700;
-}
-
 .grid-header-row {
   display: flex;
   justify-content: space-between;
   align-items: center;
 }
+
+/* Plain-language summary panel (Core grid tab) */
+.plain-summary-list {
+  margin: 10px 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  line-height: 1.5;
+}
+
+.why-toggle {
+  font-size: 13px;
+}
+
+.why-explainer {
+  margin-top: 10px;
+  padding: 12px 14px;
+  background: var(--bg-card-muted);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.why-explainer p:first-child { margin-top: 0; }
+.why-explainer p:last-child { margin-bottom: 0; }
 
 .shortfall-dot {
   display: inline-block;
@@ -364,6 +528,267 @@ h1 {
   border-radius: 50%;
   background: var(--warning);
   margin-left: 6px;
+}
+
+/* Realized wHPPV heatmap (replaces the shift-type shortfall table) */
+.whppv-heatmap {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 11px;
+}
+
+.whppv-heatmap th, .whppv-heatmap td {
+  border: 1px solid var(--border);
+  padding: 0;
+  text-align: center;
+  min-width: 36px;
+}
+
+.whppv-heatmap .hour-col {
+  white-space: nowrap;
+  font-weight: 600;
+  padding: 2px 6px;
+  text-align: right;
+}
+
+.heat-cell-inner {
+  position: relative;
+  min-height: 20px;
+  padding: 4px 2px;
+}
+
+.heat-cell-value {
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.heat-cell-risk {
+  box-shadow: inset 0 0 0 2px var(--error);
+}
+
+.heat-risk-badge {
+  position: absolute;
+  top: 0;
+  right: 2px;
+  font-size: 9px;
+  line-height: 1;
+  font-weight: 700;
+  color: var(--error);
+}
+
+/* §2.4 backlog overlay: amber corner dot on hours still digging out of an earlier hole.
+   Distinct from the red ENA-floor outline/badge so the two can co-occur on one cell. */
+.heat-backlog-dot {
+  position: absolute;
+  bottom: 1px;
+  left: 2px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--warning);
+}
+
+.heat-cell-backlog {
+  box-shadow: inset 0 -3px 0 rgba(232, 196, 104, 0.85);
+}
+
+/* Both at once: keep the red safety outline AND the amber backlog bar. */
+.heat-cell-risk.heat-cell-backlog {
+  box-shadow: inset 0 0 0 2px var(--error), inset 0 -3px 0 rgba(232, 196, 104, 0.85);
+}
+
+.whppv-heatmap-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 18px;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.heat-legend-gradient {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.heat-legend-bar {
+  width: 60px;
+  height: 10px;
+  border: 1px solid var(--border);
+  border-radius: 5px 0 0 5px;
+  background: linear-gradient(to right, rgba(194, 59, 59, 0.65), rgba(194, 59, 59, 0.1));
+}
+
+.heat-legend-bar-richer {
+  border-radius: 0 5px 5px 0;
+  border-left: none;
+  background: linear-gradient(to right, rgba(37, 106, 191, 0.1), rgba(37, 106, 191, 0.65));
+}
+
+.heat-legend-risk {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.heat-legend-risk-swatch {
+  position: relative;
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  background: var(--bg-card-muted);
+  box-shadow: inset 0 0 0 2px var(--error);
+}
+
+.heat-legend-risk-swatch .heat-risk-badge {
+  top: -1px;
+  right: 1px;
+}
+
+/* Current staffing comparison (Core grid tab) */
+.current-staffing-card h3 {
+  font-size: 15px;
+  margin: 20px 0 4px;
+}
+
+.diff-grid td {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.diff-grid td.diff-under {
+  color: var(--warning);
+  background: rgba(232, 196, 104, 0.12);
+}
+
+.diff-grid td.diff-over {
+  color: var(--error);
+  background: rgba(194, 59, 59, 0.1);
+}
+
+.diff-grid td.diff-even {
+  color: var(--text-muted);
+}
+
+/* §2.2 comparison unit: idealized grid + current grid + diff + budget/shape reconciliation,
+   collapsed into one card (replaces the old separate hero + current-staffing cards). */
+.comparison-unit {
+  border: 2px solid var(--accent);
+}
+
+.comparison-headline {
+  font-size: 16px;
+  line-height: 1.55;
+  margin: 6px 0 16px;
+}
+
+.comparison-cta {
+  line-height: 1.5;
+}
+
+.reconciliation-callout {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 24px;
+  padding: 14px 16px;
+  margin-bottom: 20px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-card-muted);
+}
+
+/* A subtle left accent cues which gap dominates — not a verdict color, just a pointer. */
+.reconciliation-budget { border-left: 3px solid var(--warning); }
+.reconciliation-shape { border-left: 3px solid var(--accent); }
+.reconciliation-both { border-left: 3px solid var(--error); }
+.reconciliation-none { border-left: 3px solid var(--border); }
+
+.reconciliation-callout .stat-value { font-size: 20px; }
+
+.comparison-grids {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 28px;
+  align-items: flex-start;
+}
+
+.comparison-grid-block {
+  flex: 1 1 320px;
+  min-width: 280px;
+}
+
+.comparison-grid-block .grid-header-row h3 {
+  font-size: 16px;
+  margin: 0;
+}
+
+.comparison-unit > h3 {
+  font-size: 15px;
+  margin: 24px 0 4px;
+}
+
+.grid-hint {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin: 4px 0 10px;
+}
+
+/* §2.1 opening current-staffing analysis */
+.current-analysis {
+  border: 2px solid var(--accent);
+}
+
+.current-analysis .why-explainer .wHPPV-caveat {
+  margin-bottom: 0;
+}
+
+.current-analysis-cta {
+  border: 1px dashed var(--border);
+  background: var(--bg-card-muted);
+}
+
+.current-analysis-cta p {
+  color: var(--text-muted);
+  line-height: 1.5;
+  margin-bottom: 0;
+}
+
+/* §2.5 boarding transition bridge — narrative pivot, no grid */
+.boarding-transition .comparison-headline {
+  margin-bottom: 12px;
+}
+
+/* Boarding coverage grid + month-scope toggle box (§2.6) */
+.boarding-scope {
+  margin: 16px 0;
+  padding: 14px 16px;
+  background: var(--bg-card-muted);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.boarding-period-toggle {
+  margin: 8px 0;
+  gap: 6px;
+}
+
+.boarding-period-toggle button {
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
+.btn-toggle-active {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+
+.boarding-coverage-grid td.coverage-cell-overridden input {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
 }
 
 /* Compare tab */

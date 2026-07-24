@@ -1,14 +1,17 @@
-import { useState } from 'react';
 import { useStore } from '../store';
 import { CoreGridTab } from './dashboard/CoreGridTab';
-import { BoardingTab } from './dashboard/BoardingTab';
+import { BoardingTransition } from './dashboard/BoardingTransition';
+import { BoardingCoverageSection } from './dashboard/BoardingCoverageSection';
 import { CompareTab } from './dashboard/CompareTab';
 
-type Tab = 'core' | 'boarding' | 'compare';
-
+/**
+ * Single scrolling results page (no tabs) — order follows the redesign narrative: current-
+ * staffing analysis + idealized comparison + wHPPV/heatmap (CoreGridTab), then the short
+ * boarding-transition bridge (§2.5), then the additive boarding coverage recommendation, then
+ * shift-menu comparison at the bottom. See CLAUDE.md Section 3/6 + .claude/rules/results-redesign.md.
+ */
 export function DashboardScreen() {
   const { setScreen } = useStore();
-  const [tab, setTab] = useState<Tab>('core');
 
   return (
     <div className="screen dashboard-screen">
@@ -19,23 +22,10 @@ export function DashboardScreen() {
         </button>
       </div>
 
-      <nav className="tab-bar">
-        <button className={tab === 'core' ? 'tab active' : 'tab'} onClick={() => setTab('core')}>
-          Core grid
-        </button>
-        <button className={tab === 'boarding' ? 'tab active' : 'tab'} onClick={() => setTab('boarding')}>
-          Boarding summary
-        </button>
-        <button className={tab === 'compare' ? 'tab active' : 'tab'} onClick={() => setTab('compare')}>
-          Compare shift menus
-        </button>
-      </nav>
-
-      <div className="tab-content">
-        {tab === 'core' && <CoreGridTab />}
-        {tab === 'boarding' && <BoardingTab />}
-        {tab === 'compare' && <CompareTab />}
-      </div>
+      <CoreGridTab />
+      <BoardingTransition />
+      <BoardingCoverageSection />
+      <CompareTab />
     </div>
   );
 }

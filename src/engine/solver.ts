@@ -225,12 +225,32 @@ export function solveShiftFit(
   return { grid, weeklyScheduledHours, shortfall, enaFloorViolationsRemaining };
 }
 
+/** Read-only 5.6 department-floor check: on-duty headcount at any hour, summed across
+ * overlapping slots, vs. floor — no fix-up. Separated from `enforceDepartmentFloor` (which
+ * mutates the grid during the initial solve) so the live-edit path can flag a violation
+ * without silently adding staff back on a manual edit. */
+function findDepartmentFloorViolations(
+  grid: Grid,
+  shifts: ShiftDef[],
+  floor: number
+): Array<{ day: number; hour: number; onDuty: number }> {
+  const violations: Array<{ day: number; hour: number; onDuty: number }> = [];
+  for (let day = 0; day < 7; day++) {
+    const coverage = coverageForDay(grid[day] ?? {}, shifts);
+    for (let h = 0; h < 24; h++) {
+      if (coverage[h] < floor) violations.push({ day, hour: h, onDuty: coverage[h] });
+    }
+  }
+  return violations;
+}
+
 /** Cheap live-edit recompute: pure arithmetic, no re-solve. Used when a user hand-edits a headcount cell. */
 export function recomputeFromGrid(
   grid: Grid,
   shifts: ShiftDef[],
-  hourlyRequirement168: number[]
-): { weeklyScheduledHours: number; shortfall: ShortfallEntry[] } {
+  hourlyRequirement168: number[],
+  enaFloor: number
+): { weeklyScheduledHours: number; shortfall: ShortfallEntry[]; enaFloorViolationsRemaining: Array<{ day: number; hour: number; onDuty: number }> } {
   const weeklyScheduledHours = Object.values(grid).reduce(
     (acc, headcount) => acc + shifts.reduce((a, s) => a + (headcount[s.id] ?? 0) * s.lengthHours, 0),
     0
@@ -245,7 +265,8 @@ export function recomputeFromGrid(
       }
     }
   }
-  return { weeklyScheduledHours, shortfall };
+  const enaFloorViolationsRemaining = findDepartmentFloorViolations(grid, shifts, enaFloor);
+  return { weeklyScheduledHours, shortfall, enaFloorViolationsRemaining };
 }
 
-export { coverageForDay, shiftHoursOfDay };
+export { coverageForDay, shiftHoursOfDay, findDepartmentFloorViolations };

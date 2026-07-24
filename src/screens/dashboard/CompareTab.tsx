@@ -32,7 +32,8 @@ export function CompareTab() {
   }));
 
   return (
-    <div className="compare-tab">
+    <section className="card compare-tab">
+      <h2>Compare shift menus</h2>
       <p>
         Shift start-time is a real, testable lever — a validated finding showed ~18% shortfall difference just
         from shifting the shift-menu start time. Define alternate menus and compare against your current one, run
@@ -84,7 +85,7 @@ export function CompareTab() {
           )}
         </div>
       </div>
-    </div>
+    </section>
   );
 }
 

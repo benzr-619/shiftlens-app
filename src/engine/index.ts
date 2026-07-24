@@ -12,6 +12,8 @@ import { DEFAULTS, type EngineInputs, type EngineResult, type Grid, type Reconci
 
 export * from './types';
 export { recomputeFromGrid } from './solver';
+export { computeBacklog, BACKLOG_CAUGHT_UP_THRESHOLD, type BacklogResult, type BacklogShiftDiagnostic } from './backlog';
+export { searchFlexibleMenus, NO_FLEX, type FlexAxes, type MenuCandidate } from './flexMenu';
 
 /** The single callable engine function: (arrivals, wHPPV target, shift menu, optional inputs) -> full result. */
 export function compute(inputs: EngineInputs): EngineResult {
@@ -45,7 +47,24 @@ export function compute(inputs: EngineInputs): EngineResult {
 
   const overcoveragePct = weeklyBudgetHours > 0 ? (weeklyScheduledHours - weeklyBudgetHours) / weeklyBudgetHours : 0;
 
-  const boarding = computeBoarding(inputs.arrivals, inputs.admitRate, inputs.boardingDuration, boardingRatioTarget);
+  const boarding = computeBoarding(
+    inputs.arrivals,
+    inputs.admitRate,
+    inputs.boardingDuration,
+    boardingRatioTarget,
+    inputs.shiftMenu,
+    inputs.dayOfWeekMeanBoardingDurationHours,
+    inputs.monthlyMeanBoardingDurationHours
+  );
+
+  // Productivity Target Buffer method (ENA-referenced): what the boarding load would cost
+  // in ED-facing wHPPV if it were absorbed by core staff rather than separately covered.
+  const lostProductivity = boarding
+    ? {
+        wHppvConsumedByBoarding: boarding.annualBoardingHours / annualVisits,
+        wHppvAvailableForEdCare: inputs.wHppvTarget - boarding.annualBoardingHours / annualVisits,
+      }
+    : null;
 
   const reconciliation = reconcile(cellCoreHours, annualBudget);
 
@@ -64,6 +83,7 @@ export function compute(inputs: EngineInputs): EngineResult {
     enaFloorViolationsRemaining,
     reconciliation,
     boarding,
+    lostProductivity,
   };
 }
 
@@ -74,14 +94,22 @@ export function reconcile(cellCoreHours: number[], annualBudget: number): Reconc
   return { annualFromGrid, annualBudget, gapPct, passes: gapPct < 1e-9 };
 }
 
-/** Live-edit recompute after a manual grid edit: cheap arithmetic wHPPV + shortfall recheck, no re-solve. */
+/** Live-edit recompute after a manual grid edit: cheap arithmetic wHPPV + shortfall recheck,
+ * plus a 5.6 department-floor re-check (also arithmetic, no re-solve) so a manual edit that
+ * drops an hour below enaFloor is caught immediately rather than only at the next full solve. */
 export function recomputeAfterEdit(
   grid: Grid,
   inputs: EngineInputs,
   hourlyRequirement: number[]
 ) {
-  const { weeklyScheduledHours, shortfall } = recomputeFromGrid(grid, inputs.shiftMenu, hourlyRequirement);
+  const enaFloor = inputs.enaFloor ?? DEFAULTS.enaFloor;
+  const { weeklyScheduledHours, shortfall, enaFloorViolationsRemaining } = recomputeFromGrid(
+    grid,
+    inputs.shiftMenu,
+    hourlyRequirement,
+    enaFloor
+  );
   const annualVisits = inputs.annualVisits ?? deriveAnnualVisits(inputs.arrivals);
   const realizedWHppv = (weeklyScheduledHours * 52) / annualVisits;
-  return { weeklyScheduledHours, shortfall, realizedWHppv };
+  return { weeklyScheduledHours, shortfall, realizedWHppv, enaFloorViolationsRemaining };
 }

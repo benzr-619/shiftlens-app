@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { compute } from '../index';
-import type { ShiftDef } from '../types';
+import { compute, recomputeAfterEdit } from '../index';
+import { recomputeFromGrid } from '../solver';
+import type { Grid, ShiftDef } from '../types';
 
 function randomArrivals168(seedBase: number): number[] {
   const arr = new Array(168);
@@ -69,6 +70,46 @@ describe('Step 3 shift-fit solver', () => {
     });
     expect(result.boarding).not.toBeNull();
     expect(result.boarding!.annualFte).toBeGreaterThan(0);
-    expect(result.boarding!.perDay).toHaveLength(7);
+    expect(result.boarding!.prioritySlots.length).toBeGreaterThan(0);
+  });
+});
+
+describe('Live-edit department-floor re-check (5.6, recomputeFromGrid/recomputeAfterEdit)', () => {
+  it('flags an hour a manual edit drops below the floor, without mutating the grid', () => {
+    const arrivals = randomArrivals168(16);
+    const result = compute({ arrivals, wHppvTarget: 0.5, shiftMenu, enaFloor: 2 });
+
+    // Zero out every slot covering hour 3 on Monday (day 1) so on-duty coverage there is 0.
+    const grid: Grid = { ...result.grid };
+    grid[1] = { ...grid[1] };
+    for (const s of shiftMenu) {
+      const hours = new Set(Array.from({ length: s.lengthHours }, (_, i) => (s.startHour + i) % 24));
+      if (hours.has(3)) grid[1][s.id] = 0;
+    }
+
+    const { enaFloorViolationsRemaining } = recomputeFromGrid(grid, shiftMenu, result.hourlyRequirement, 2);
+    expect(enaFloorViolationsRemaining.some((v) => v.day === 1 && v.hour === 3 && v.onDuty === 0)).toBe(true);
+    // Read-only: the grid handed in is untouched, unlike enforceDepartmentFloor's fix-up pass.
+    expect(grid[1]['night']).toBe(0);
+  });
+
+  it('reports no floor violations when every hour clears the floor', () => {
+    const arrivals = randomArrivals168(17);
+    const result = compute({ arrivals, wHppvTarget: 1.2, shiftMenu, enaFloor: 2 });
+    const { enaFloorViolationsRemaining } = recomputeFromGrid(result.grid, shiftMenu, result.hourlyRequirement, 0);
+    expect(enaFloorViolationsRemaining).toHaveLength(0);
+  });
+
+  it('recomputeAfterEdit surfaces the same violations via the live-edit entry point', () => {
+    const arrivals = randomArrivals168(18);
+    const inputs = { arrivals, wHppvTarget: 0.5, shiftMenu, enaFloor: 2 };
+    const result = compute(inputs);
+
+    const grid: Grid = { ...result.grid };
+    grid[2] = Object.fromEntries(shiftMenu.map((s) => [s.id, 0]));
+
+    const live = recomputeAfterEdit(grid, inputs, result.hourlyRequirement);
+    expect(live.enaFloorViolationsRemaining.length).toBeGreaterThan(0);
+    expect(live.enaFloorViolationsRemaining.every((v) => v.onDuty < 2)).toBe(true);
   });
 });
