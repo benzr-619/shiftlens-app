@@ -1435,3 +1435,84 @@ input (`edNurses = residualDemand` exactly) produces zero `unmet` and a flat (al
 `effectiveWhppv`, asserted by exact value, not just "is negative"; and the zero-arrivals guard.
 No engine changes elsewhere; `reconcile.test.ts` untouched. This PR has no UI — Panel 5's
 editable grids and prefill buttons are PR G.
+
+### PR D — layout shell, the shared visual frame, heatmap R1/R2/R3
+
+Three independent pieces, all UI, no engine changes.
+
+**Heatmap changes (`components/WhppvHeatmap.tsx`):**
+- **R1** — the cell's displayed NUMBER changed (THIRD change to this mechanism — see
+  CLAUDE.md §6's history) from `onDuty/requirement` back to headcount alone (`onDuty`). Color
+  is UNCHANGED — still driven by the same `onDuty/requirement` ratio against this cell's own
+  per-hour band; only the second redundant number was dropped.
+- **R2** — `RICHER_RGB` reversed from the 2026-07-25 deliberate muted gray-blue back to a
+  saturated blue. Confirmed against a real rendered page: an 8-nurses-against-4-requirement
+  hour at 04:00 rendered pale gray was arguably the single most actionable finding on the page
+  (§3.2) — muting made a genuine "you're overstaffed here, move these hours" signal invisible.
+- **R3** — the backlog spine overlay is REMOVED from the component entirely (`backlogMax` prop
+  gone; `WhppvHeatmapCell` no longer carries `backlog`/`inBacklogStreak`). In the rendered page
+  it appeared on nearly every cell at near-uniform weight — reading as a table-border artifact,
+  not data (§3.2). Backlog gets its own aligned strip chart in the new `VisualFrame` instead
+  (below) — a different, more legible representation of the same signal, not a deletion of it.
+  The ENA on-duty floor overlay (red outline + "!") is UNCHANGED — unrelated to R3, still the
+  only per-cell flag left.
+- **Callers updated for the new contract:** `CoreGridTab.tsx`/`CurrentStaffingAnalysis.tsx` no
+  longer compute `idealBacklog`/`currentBacklogForMax`/`backlogMax` (now fully dead code once
+  the heatmap stopped consuming them) or set `backlog`/`inBacklogStreak` on heatmap cells.
+  `computeBacklog`/`BACKLOG_CAUGHT_UP_THRESHOLD` imports dropped from `CoreGridTab.tsx`
+  entirely (no other use in that file); `CurrentStaffingAnalysis.tsx` keeps `computeBacklog`
+  for its own narrative stats (the "longest lean stretch" text — unchanged by this PR, its
+  actual §3.1 rewrite is PR E's job when Panel 1 absorbs this content). Orphaned CSS
+  (`.heat-backlog-spine`, `.heat-legend-backlog-swatch`, `.heat-legend-spine`) removed from
+  `App.css`.
+
+**`StepBar` (`components/StepBar.tsx`) — R10, REPLACES `ChapterRail.tsx` (deleted).** Identical
+scroll-spy/click-to-jump logic (`IntersectionObserver`, same rootMargin heuristic), reused
+verbatim — only the LAYOUT changed, from a sticky left sidebar to a slim bar pinned to the top
+of the page. Reason: a sidebar was competing with each panel's visual frame for width, exactly
+the thing §4's "words left, one fixed visual frame on the right" two-column panel layout needs
+back. `DashboardScreen.tsx`'s `.dashboard-body` two-column flex wrapper is gone —
+`.dashboard-content` is now the page's only column, directly below `<StepBar>`.
+**`DashboardScreen.tsx` STILL PASSES THE OLD 7-ENTRY CHAPTER LIST** (`CHAPTERS`) — this PR only
+replaces the shell, not the content redistribution; PRs E/F/G shrink that list to the real 5
+panels as they land. `App.css`'s `.chapter-rail*` rules replaced by `.step-bar*` (horizontal
+bar, wrapping flex row of buttons, bottom border instead of left border for the active-item
+indicator).
+
+**`VisualFrame` (new `components/VisualFrame.tsx`) — §4's shared frame, built once.** Three
+stacked elements, one shared x-axis, exported as `VisualFrameView[]` a panel supplies:
+1. **Demand-vs-capacity chart** — two lines (`var(--error)` demand, `var(--accent)` capacity),
+   the gap between them shaded (`var(--warning)` where demand exceeds capacity). Defaults to
+   the **average day** (24 points, `averageDay()` means across the 7 days at each hour-of-day)
+   per §4's explicit instruction that the full 168-hour week is an expansion, not the default —
+   a "Show full week" toggle switches both this chart AND the queue strip together (same
+   x-axis, so they must stay in lockstep).
+2. **Queue strip** — draws the view's `queueDepth168` (MUST be the CYCLICAL curve, R4 — never
+   the blended actual curve; see PR A's finding above for why that distinction matters), with
+   `structuralFloor` as a dashed horizontal baseline. **`queueDepth168: null` renders a
+   deliberately BLANK strip** — this is Panel 3's requirement (§4: "after two panels of
+   watching a queue build, the strip is empty — preserve that; it is the most persuasive frame
+   on the page and it is free"), not a missing-data fallback.
+3. **Heatmap** — the same `WhppvHeatmap` component, always full 7×24 regardless of the
+   24h/168h chart toggle (the heatmap has its own inherent day×hour shape).
+
+**Toggling animates via a CSS fade, not per-cell tweening** — `.frame-body`'s `key={activeKey}`
+forces a remount on view change, and a `frame-fade-in` CSS keyframe animation (220ms) fades the
+new content in. This is the simple, robust fallback §10's open item 2 explicitly sanctions
+("if it is janky, drop to a cross-fade rather than per-cell tweening") — chosen up front rather
+than building the more complex per-cell tween and finding out later it's janky at 168 cells.
+
+**NOT YET WIRED INTO A REAL PANEL.** `VisualFrame` is fully built and self-contained but has no
+caller yet — Panels 1-5 (PRs E/F/G) are its first real consumers. Per §11's explicit
+instruction ("never claim visual verification that did not happen"): this component has NOT
+been e2e-verified in an actual mounted panel this PR, only reasoned through and build/lint-
+verified in isolation. Full verification (does the toggle actually cross-fade cleanly, does the
+blank queue strip actually look intentional rather than broken, does the 24h/168h expand toggle
+work) is deferred to PR E, its first real mount point, and should be confirmed there before
+being called done.
+
+**Invariants:** no engine changes anywhere in this PR. `reconcile.test.ts` untouched. `npm run
+build`/`npm test`/`oxlint`/`npm run test:e2e` all clean — the e2e smoke suite exercises the
+heatmap/StepBar changes indirectly (still mounted via the old `CoreGridTab`/`DashboardScreen`),
+confirmed via a manual screenshot review this session (headcount-only cell numbers, saturated
+blue, no spine, horizontal top bar all visually present).

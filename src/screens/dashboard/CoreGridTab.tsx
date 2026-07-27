@@ -3,7 +3,7 @@ import { useStore } from '../../store';
 import { DAY_LABELS, type ShiftDef } from '../../engine/types';
 import { DISPLAY_DAY_ORDER, DISPLAY_DAY_LABELS } from '../../lib/dayOrder';
 import { coverageForDay } from '../../engine/solver';
-import { computeBacklog, BACKLOG_CAUGHT_UP_THRESHOLD, computeBandFloorViolations, summarizeBacklogSeverity } from '../../engine';
+import { computeBandFloorViolations, summarizeBacklogSeverity } from '../../engine';
 import { CurrentStaffingGrid } from '../../components/CurrentStaffingGrid';
 import { WhppvHeatmap, type WhppvHeatmapCell } from '../../components/WhppvHeatmap';
 import { computeColorDomain } from '../../lib/whppvColorDomain';
@@ -136,15 +136,6 @@ export function CoreGridTab() {
     () => new Set(enaFloorViolations.map((v) => `${v.day}-${v.hour}`)),
     [enaFloorViolations]
   );
-  // §2.4 backlog overlay: the idealized grid's hour-by-hour backlog drives the heatmap's
-  // "still digging out" marker. This SUPERSEDES the old single-hour p25 red-outline flag
-  // (a streak is strictly more informative than a lone short hour — resolved with Ben
-  // 2026-07-24); the ENA on-duty floor flag stays, as it's an absolute safety check, not a
-  // demand-backlog signal. See .claude/rules/results-redesign.md.
-  const idealBacklog = useMemo(
-    () => computeBacklog(grid, result.hourlyRequirement, sortedShiftMenu),
-    [grid, result.hourlyRequirement, sortedShiftMenu]
-  );
   // 2026-07-25 (reversal, see .claude/rules/engine-solver.md): retires the point-target
   // "Hours Below Ideal Coverage" stat in favor of a band-based one — a count of hours where
   // the idealized grid's coverage falls below result.bandFloorHourly, plus a "worst stretch"
@@ -157,17 +148,10 @@ export function CoreGridTab() {
     () => computeBandFloorViolations(grid, result.bandFloorHourly, sortedShiftMenu),
     [grid, result.bandFloorHourly, sortedShiftMenu]
   );
-  // §6 (results-redesign.md): the idealized and current-staffing heatmaps must read as
-  // directly comparable, so their color domain AND backlog-weight max are each computed ONCE
-  // here and passed into both instances as explicit props — neither WhppvHeatmap instance may
-  // derive either from its own cells. currentBacklogForMax exists only to fold the current
-  // grid's peak backlog into the shared max; CurrentStaffingAnalysis computes its own (equal)
-  // backlog result again for its narrative stats, which is fine — pure arithmetic, no engine cost.
-  const currentBacklogForMax = useMemo(
-    () => computeBacklog(currentStaffingGrid ?? {}, result.hourlyRequirement, sortedShiftMenu),
-    [currentStaffingGrid, result.hourlyRequirement, sortedShiftMenu]
-  );
-  const backlogMax = Math.max(idealBacklog.peakBacklog, currentBacklogForMax.peakBacklog);
+  // R3 (RESULTS_PAGE_V2_SPEC_2026-07-27.md §2) — the heatmap no longer overlays backlog at
+  // all (see components/WhppvHeatmap.tsx's header), so there's no shared backlog-weight max
+  // to compute here anymore. §6's "color domain computed once, shared across both heatmap
+  // instances" rule still holds for `colorDomain` below.
   const colorDomain = useMemo(
     () => computeColorDomain(result.annualVisits, wHppvTarget),
     [result.annualVisits, wHppvTarget]
@@ -186,25 +170,19 @@ export function CoreGridTab() {
         const cellArrivals = arrivals[day * 24 + hour] ?? 0;
         const whppv = scale !== null && cellArrivals > 0 ? (coverage[hour] / cellArrivals) * scale : null;
         const belowFloor = floorViolationSet.has(`${day}-${hour}`);
-        const cellBacklog = idealBacklog.backlog[day * 24 + hour] ?? 0;
-        const inBacklogStreak = cellBacklog >= BACKLOG_CAUGHT_UP_THRESHOLD;
         const riskReasons: string[] = [];
         if (belowFloor) riskReasons.push('below the ENA on-duty floor');
-        if (inBacklogStreak) riskReasons.push(`carrying ~${cellBacklog.toFixed(1)} nurse-hrs of backlog (still catching up)`);
         cells.push({
           day,
           hour,
           whppv,
           onDuty: coverage[hour],
           requirement: result.hourlyRequirement[day * 24 + hour] ?? 0,
-          // PR D (change 4): per-hour band now drives the heatmap's own color — see
-          // components/WhppvHeatmap.tsx.
+          // Per-hour band drives the heatmap's own color — see components/WhppvHeatmap.tsx.
           bandFloor: result.bandFloorHourly[day * 24 + hour] ?? 0,
           bandCeiling: result.bandCeilingHourly[day * 24 + hour] ?? 0,
           arrivals: cellArrivals,
           belowFloor,
-          backlog: cellBacklog,
-          inBacklogStreak,
           riskReasons,
         });
       }
@@ -216,7 +194,6 @@ export function CoreGridTab() {
     arrivals,
     weeklyScheduledHours,
     realizedWHppv,
-    idealBacklog,
     floorViolationSet,
     result.hourlyRequirement,
     result.bandFloorHourly,
@@ -280,7 +257,7 @@ export function CoreGridTab() {
 
       {/* §2.1: the page opens with an analysis of CURRENT staffing (or a CTA if none entered),
           before the idealized recommendation. Surfaces the §2.4 backlog diagnostic. */}
-      <CurrentStaffingAnalysis colorDomain={colorDomain} backlogMax={backlogMax} />
+      <CurrentStaffingAnalysis colorDomain={colorDomain} />
 
       <section className="card plain-summary">
         <h2>What this schedule means</h2>
@@ -635,7 +612,7 @@ export function CoreGridTab() {
           that catches that, hour by hour. It is shown here, in the same unit, deliberately.
         </p>
 
-        <WhppvHeatmap cells={heatmapCells} backlogMax={backlogMax} shiftMenu={sortedShiftMenu} />
+        <WhppvHeatmap cells={heatmapCells} shiftMenu={sortedShiftMenu} />
       </section>
     </div>
   );

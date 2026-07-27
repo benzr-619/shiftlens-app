@@ -426,87 +426,59 @@ h1 {
   gap: 16px;
 }
 
-/* PR H — chapter rail layout. Desktop-first (spec §12.3's mobile carve-out: a narrow-viewport
-   top bar is a nice-to-have, not a gate) — below the breakpoint the rail simply stacks above
-   the content instead of sitting beside it, still fully usable via ordinary scrolling. */
-.dashboard-body {
-  display: flex;
-  gap: 32px;
-  align-items: flex-start;
-}
-
+/* R10 (RESULTS_PAGE_V2_SPEC_2026-07-27.md §2/§6, PR D) — REPLACES PR H's sticky left-side
+   chapter rail with a slim horizontal bar pinned to the top of the page, freeing full page
+   width for each panel's visual frame (a sidebar was competing with that frame for width —
+   the exact thing §4's "words left, one fixed visual frame on the right" layout needs). The
+   old `.dashboard-body` two-column flex wrapper is gone — `.dashboard-content` is now the
+   page's only column, a plain block. Desktop-first still (spec §6: "a narrow-viewport stack
+   is acceptable but is not a gate") — below the breakpoint the bar's own items simply wrap. */
 .dashboard-content {
-  flex: 1;
   min-width: 0;
 }
 
-.chapter-rail {
+.step-bar {
   position: sticky;
-  top: 16px;
-  width: 220px;
-  flex-shrink: 0;
-  align-self: flex-start;
+  top: 0;
+  z-index: 5;
+  background: var(--bg);
+  padding: 10px 0;
+  margin-bottom: 20px;
+  border-bottom: 1px solid var(--border);
 }
 
-.chapter-rail ul {
+.step-bar ul {
   list-style: none;
   margin: 0;
   padding: 0;
   display: flex;
-  flex-direction: column;
-  gap: 2px;
-  border-left: 2px solid var(--border);
+  flex-wrap: wrap;
+  gap: 4px;
+  border-bottom: 2px solid var(--border);
 }
 
-.chapter-rail-link {
+.step-bar-link {
   display: block;
-  width: 100%;
-  text-align: left;
   background: none;
   border: none;
-  border-left: 2px solid transparent;
-  margin-left: -2px;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
   padding: 6px 12px;
   font-size: 13px;
   color: var(--text-muted);
   cursor: pointer;
   border-radius: 0;
+  white-space: nowrap;
 }
 
-.chapter-rail-link:hover {
+.step-bar-link:hover {
   color: var(--text);
 }
 
-.chapter-rail-active {
+.step-bar-active {
   color: var(--accent);
-  border-left-color: var(--accent);
+  border-bottom-color: var(--accent);
   font-weight: 600;
-}
-
-@media (max-width: 900px) {
-  .dashboard-body {
-    flex-direction: column;
-  }
-  .chapter-rail {
-    position: static;
-    width: 100%;
-  }
-  .chapter-rail ul {
-    flex-direction: row;
-    flex-wrap: wrap;
-    border-left: none;
-    border-bottom: 2px solid var(--border);
-    padding-bottom: 8px;
-  }
-  .chapter-rail-link {
-    border-left: none;
-    border-bottom: 2px solid transparent;
-    margin-left: 0;
-  }
-  .chapter-rail-active {
-    border-left-color: transparent;
-    border-bottom-color: var(--accent);
-  }
 }
 
 .banner {
@@ -806,41 +778,12 @@ h1 {
   z-index: 1;
 }
 
-/* §2 (2026-07-25 legibility rework): backlog is a run of CONSECUTIVE HOURS, which runs
-   vertically down a day column — so its marker is a vertical spine on the cell's left inside
-   edge, not a bottom bar/corner dot (those read as horizontal lines across days, perpendicular
-   to the thing being encoded). top/bottom extend 1px past the cell's own border box so the
-   spine bridges the collapsed table border between vertically adjacent flagged cells — a
-   streak then reads as one continuous bracket, never a stack of separate dashes. Width/opacity
-   are set inline per-cell (proportional to that cell's backlog over the shared backlogMax
-   prop — see WhppvHeatmap.tsx) so a trivial hour is a hairline and a deep hole is a thick,
-   opaque bar; streak length is then legible as the bracket's height, weight as its thickness. */
-.heat-backlog-spine {
-  position: absolute;
-  left: 0;
-  top: -1px;
-  bottom: -1px;
-  z-index: 0;
-}
-
-/* Legend-only swatch: a short static spine sample, not scaled to any real backlog value. */
-.heat-legend-backlog-swatch {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  border-radius: 3px;
-  background: var(--bg-card-muted);
-  border: 1px solid var(--border);
-}
-
-.heat-legend-spine {
-  display: inline-block;
-  width: 4px;
-  height: 14px;
-  background: rgba(232, 196, 104, 0.75);
-}
+/* R3 (RESULTS_PAGE_V2_SPEC_2026-07-27.md §2) — the heatmap's backlog-spine overlay (the
+   §2.4/2026-07-25 legibility-rework marker this block used to style) is REMOVED entirely;
+   backlog now gets its own aligned strip chart in the shared visual frame instead (see
+   WhppvHeatmap.tsx's header). `.heat-backlog-spine`/`.heat-legend-backlog-swatch`/
+   `.heat-legend-spine` are gone — don't reintroduce a per-cell backlog marker here without
+   checking first. */
 
 .whppv-heatmap-legend {
   display: flex;
@@ -1225,4 +1168,90 @@ h1 {
   flex-direction: column;
   gap: 10px;
   margin-top: 8px;
+}
+
+/* PR D (RESULTS_PAGE_V2_SPEC_2026-07-27.md §4) — the shared visual frame, reused across all
+   five panels. `.frame-body` gets a `key`-driven remount on view change (VisualFrame.tsx) —
+   this animation is the cross-fade the spec sanctions as the simple, robust fallback over
+   per-cell tweening (§10 open item 2). */
+.visual-frame {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.frame-toggle {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 8px;
+}
+
+.frame-toggle-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 12px;
+  font-size: 13px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.frame-toggle-btn:hover {
+  color: var(--text);
+}
+
+.frame-toggle-active {
+  color: var(--accent);
+  border-color: var(--accent);
+  font-weight: 600;
+  background: rgba(99, 102, 241, 0.08);
+}
+
+@keyframes frame-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.frame-body {
+  animation: frame-fade-in 220ms ease-out;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.frame-chart-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.frame-chart-label {
+  font-size: 13px;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.frame-expand-toggle {
+  font-size: 12px;
+}
+
+.frame-demand-chart,
+.frame-queue-strip {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.frame-queue-strip-blank {
+  opacity: 0.4;
+}
+
+.frame-demand-chart {
+  margin-bottom: 2px;
 }

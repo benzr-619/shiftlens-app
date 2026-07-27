@@ -9,18 +9,13 @@ export interface WhppvHeatmapCell {
   requirement: number;
   // 2026-07-26 PR D (SOLVER_REALISM_SPEC_2026-07-26.md, change 4) — the per-hour typical-
   // staffing band (EngineResult.bandFloorHourly/bandCeilingHourly at this cell's global hour),
-  // in the SAME absolute-headcount units as onDuty/requirement. This is what now drives the
-  // cell's COLOR (via cellVisual below) — replaces the old WEEK-LEVEL wHPPV band
-  // (lib/whppvColorDomain.ts's computeColorDomain), which is still used elsewhere on the
-  // results page for narrative band language, but no longer drives this heatmap's color.
+  // in the SAME absolute-headcount units as onDuty/requirement. Drives the cell's COLOR (via
+  // cellVisual below) — a per-hour, not week-level, reference point.
   bandFloor: number;
   bandCeiling: number;
-  whppv: number | null; // realized wHPPV — DEMOTED to the tooltip only (PR D change 4); the
-  // cell's primary displayed number is onDuty/requirement now (see render below).
+  whppv: number | null; // realized wHPPV — tooltip only.
   arrivals: number;
   belowFloor: boolean; // under the ENA on-duty floor — a safety check, red outline + "!"
-  backlog: number; // nurse-hours of accumulated backlog at this hour (idealized grid)
-  inBacklogStreak: boolean; // backlog at/above the "caught up" threshold — the §2.4 overlay
   riskReasons: string[];
 }
 
@@ -37,7 +32,15 @@ const RICH_CLAMP_MULTIPLE = 2; // ratio at 2x the point target (1.0) -> fully sa
 const MIN_ALPHA = 0.12;
 const MAX_ALPHA = 0.75;
 const LEANER_RGB = '194,59,59'; // red — understaffing is the safety/quality signal, stays dominant
-const RICHER_RGB = '110,132,150'; // muted gray-blue (NOT saturated blue) — visibly subordinate to red
+// R2 (RESULTS_PAGE_V2_SPEC_2026-07-27.md §2) — REVERSES the 2026-07-25 deliberate muting
+// (was '110,132,150', a gray-blue chosen specifically to be visually subordinate to red).
+// Confirmed with Ben against a real rendered page: an 8-nurses-against-a-4-requirement hour
+// at 04:00 rendered in pale gray was arguably the single most actionable fact on the page —
+// muting it made a genuinely useful "you're overstaffed here, move these hours" finding
+// invisible. Saturated blue reads as clearly as the lean/red side now; the two sides are
+// still asymmetric in RAMP (see LEAN_FULL_SATURATE_RATIO/RICH_CLAMP_MULTIPLE above), just no
+// longer asymmetric in how saturated the color itself is allowed to get.
+const RICHER_RGB = '37,99,235'; // saturated blue
 const TEXT_FLIP_ALPHA_THRESHOLD = 0.45; // above this fill alpha, cell text flips to white for contrast
 
 interface CellVisual {
@@ -46,14 +49,11 @@ interface CellVisual {
 }
 
 /**
- * PR D (change 4): color is now driven by `onDuty / requirement` — the SAME ratio the cell's
- * displayed number shows, so color and number can never disagree with each other (the
- * previous mechanism colored by realized wHPPV, a different, less intuitive number, which is
- * exactly the mismatch this change fixes). The neutral band is this cell's OWN
- * `bandFloor`/`bandCeiling`, expressed as ratios against `requirement` (so "1.0" always means
- * "exactly at this hour's point target," a per-cell, not week-level, reference point).
- * `Math.max(requirement, 1)` guards the divisor for requirement-0 cells (overnight hours in
- * very low-volume EDs) — same convention `engine/solver.ts`'s `severity` uses.
+ * Color is driven by `onDuty / requirement` against this cell's OWN `bandFloor`/`bandCeiling`,
+ * expressed as ratios against `requirement` (so "1.0" always means "exactly at this hour's
+ * point target," a per-cell, not week-level, reference point). `Math.max(requirement, 1)`
+ * guards the divisor for requirement-0 cells (overnight hours in very low-volume EDs) — same
+ * convention `engine/solver.ts`'s `severity` uses.
  */
 function cellVisual(onDuty: number, requirement: number, bandFloor: number, bandCeiling: number): CellVisual {
   const denom = Math.max(requirement, 1);
@@ -102,30 +102,28 @@ function shiftBoundariesByHour(shiftMenu: ShiftDef[]): Map<number, string[]> {
 }
 
 /**
- * 7x24 on-duty/requirement heatmap (Mon-Sun display columns — see lib/dayOrder.ts; the
- * engine's day-0-is-Sunday index is unaffected). PR D (change 4): the cell's NUMBER is
- * `onDuty/requirement` (e.g. "7/9") and its COLOR is driven by that same ratio against this
- * cell's OWN per-hour typical-staffing band (`bandFloor`/`bandCeiling`) — number and color now
- * encode the same thing, and this is a strictly better (hour-specific, not week-average) band
- * than the old week-level wHPPV domain. Most of a typical week still renders with NO color at
- * all; ink appears only genuinely outside this hour's own typical range. Realized wHPPV moved
- * to the tooltip — it was the primary number before, but is the least intuitive of the three
- * available (dominated by the arrivals denominator). Two independent overlays, never
- * color-alone: a red outline + "!" for an ENA on-duty floor violation (a safety minimum), and
- * a left-edge vertical spine (weight scaled by backlog magnitude via the shared `backlogMax`)
- * for hours carrying a §2.4 backlog — a streak of these forms one continuous bracket, since
- * backlog runs vertically down a day column. Horizontal rules land at each distinct
- * shift-menu start hour (§5), not fixed hour marks.
+ * 7x24 heatmap (Mon-Sun display columns — see lib/dayOrder.ts; the engine's day-0-is-Sunday
+ * index is unaffected).
+ *
+ * R1 (RESULTS_PAGE_V2_SPEC_2026-07-27.md §2) — THIRD change to this cell's displayed number:
+ * headcount alone (`onDuty`), not `onDuty/requirement`. Color still encodes the ratio against
+ * this cell's own typical band, unchanged — only the NUMBER simplified, so the visual frame's
+ * repeated heatmap reads as "how many nurses" at a glance, with color carrying the
+ * over/under-typical judgment rather than a second number doing the same job.
+ *
+ * R3 — the backlog spine overlay is REMOVED from this component entirely (was a left-edge
+ * vertical spine, weight scaled by backlog magnitude). In the rendered page it appeared on
+ * essentially every cell at near-uniform weight — reading as a table-border artifact, not
+ * data (spec §3.2). Backlog now gets its OWN aligned strip chart in the shared visual frame
+ * (`components/VisualFrame.tsx`, same x-axis as the demand/capacity chart above it) — a
+ * genuinely different, more legible representation of the same signal, not a deletion of the
+ * signal itself. `WhppvHeatmapCell` no longer carries `backlog`/`inBacklogStreak` fields, and
+ * this component no longer takes a `backlogMax` prop — don't reintroduce either without
+ * checking first; the ENA on-duty floor overlay (red outline + "!") is UNCHANGED and still the
+ * only per-cell risk flag left, since it's a safety minimum, not a backlog signal (unrelated
+ * to R3 — see the resolved call in `.claude/rules/results-redesign.md`).
  */
-export function WhppvHeatmap({
-  cells,
-  backlogMax,
-  shiftMenu,
-}: {
-  cells: WhppvHeatmapCell[];
-  backlogMax: number;
-  shiftMenu: ShiftDef[];
-}) {
+export function WhppvHeatmap({ cells, shiftMenu }: { cells: WhppvHeatmapCell[]; shiftMenu: ShiftDef[] }) {
   const byDayHour = new Map(cells.map((c) => [`${c.day}-${c.hour}`, c]));
   const boundaries = shiftBoundariesByHour(shiftMenu);
 
@@ -153,29 +151,16 @@ export function WhppvHeatmap({
                   const cell = byDayHour.get(`${day}-${hour}`);
                   if (!cell) return <td key={day} />;
                   const visual = cellVisual(cell.onDuty, cell.requirement, cell.bandFloor, cell.bandCeiling);
-                  const cellClass = [cell.belowFloor ? 'heat-cell-risk' : '', cell.inBacklogStreak ? 'heat-cell-backlog' : '']
-                    .filter(Boolean)
-                    .join(' ');
-                  const backlogT = backlogMax > 0 ? Math.min(1, cell.backlog / backlogMax) : 0;
                   return (
                     <td
                       key={day}
-                      className={cellClass || undefined}
+                      className={cell.belowFloor ? 'heat-cell-risk' : undefined}
                       style={{ backgroundColor: visual.background }}
                       title={cellTitle(cell)}
                     >
                       <div className="heat-cell-inner">
-                        {cell.inBacklogStreak && (
-                          <span
-                            className="heat-backlog-spine"
-                            style={{
-                              width: `${2 + backlogT * 6}px`,
-                              background: `rgba(232,196,104,${(0.35 + backlogT * 0.6).toFixed(2)})`,
-                            }}
-                          />
-                        )}
                         <span className="heat-cell-value" style={{ color: visual.textColor }}>
-                          {cell.onDuty}/{cell.requirement}
+                          {cell.onDuty}
                         </span>
                         {cell.belowFloor && <span className="heat-risk-badge">!</span>}
                       </div>
@@ -197,20 +182,15 @@ export function WhppvHeatmap({
           <span>Richer than typical</span>
         </div>
         <div className="heat-legend-band-text">
-          Colored against each hour's OWN typical range (peer 25th-75th percentile) — a cell reads "leaner" or
-          "richer" relative to what that specific hour usually needs, not a single week-wide number.
+          Each cell shows the number of nurses on duty. Color is against each hour's OWN typical range (peer
+          25th-75th percentile) — a cell reads "leaner" or "richer" relative to what that specific hour usually
+          needs, not a single week-wide number.
         </div>
         <div className="heat-legend-risk">
           <span className="heat-legend-risk-swatch">
             <span className="heat-risk-badge">!</span>
           </span>
           <span>Under the ENA on-duty floor</span>
-        </div>
-        <div className="heat-legend-risk">
-          <span className="heat-legend-backlog-swatch">
-            <span className="heat-legend-spine" />
-          </span>
-          <span>Carrying a backlog — spine height/weight tracks how deep and how long</span>
         </div>
       </div>
     </div>

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useStore } from '../store';
-import { ChapterRail, type ChapterRailEntry } from '../components/ChapterRail';
+import { StepBar, type StepBarEntry } from '../components/StepBar';
 import { CoreGridTab } from './dashboard/CoreGridTab';
 import { ScenarioBSection } from './dashboard/ScenarioBSection';
 import { FundingAskSection } from './dashboard/FundingAskSection';
@@ -13,12 +13,14 @@ import { ConstrainedReallocationSection } from './dashboard/ConstrainedReallocat
 import { SynthesisSection } from './dashboard/SynthesisSection';
 import { EvidenceSurfaceSection } from './dashboard/EvidenceSurfaceSection';
 
-// PR H (RESULTS_COMPREHENSION_SPEC_2026-07-26.md §8) — CHAPTER ORDER IS THE ARGUMENT'S ORDER:
-// each chapter closes one possible explanation for "it feels understaffed," so the answer is
-// reached by elimination. See `ChapterRail.tsx`'s header for why this list matches the ACTUAL
-// top-level sections below rather than a forced 1:1 mapping onto the spec's full 9-chapter
-// ideal (several spec chapters are still bundled inside the one monolithic `CoreGridTab`).
-const CHAPTERS: ChapterRailEntry[] = [
+// R10 (RESULTS_PAGE_V2_SPEC_2026-07-27.md §2/§6, PR D) — `ChapterRail` is retired, replaced by
+// `StepBar` (same scroll-spy/click-to-jump logic, a horizontal top bar instead of a sticky
+// left sidebar — frees full page width for each panel's visual frame). STILL THE OLD 7-ENTRY
+// LIST, mid-migration: PR D only replaces the SHELL, not the content — PRs E/F/G redistribute
+// this page's content into exactly five real panels and will shrink this list to 5 as they
+// land (see .claude/rules/results-redesign.md's "Results Page V2" section). Each chapter
+// still closes one possible explanation for "it feels understaffed," reached by elimination.
+const CHAPTERS: StepBarEntry[] = [
   { id: 'ch-current-staffing', label: 'Your current staffing' },
   { id: 'ch-scenario-b', label: 'Could moving hours fix it?' },
   { id: 'ch-funding-ask', label: 'What this costs, what it buys' },
@@ -38,9 +40,11 @@ const CHAPTERS: ChapterRailEntry[] = [
  * menu as good as it could be" — absorbed the old Compare tab), then the hidden-boarding
  * diagnostic + the short boarding-transition bridge (§2.5) + the additive boarding coverage
  * recommendation, then the synthesis chapter (PR G, "both budgets together" — THE ANSWER). See
- * CLAUDE.md Section 3/6 + .claude/rules/results-redesign.md. PR H added the sticky chapter rail
- * (`ChapterRail`) — each `<div id="...">` wrapper below is a scroll-spy/jump target; the id
- * list and `CHAPTERS` above must stay in sync.
+ * CLAUDE.md Section 3/6 + .claude/rules/results-redesign.md. PR H added the (now-retired,
+ * R10) sticky chapter rail; PR D of RESULTS_PAGE_V2_SPEC_2026-07-27.md replaced it with the
+ * horizontal `StepBar` below — each `<div id="...">` wrapper is a scroll-spy/jump target; the
+ * id list and `CHAPTERS` above must stay in sync. This content list itself is still the OLD
+ * 7-section architecture, mid-migration — PRs E/F/G redistribute it into five real panels.
  */
 export function DashboardScreen() {
   const { setScreen, getResult, buildEngineInputs, currentStaffingGrid, wHppvTarget } = useStore();
@@ -85,10 +89,7 @@ export function DashboardScreen() {
 
       {/* PR H (RESULTS_COMPREHENSION_SPEC_2026-07-26.md §6.1/§8) — THE WELCOME/ORIENTATION
           SECTION, FIFTH revision (2026-07-27, see .claude/rules/results-redesign.md's PR H
-          section for the full history). Rendered here, ABOVE `.dashboard-body`, so it spans
-          the full page width rather than being confined to `.dashboard-content`'s column
-          (which is narrowed by the chapter rail sitting beside it) — moved up from inside
-          `CoreGridTab.tsx` for exactly this reason. Deliberately NOT a `.card`/`.banner` — see
+          section for the full history). Deliberately NOT a `.card`/`.banner` — see
           `.results-welcome`'s own CSS comment in App.css. Reuses the SAME `/favicon.svg` mark
           `WelcomeScreen.tsx` uses, at a smaller size, next to the heading — the one piece of
           product branding on this screen, since the retired top `<h1>ShiftLens — Results</h1>`
@@ -109,34 +110,35 @@ export function DashboardScreen() {
         </p>
       </section>
 
-      <div className="dashboard-body">
-        <ChapterRail chapters={CHAPTERS} />
-        <div className="dashboard-content">
-          <div id="ch-current-staffing">
-            <CoreGridTab />
-          </div>
-          <div id="ch-scenario-b">
-            <ScenarioBSection />
-          </div>
-          <div id="ch-funding-ask">
-            <FundingAskSection />
-            <FinancePartnerWorksheet />
-          </div>
-          <div id="ch-shift-menu">
-            <ShiftMenuFlexibilitySection />
-          </div>
-          <div id="ch-boarding">
-            <HiddenBoardingSection />
-            <BoardingTransition />
-            <BoardingCoverageSection />
-            <ConstrainedReallocationSection />
-          </div>
-          <div id="ch-synthesis">
-            <SynthesisSection />
-          </div>
-          <div id="ch-evidence">
-            <EvidenceSurfaceSection />
-          </div>
+      {/* R10 (PR D) — StepBar replaces ChapterRail's sticky sidebar with a horizontal top bar,
+          freeing full page width below for each panel's visual frame. No more `.dashboard-body`
+          two-column flex — `.dashboard-content` is now the page's only column. */}
+      <StepBar steps={CHAPTERS} />
+      <div className="dashboard-content">
+        <div id="ch-current-staffing">
+          <CoreGridTab />
+        </div>
+        <div id="ch-scenario-b">
+          <ScenarioBSection />
+        </div>
+        <div id="ch-funding-ask">
+          <FundingAskSection />
+          <FinancePartnerWorksheet />
+        </div>
+        <div id="ch-shift-menu">
+          <ShiftMenuFlexibilitySection />
+        </div>
+        <div id="ch-boarding">
+          <HiddenBoardingSection />
+          <BoardingTransition />
+          <BoardingCoverageSection />
+          <ConstrainedReallocationSection />
+        </div>
+        <div id="ch-synthesis">
+          <SynthesisSection />
+        </div>
+        <div id="ch-evidence">
+          <EvidenceSurfaceSection />
         </div>
       </div>
     </div>

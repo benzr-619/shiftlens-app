@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { useStore } from '../../store';
 import type { ShiftDef } from '../../engine/types';
 import { DAY_LABELS } from '../../engine/types';
-import { computeBacklog, BACKLOG_CAUGHT_UP_THRESHOLD } from '../../engine';
+import { computeBacklog } from '../../engine';
 import { coverageForDay } from '../../engine/solver';
 import { WhppvHeatmap, type WhppvHeatmapCell } from '../../components/WhppvHeatmap';
 import type { WhppvColorDomain } from '../../lib/whppvColorDomain';
@@ -23,13 +23,7 @@ function fmtHour(h: number): string {
  * the page proceeds to the idealized recommendation below. Templated headline + stat cards,
  * per the Section 2 design pattern.
  */
-export function CurrentStaffingAnalysis({
-  colorDomain,
-  backlogMax,
-}: {
-  colorDomain: WhppvColorDomain;
-  backlogMax: number;
-}) {
+export function CurrentStaffingAnalysis({ colorDomain }: { colorDomain: WhppvColorDomain }) {
   const { shiftMenu, arrivals, currentStaffingGrid, getResult, getCurrentStaffingResult } = useStore();
 
   const result = getResult();
@@ -148,26 +142,20 @@ export function CurrentStaffingAnalysis({
       const cellArrivals = arrivals[day * 24 + hour] ?? 0;
       const whppv = heatmapScale !== null && cellArrivals > 0 ? (coverage[hour] / cellArrivals) * heatmapScale : null;
       const belowFloor = floorViolationSet.has(`${day}-${hour}`);
-      const cellBacklog = backlog.backlog[day * 24 + hour] ?? 0;
-      const inBacklogStreak = cellBacklog >= BACKLOG_CAUGHT_UP_THRESHOLD;
       const riskReasons: string[] = [];
       if (belowFloor) riskReasons.push('below the ENA on-duty floor');
-      if (inBacklogStreak) riskReasons.push(`carrying ~${cellBacklog.toFixed(1)} nurse-hrs of backlog (still catching up)`);
       heatmapCells.push({
         day,
         hour,
         whppv,
         onDuty: coverage[hour],
         requirement: result.hourlyRequirement[day * 24 + hour] ?? 0,
-        // PR D (change 4): per-hour band drives the heatmap's own color now — see
-        // components/WhppvHeatmap.tsx. Reuses the SAME reporting curves CoreGridTab passes,
-        // read off this cell's global hour.
+        // Per-hour band drives the heatmap's own color — see components/WhppvHeatmap.tsx.
+        // Reuses the SAME reporting curves CoreGridTab passes, read off this cell's global hour.
         bandFloor: result.bandFloorHourly[day * 24 + hour] ?? 0,
         bandCeiling: result.bandCeilingHourly[day * 24 + hour] ?? 0,
         arrivals: cellArrivals,
         belowFloor,
-        backlog: cellBacklog,
-        inBacklogStreak,
         riskReasons,
       });
     }
@@ -232,7 +220,7 @@ export function CurrentStaffingAnalysis({
       </div>
 
       <h3>Where your current schedule runs lean or rich</h3>
-      <WhppvHeatmap cells={heatmapCells} backlogMax={backlogMax} shiftMenu={sortedShiftMenu} />
+      <WhppvHeatmap cells={heatmapCells} shiftMenu={sortedShiftMenu} />
 
       <button className="btn-link why-toggle" onClick={() => setWhyOpen((v) => !v)}>
         {whyOpen ? 'Hide how backlog builds' : 'Why a short hour costs more than one hour'}

@@ -160,8 +160,8 @@ specific ED's data, always framed as "what similar EDs run at" and always user-e
 | — Step 2 | `src/screens/setup/VolumeStep.tsx` | Annual volume override, wHPPV target pre-fill. No volume-band table anymore (removed 2026-07-14) — a single inline IQR sentence instead, framed generically ("similar-volume benchmark"), no "EDBA" branding anywhere in the UI |
 | — Step 3 | `src/screens/setup/ShiftMenuStep.tsx` | `ShiftMenuEditor` wrapper (unchanged) |
 | — Step 4 | `src/screens/setup/ReviewStep.tsx` | Summary of every input with per-field Edit links back to the owning step (admit rate/boarding duration/ESI mix/boarding seasonality all link back to Step 1 now); final `canContinue` gate lives in `SetupScreen.tsx`. **2026-07-27:** rows for boarding census (medical/BH)/ratios, and a "Download my data file" export button (`lib/template.ts`'s `downloadFilledConsolidatedTemplateXlsx` — data only, no policy values) — the app's only persistence, see `.claude/rules/template-parsing.md` |
-| Results dashboard | `src/screens/DashboardScreen.tsx` | **Not a tab container** (since 2026-07-13) — a single scrolling page. Top to bottom: `.dashboard-topbar` ("← Back to setup" top-left + "Export to PPTX" top-right — no page `<h1>` anymore, see below), then the full-width **`.results-welcome`** section ("Your ShiftLens Results," with the `/favicon.svg` mark next to the heading — moved here from inside `CoreGridTab` 2026-07-27 — see `.claude/rules/results-redesign.md`'s PR H section), then `.dashboard-body`'s sticky **chapter rail** (2026-07-26 PR H, `ChapterRail.tsx`) alongside `.dashboard-content`. Chapter order: `CoreGridTab` → `ScenarioBSection` → `FundingAskSection` → `FinancePartnerWorksheet` → `ShiftMenuFlexibilitySection` → `HiddenBoardingSection` → `BoardingTransition` → `BoardingCoverageSection` → `SynthesisSection`, each wrapped in an `id`-carrying div the rail's 6 chapter entries target (see Section 4's Module Map note on why 6, not the spec's 9) |
-| — Core grid section | `src/screens/dashboard/CoreGridTab.tsx` | **No longer opens with the welcome/orientation section** — `.results-welcome` (2026-07-26 PR H spec §6.1, rewritten FOUR times, see `.claude/rules/results-redesign.md`'s PR H section) moved OUT of this component and up into `DashboardScreen.tsx` (2026-07-27, see the Screen Map row above), so it renders full-width above the chapter rail rather than confined to this component's column. `CoreGridTab` now opens directly with `CurrentStaffingAnalysis` (§2.1) when current staffing exists; then the §2.2 **comparison unit** (idealized grid + current grid + diff, collapsed into one card, with the size-gap-vs-shape-gap reconciliation [renamed from "budget gap," PR F §3] — PR D added a severity-reduction consequence clause to its headline); then the coverage-summary (wHPPV/overcoverage [PR F: vs. CURRENT staffed hours now, suppressed with no current staffing]/"Hours below the peer 25th-percentile staffing floor" [renamed from "typical staffing range," PR D]/"Effective ED wHPPV") unit + the wHPPV heatmap. The heatmap carries the §2.4 **backlog overlay** (a left-edge vertical spine, weight scaled by magnitude — 2026-07-25, replaced the earlier amber corner-dot/bottom-bar) and the ENA-floor flag; the old single-hour p25 red-outline was superseded. **2026-07-26 PR D: the heatmap's own cell number/color mechanism reversed again — see Section 6.** The "what this schedule means" panel's realized-wHPPV range now spans the 168 hours (PR H), not 7 days, and names the hour each extreme falls on |
+| Results dashboard | `src/screens/DashboardScreen.tsx` | **Not a tab container** (since 2026-07-13) — a single scrolling page. Top to bottom: `.dashboard-topbar` ("← Back to setup" top-left + "Export to PPTX" top-right — no page `<h1>` anymore, see below), then the full-width **`.results-welcome`** section ("Your ShiftLens Results," with the `/favicon.svg` mark next to the heading — moved here from inside `CoreGridTab` 2026-07-27 — see `.claude/rules/results-redesign.md`'s PR H section), then the horizontal **`StepBar`** (2026-07-27, `components/StepBar.tsx` — R10 of `RESULTS_PAGE_V2_SPEC_2026-07-27.md`, REPLACES the sticky left-side chapter rail, `ChapterRail.tsx`, now DELETED — same scroll-spy/jump logic, horizontal layout so it stops competing with each panel's visual frame for width), then `.dashboard-content` (no longer a two-column `.dashboard-body` flex wrapper — that's gone). Chapter order (STILL THE OLD 7-entry list as of PR D — PRs E/F/G redistribute this into 5 real panels): `CoreGridTab` → `ScenarioBSection` → `FundingAskSection` → `FinancePartnerWorksheet` → `ShiftMenuFlexibilitySection` → `HiddenBoardingSection` → `BoardingTransition` → `BoardingCoverageSection` → `SynthesisSection`, each wrapped in an `id`-carrying div `StepBar`'s entries target |
+| — Core grid section | `src/screens/dashboard/CoreGridTab.tsx` | **No longer opens with the welcome/orientation section** — `.results-welcome` (2026-07-26 PR H spec §6.1, rewritten FOUR times, see `.claude/rules/results-redesign.md`'s PR H section) moved OUT of this component and up into `DashboardScreen.tsx` (2026-07-27, see the Screen Map row above), so it renders full-width above the chapter rail rather than confined to this component's column. `CoreGridTab` now opens directly with `CurrentStaffingAnalysis` (§2.1) when current staffing exists; then the §2.2 **comparison unit** (idealized grid + current grid + diff, collapsed into one card, with the size-gap-vs-shape-gap reconciliation [renamed from "budget gap," PR F §3] — PR D added a severity-reduction consequence clause to its headline); then the coverage-summary (wHPPV/overcoverage [PR F: vs. CURRENT staffed hours now, suppressed with no current staffing]/"Hours below the peer 25th-percentile staffing floor" [renamed from "typical staffing range," PR D]/"Effective ED wHPPV") unit + the wHPPV heatmap. **The heatmap's backlog spine overlay is GONE (R3, 2026-07-27, PR D of `RESULTS_PAGE_V2_SPEC_2026-07-27.md`)** — it appeared on nearly every cell at near-uniform weight in a real rendered page, reading as a table-border artifact, not data; backlog gets its own strip chart in the new shared `VisualFrame` component instead (not yet wired into this component — see Section 6 and `.claude/rules/results-redesign.md`'s "Results Page V2" PR D section). The ENA-floor flag is unchanged. **2026-07-26 PR D (SOLVER_REALISM_SPEC): the heatmap's own cell number/color mechanism reversed — see Section 6 — and 2026-07-27's PR D (RESULTS_PAGE_V2_SPEC) reversed the NUMBER a third time (back to headcount alone) and the RICH color back to saturated blue.** The "what this schedule means" panel's realized-wHPPV range now spans the 168 hours (PR H), not 7 days, and names the hour each extreme falls on |
 | — Opening analysis | `src/screens/dashboard/CurrentStaffingAnalysis.tsx` | §2.1 — templated headline (realized wHPPV vs. band), backlog "longest lean stretch" (§2.4, current grid — 2026-07-26 PR D: now names WHEN it starts/peaks, not just how long), effective-wHPPV-after-boarding + FTE-to-cover preview; CTA opener when no current staffing entered. Rendered at the top of `CoreGridTab` |
 | — Scenario B | `src/screens/dashboard/ScenarioBSection.tsx` | (2026-07-26 PR F, `RESULTS_COMPREHENSION_SPEC_2026-07-26.md` §5) "Could moving hours fix it?" — `engine/index.ts`'s `computeScenarioB` (parameter swap: same pipeline, budget = current grid's own hours). Every render states the arrivals-only bound loudly. Three templated branches: full-coverage, near-optimal, general. CTA when no current staffing |
 | — Funding ask | `src/screens/dashboard/FundingAskSection.tsx` | (2026-07-26 PR D, change 3; **REFRAMED PR G** §7) "What this schedule costs you, and what closing the gap buys" — `EngineResult.fullCoverage` + `marginalCurve`/`marginalKneePoint` as a templated headline + inline SVG chart. **PR G: headline now LEADS with the marginal-curve KNEE (the ask that buys the most per FTE), full coverage stated as "the far end of that range"** — reverses the old full-coverage-first order, which buried the knee as an afterthought. Falls back to the old order when there's no meaningful knee. Explicit "already funds full coverage" branch when `fteDelta <= 0`. See `.claude/rules/results-redesign.md`'s PR D/PR G sections |
@@ -472,12 +472,27 @@ src/
                           shortfall spread vs. concentrated, scored with the REAL `severity`
                           function from `engine/solver.ts` (not a mock). Verified in
                           `engine/__tests__/convexityDemo.test.ts`.
-    ChapterRail.tsx      — (2026-07-26 PR H, `RESULTS_COMPREHENSION_SPEC_2026-07-26.md` §8)
-                          sticky chapter rail, `IntersectionObserver` scroll-spy, click-to-jump.
-                          Renders whatever `chapters` list `DashboardScreen.tsx` passes — chapter
-                          order is decided there, not here. See
-                          `.claude/rules/results-redesign.md`'s PR H section for why the rail's
-                          6 entries don't map 1:1 onto the spec's 9-chapter ideal yet.
+    StepBar.tsx          — (2026-07-27, PR D of `RESULTS_PAGE_V2_SPEC_2026-07-27.md` §2/§6,
+                          R10) REPLACES the deleted `ChapterRail.tsx` (2026-07-26 PR H) —
+                          identical `IntersectionObserver` scroll-spy/click-to-jump logic, a
+                          horizontal top bar instead of a sticky left sidebar (frees full page
+                          width for each panel's visual frame). Renders whatever `steps` list
+                          `DashboardScreen.tsx` passes — still the OLD 7-entry chapter list as
+                          of PR D; PRs E/F/G shrink it to the real 5 panels. See
+                          `.claude/rules/results-redesign.md`'s "Results Page V2" PR D section.
+    VisualFrame.tsx      — (2026-07-27, PR D of `RESULTS_PAGE_V2_SPEC_2026-07-27.md` §4) THE
+                          SHARED VISUAL FRAME, built once, reused across all five panels: a
+                          demand-vs-capacity chart (defaults to the average day, 24 points —
+                          full week is an expand toggle) + a queue-depth strip on the same
+                          x-axis (draws the CYCLICAL backlog curve, `null` renders a
+                          deliberately BLANK strip for Panel 3) + the `WhppvHeatmap`. Takes a
+                          `VisualFrameView[]` — the panel decides the toggle list/order, the
+                          frame doesn't know which panel it's in. Toggling cross-fades via a
+                          CSS `key`-remount animation (the simple fallback the spec itself
+                          sanctions over per-cell tweening). **NOT YET WIRED INTO A REAL
+                          PANEL** — Panels 1-5 (PRs E/F/G) are its first callers; not yet
+                          e2e-verified as mounted UI, only build/lint-verified in isolation —
+                          see `.claude/rules/results-redesign.md`'s PR D section.
     EvidenceBadge.tsx    — ESTABLISHED/CONSENSUS/CONVENTION/ASSUMPTION/OPTIONAL inline badge
                           (OPTIONAL renamed from USER INPUT 2026-07-22 — every field on these
                           screens is user input, so the badge now flags optional-vs-required
@@ -491,13 +506,18 @@ src/
                           (Mon-Sun display rows, `lib/dayOrder.ts`)
     FlexAxesToggles.tsx   — §2.3 flexibility-axis checkboxes bound to store `flexAxes`; shared by
                           ShiftMenuStep (setup) + ShiftMenuFlexibilitySection (results)
-    WhppvHeatmap.tsx      — 7x24 realized-wHPPV heatmap inside CoreGridTab's wHPPV unit (Mon-Sun
-                          display columns); band-neutral asymmetric color scale (accepts
-                          `colorDomain` as a prop, computed once by the caller — see Section 6),
-                          backlog vertical-spine overlay (weight scaled by a shared `backlogMax`
-                          prop) + ENA-floor flag, and shift-boundary rule rows keyed off a
-                          `shiftMenu` prop (2026-07-25 heatmap legibility rework, see
-                          .claude/rules/results-redesign.md's last section)
+    WhppvHeatmap.tsx      — 7x24 heatmap (Mon-Sun display columns); per-cell band-neutral
+                          asymmetric color scale (each `WhppvHeatmapCell` carries its own
+                          `bandFloor`/`bandCeiling` — see Section 6's PR D/SOLVER_REALISM_SPEC
+                          history) + ENA-floor flag, and shift-boundary rule rows keyed off a
+                          `shiftMenu` prop. **2026-07-27 (PR D of `RESULTS_PAGE_V2_SPEC_2026-
+                          07-27.md`, R1/R2/R3): cell number reverted to headcount alone (was
+                          `onDuty/requirement`); rich-side color reverted to saturated blue
+                          (was muted gray-blue); the backlog vertical-spine overlay is REMOVED
+                          entirely (no `backlogMax` prop, no `backlog`/`inBacklogStreak`
+                          fields) — backlog now gets its own strip chart in the new
+                          `VisualFrame.tsx` instead.** See Section 6's full history and
+                          `.claude/rules/results-redesign.md`'s "Results Page V2" PR D section.
   screens/
     WelcomeScreen.tsx  — entry point, "Start Setup" button, see Screen Map above
     SetupScreen.tsx    — 4-step wizard shell, see Screen Map above
@@ -733,6 +753,31 @@ data point in that same history, not a conflict with anything said there. What c
   those (2026-07-25's week-level band, now this per-hour band) — flag and color-mechanism are
   still two independent axes, don't conflate a change to one with a change to the other.
   See `.claude/rules/results-redesign.md`'s PR D section for the full record.
+
+**2026-07-27, PR D of `RESULTS_PAGE_V2_SPEC_2026-07-27.md` — THIRD reversal of the cell number,
+SECOND reversal of the rich-side color, and the backlog-streak overlay is RETIRED (not just
+reversed again).** Confirmed against a real rendered page, all three findings independent:
+- **Cell number reverts to headcount alone** (`onDuty`) — the `onDuty/requirement` ratio from
+  the block above is gone; color still carries that same ratio, just no longer duplicated as a
+  second number. Realized wHPPV stays tooltip-only, unchanged.
+- **`RICHER_RGB` reverses from the 2026-07-25 deliberate muted gray-blue back to a saturated
+  blue** — a real department's own rendered page showed an 8-nurses-against-4-requirement hour
+  at 04:00 in pale gray, which was arguably the single most actionable finding on the page; the
+  muting made it invisible. The lean/rich ASYMMETRY in ramp/clamp behavior (the
+  `LEAN_FULL_SATURATE_RATIO`/`RICH_CLAMP_MULTIPLE` constants) is unchanged — only how saturated
+  the rich side is ALLOWED to get changed back.
+- **The backlog-streak spine overlay (from the 2026-07-25 legibility rework, described several
+  paragraphs above) is REMOVED from the heatmap entirely, not superseded by another heatmap
+  mechanism this time.** In the rendered page it appeared on nearly every cell at near-uniform
+  weight — reading as a table-border artifact rather than data. Backlog now gets its OWN
+  aligned strip chart in a new shared `VisualFrame` component (`components/VisualFrame.tsx`),
+  drawing the CYCLICAL curve (not the blended actual curve — see PR A's finding, this file's
+  Module Map, on why that distinction is the whole point) with the structural floor as a
+  baseline. `WhppvHeatmap`'s `backlogMax` prop and `WhppvHeatmapCell.backlog`/`inBacklogStreak`
+  fields are gone. The ENA on-duty floor flag (red outline + "!") is UNCHANGED, still the only
+  per-cell risk flag left. See `.claude/rules/results-redesign.md`'s "Results Page V2" section,
+  PR D, for the full record — including that `VisualFrame` isn't wired into a real panel yet
+  (PRs E/F/G are its first callers) and hasn't been e2e-verified as mounted UI this PR.
 
 **Collapsed-by-default "why" explainer pattern.** `CoreGridTab.tsx`'s plain-language
 summary panel (target wHPPV, weekly hours vs. budget, realized wHPPV range) has a
@@ -1412,6 +1457,23 @@ cost of the cheaper-looking hold-nurse ask. Test count reached 219
 case and a full-coverage zero-queue case). See `.claude/rules/results-redesign.md`'s new
 "Results Page V2" section, PR C. `npm run build`/`npm test`/`oxlint`/`npm run test:e2e` all
 clean. No UI in this PR — Panel 5's editable grids and prefill buttons are PR G.
+
+**Built (2026-07-27, PR D of `RESULTS_PAGE_V2_SPEC_2026-07-27.md` — layout shell, shared
+visual frame, heatmap R1/R2/R3):** three independent UI-only pieces, no engine changes.
+**Heatmap:** cell number reverted to headcount alone (3rd change to this mechanism), rich-side
+color reverted to saturated blue (2nd reversal), backlog spine overlay removed entirely (its
+own strip chart lives in the new frame instead) — see Section 6 for the full history.
+**`StepBar.tsx`** replaces the deleted `ChapterRail.tsx` — same scroll-spy logic, a horizontal
+top bar instead of a sticky sidebar, freeing full page width; `DashboardScreen.tsx` still
+passes the OLD 7-entry chapter list (content redistribution is PRs E/F/G). **New
+`VisualFrame.tsx`** — the shared three-element frame (demand/capacity chart defaulting to the
+average day, a queue strip that can render deliberately BLANK, the heatmap), toggle-driven
+with a CSS cross-fade. **Not yet wired into a real panel** — Panels 1-5 (PRs E/F/G) are its
+first callers, and per the spec's own instruction, this is disclosed rather than claimed as
+verified: no e2e check exists yet for `VisualFrame` itself, only build/lint verification in
+isolation plus a manual screenshot review confirming the heatmap/StepBar changes render
+correctly in the still-mounted old page. See `.claude/rules/results-redesign.md`'s "Results
+Page V2" section, PR D. `npm run build`/`npm test`/`oxlint`/`npm run test:e2e` all clean.
 
 **Not yet built:**
 - Component/UI-level automated tests below the full-page e2e level (React Testing Library-
