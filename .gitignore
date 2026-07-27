@@ -12,6 +12,12 @@ dist
 dist-ssr
 *.local
 
+# PR A0 — Playwright output (test-results/traces, HTML report, per-panel review screenshots)
+/test-results
+/e2e-report
+/e2e/screenshots
+/playwright-report
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

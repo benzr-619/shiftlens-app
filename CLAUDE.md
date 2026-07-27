@@ -87,7 +87,9 @@ already-settled UI decisions.**
   — currently **no backend, no env vars, no secrets**. Everything runs client-side.
 - No git repo has been initialized yet in this folder as of the initial build (2026-07-12).
   Confirm before assuming git history exists.
-- `npm run build` (tsc -b + vite build), `npm test` (vitest run), `npm run dev` (localhost).
+- `npm run build` (tsc -b + vite build), `npm test` (vitest run), `npm run dev` (localhost),
+  `npm run test:e2e` (Playwright, chromium — PR A0, `RESULTS_PAGE_V2_SPEC_2026-07-27.md` §8.1,
+  see Section 2 below and `.claude/rules/synthetic-fixtures.md`'s Playwright section).
 - Run `npm test` after any change to `src/engine/` — the reconciliation tests
   (`src/engine/__tests__/reconcile.test.ts`) are the build-in sanity check the spec calls
   out (Section 2.2): summing the 168-cell grid across a year must reproduce
@@ -133,7 +135,15 @@ specific ED's data, always framed as "what similar EDs run at" and always user-e
   upload parsing — see `.claude/rules/template-parsing.md`.
 - **pptxgenjs** (2026-07-26 PR L) — client-side PPTX export (`lib/pptxExport.ts`), loaded via
   dynamic `import()` so it stays out of the main bundle until a user clicks "Export."
-- **vitest** for engine/parser tests. No component/UI test framework wired up yet.
+- **vitest** for engine/parser tests (config: `vitest.config.ts`, excludes `e2e/**` so the two
+  suites stay separate). **`@playwright/test`** (2026-07-27, PR A0) for browser-level results-
+  page verification — chromium only, desktop viewport, `playwright.config.ts`, `npm run
+  test:e2e`; seeds a `NAMED_DEPARTMENT_PARAMS` profile via a dev-only `window.__shiftlensSeed`
+  hook (`src/lib/testSeed.ts`, wired from `main.tsx` behind `import.meta.env.DEV` so it's
+  compiled out of production) rather than hand-building departments in a `.spec.ts` file. See
+  `.claude/rules/synthetic-fixtures.md`'s Playwright section. No component-level (React
+  Testing Library-style) unit test framework wired up — browser-level e2e now fills that gap
+  for anything visual.
 - No CSS framework — hand-written `src/App.css` + `src/index.css`, theme-aware via
   `prefers-color-scheme`. No design tokens system; colors are literal hex values scoped to
   those two files.
@@ -1316,9 +1326,28 @@ and `.claude/rules/template-parsing.md`'s (everything else) own sections for thi
   ACTUAL BROWSER this session; a future session with visual access should confirm before
   treating the UI (as opposed to the engine/parser, which are fully tested) as battle-tested.
 
+**Built (2026-07-27, PR A0 of `RESULTS_PAGE_V2_SPEC_2026-07-27.md` — Playwright browser test
+harness):** the first committed browser-level test suite in this repo. `@playwright/test` +
+`playwright.config.ts` (chromium, desktop viewport, `webServer` runs `npm run dev`) + `npm run
+test:e2e`. A dev-only seeding hook (`src/lib/testSeed.ts`'s `window.__shiftlensSeed`, wired
+from `main.tsx` behind `import.meta.env.DEV` — dead-code-eliminated from production builds)
+loads a `NAMED_DEPARTMENT_PARAMS` synthetic profile straight into the store and jumps to the
+results page, no stepping through setup. `e2e/smoke.spec.ts` covers all eight named profiles
+(A-H): results page renders, zero console errors (hard assertion), zero uncaught page errors,
+no `NaN`/`undefined`/`{{` visible in the page's own text, one full-page screenshot per profile
+saved to gitignored `e2e/screenshots/` for human review. New `vitest.config.ts` (vitest
+previously had no config file) excludes `e2e/**` so `npm test`/`npm run test:e2e` stay separate
+suites — vitest was otherwise picking up and failing on the Playwright specs. See
+`.claude/rules/synthetic-fixtures.md`'s Playwright section for the full detail. This is the
+prerequisite the rest of `RESULTS_PAGE_V2_SPEC_2026-07-27.md` (PRs A-H, a five-panel results-
+page rebuild) needs before any of its visual work (PR D onward) can be verified rather than
+just claimed. `npm run build`/`npm test`/`oxlint`/`npm run test:e2e` all clean.
+
 **Not yet built:**
-- Component/UI-level automated tests (only `engine/` and `lib/` have vitest coverage; no
-  Playwright/browser verification exists in this repo at all as of 2026-07-27)
+- Component/UI-level automated tests below the full-page e2e level (React Testing Library-
+  style unit tests for a single component in isolation) — `engine`/`lib` have vitest coverage,
+  the full results page now has Playwright e2e coverage (PR A0 above), but there is no
+  middle tier yet.
 - Mobile/responsive layout — built and verified on a standard desktop viewport only
 - Dollar cost layer, arrivals seasonality, Monte Carlo — see Section 7. (Shift-menu search is now
   BUILT as a bounded advisory search — Section 7's reversal note.)

@@ -93,12 +93,37 @@ admitRate/boardingDuration produces byte-identical output). `syntheticSweep.test
 41/43, decorrelated from every other axis) — both boarding paths are now swept for
 crash/NaN/invariant safety, not just exercised by the one named profile.
 
-## No Playwright harness exists in this repo yet
+## Playwright harness (PR A0, `RESULTS_PAGE_V2_SPEC_2026-07-27.md` §8.1) — supersedes the stale note below
 
-`package.json` has no `playwright`/`@playwright/test` devDependency and no playwright config —
-every "verified end-to-end in headless Playwright" note elsewhere in these rules files refers to
-ad-hoc manual browser verification during that session, not a committed test suite. The seven
-named fixtures are still the thing a future committed Playwright/visual-review pass should load
-directly (per §12.5's "committed Playwright fixture" ask) — when that pass is built, wire it to
-`NAMED_DEPARTMENT_PARAMS` + `generateSyntheticDepartment`, don't hand-build second copies of
-these seven departments in a `.spec.ts` file.
+**This section used to say no Playwright harness existed. It now does.** `@playwright/test` +
+`playwright.config.ts` (chromium only, desktop viewport, `webServer` running `npm run dev` on
+port 5173) + `npm run test:e2e`. Built exactly per the committed-fixture ask this file's older
+note flagged: it loads `NAMED_DEPARTMENT_PARAMS` straight into the store, no second hand-built
+department in a `.spec.ts` file.
+
+- **`src/lib/testSeed.ts`** — installs `window.__shiftlensSeed(params)`, a dev-only hook wired
+  from `main.tsx` behind `if (import.meta.env.DEV)` (a compile-time constant Vite replaces with
+  `false` in production, dead-code-eliminating the whole dynamic import from the shipped
+  bundle — verified: `dist/assets/*.js` after `npm run build` contains no reference to
+  `testSeed` or `__shiftlensSeed`). Calls `generateSyntheticDepartment(params)` and writes every
+  field into the zustand store via the existing setters, then jumps straight to
+  `screen: 'dashboard'` — no stepping through setup.
+- **`e2e/seed.ts`** — `seedAndGoToResults(page, params)`, the one shared helper every spec
+  calls; imports `SyntheticDepartmentParams` as a type only (no runtime engine code needed in
+  the Node/Playwright process).
+- **`e2e/smoke.spec.ts`** — one test per `NAMED_DEPARTMENT_PARAMS` entry (currently A-H, all
+  eight): seeds the profile, asserts `.dashboard-screen` is visible, asserts the page's own text
+  contains no `NaN`/`undefined`/`{{` (unfilled template residue), and — the hard assertion,
+  never weakened to a warning — asserts **zero** console errors and zero uncaught page errors.
+  Saves a full-page screenshot per profile to `e2e/screenshots/` (gitignored) for human review.
+- **`vitest.config.ts`** (new — vitest previously had no config file at all) excludes `e2e/**`
+  from vitest's default `*.spec.ts` glob, so `npm test` and `npm run test:e2e` stay two
+  genuinely separate suites; without this, vitest was picking up and failing on the Playwright
+  specs (wrong environment, no browser).
+- Per-panel specs are added by each later PR (D onward) alongside the panel they cover, per
+  the spec's §8.1 list (toggle-switches-view, frame's-three-elements-present, Panel 3's queue
+  strip is empty, Panel 1's effective-wHPPV view is not, Panel 5's hold-nurse-surplus/heavy-BH
+  findings) — see that PR's own section below/in `results-redesign.md` for what actually landed.
+
+The seven (now eight, with profile H) named fixtures remain the source of truth these specs load
+— don't hand-build a ninth department anywhere under `e2e/`.
