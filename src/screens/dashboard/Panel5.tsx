@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { useStore } from '../../store';
 import { DEFAULTS } from '../../engine/types';
 import type { ShiftDef, Grid } from '../../engine/types';
@@ -72,13 +72,31 @@ function buildCells(onDuty168: number[], requirement168: number[], arrivals168: 
  * the derived path has no BH-specific concept to split out in the first place.
  */
 export function Panel5() {
-  const { shiftMenu, arrivals, currentStaffingGrid, buildEngineInputs, getResult } = useStore();
+  const {
+    shiftMenu,
+    arrivals,
+    currentStaffingGrid,
+    sandboxEdGrid,
+    sandboxHoldGrid,
+    setSandboxEdGrid,
+    setSandboxHoldGrid,
+    buildEngineInputs,
+    getResult,
+  } = useStore();
   const result = getResult();
   const sortedShiftMenu = useMemo(() => sortByStartHour(shiftMenu), [shiftMenu]);
   const inputs = buildEngineInputs();
 
-  const [edGrid, setEdGrid] = useState<Grid>(() => emptyGrid(sortedShiftMenu));
-  const [holdGrid, setHoldGrid] = useState<Grid>(() => emptyGrid(sortedShiftMenu));
+  // PR H moved this from component-local state into the store — see the store field's own
+  // comment for why (the PPTX export needs to read "the user's sandbox scenario" from outside
+  // this component). Behavior is otherwise identical: starts empty, edits persist for the
+  // session, `null` reads as "untouched."
+  const edGrid = sandboxEdGrid ?? emptyGrid(sortedShiftMenu);
+  const holdGrid = sandboxHoldGrid ?? emptyGrid(sortedShiftMenu);
+  const setEdGrid = (updater: Grid | ((prev: Grid) => Grid)) =>
+    setSandboxEdGrid(typeof updater === 'function' ? (updater as (prev: Grid) => Grid)(edGrid) : updater);
+  const setHoldGrid = (updater: Grid | ((prev: Grid) => Grid)) =>
+    setSandboxHoldGrid(typeof updater === 'function' ? (updater as (prev: Grid) => Grid)(holdGrid) : updater);
 
   const boarding = result.boarding;
   const band = lookupWhppvBand(result.annualVisits);

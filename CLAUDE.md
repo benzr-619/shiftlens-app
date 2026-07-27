@@ -160,12 +160,12 @@ specific ED's data, always framed as "what similar EDs run at" and always user-e
 | — Step 2 | `src/screens/setup/VolumeStep.tsx` | Annual volume override, wHPPV target pre-fill. No volume-band table anymore (removed 2026-07-14) — a single inline IQR sentence instead, framed generically ("similar-volume benchmark"), no "EDBA" branding anywhere in the UI |
 | — Step 3 | `src/screens/setup/ShiftMenuStep.tsx` | `ShiftMenuEditor` wrapper (unchanged) |
 | — Step 4 | `src/screens/setup/ReviewStep.tsx` | Summary of every input with per-field Edit links back to the owning step (admit rate/boarding duration/ESI mix/boarding seasonality all link back to Step 1 now); final `canContinue` gate lives in `SetupScreen.tsx`. **2026-07-27:** rows for boarding census (medical/BH)/ratios, and a "Download my data file" export button (`lib/template.ts`'s `downloadFilledConsolidatedTemplateXlsx` — data only, no policy values) — the app's only persistence, see `.claude/rules/template-parsing.md` |
-| Results dashboard | `src/screens/DashboardScreen.tsx` | **Not a tab container** (since 2026-07-13) — a single scrolling page. Top to bottom: `.dashboard-topbar` ("← Back to setup" top-left + "Export to PPTX" top-right — no page `<h1>` anymore, see below), then the full-width **`.results-welcome`** section ("Your ShiftLens Results," with the `/favicon.svg` mark next to the heading — moved here from inside the (now-deleted) `CoreGridTab` 2026-07-27 — see `.claude/rules/results-redesign.md`'s PR H section), then the horizontal **`StepBar`** (2026-07-27, `components/StepBar.tsx` — R10 of `RESULTS_PAGE_V2_SPEC_2026-07-27.md`, REPLACES the sticky left-side chapter rail, `ChapterRail.tsx`, now DELETED), then `.dashboard-content` (no `.dashboard-body` two-column wrapper anymore). **PR E: `Panel1`/`Panel2` are the first two REAL panels of the five-panel architecture** (§4); `ch-funding-ask` through `ch-evidence` are still the old chapter architecture, pending PR F/G: `FundingAskSection` → `FinancePartnerWorksheet` → `ShiftMenuFlexibilitySection` → `BoardingCoverageSection` → `SynthesisSection` → `EvidenceSurfaceSection`, each wrapped in an `id`-carrying div `StepBar`'s entries target |
+| Results dashboard | `src/screens/DashboardScreen.tsx` | **Not a tab container** (since 2026-07-13) — a single scrolling page. As of `RESULTS_PAGE_V2_SPEC_2026-07-27.md` (PRs A0-H, all landed), this is the FULL five-panel architecture (§4), not the old nine-chapter one. Top to bottom: `.dashboard-topbar` ("← Back to setup" only — no `<h1>`, no export button here anymore, R12 moved it to the bottom), the full-width `.results-welcome` section, the horizontal `StepBar` (R10, replaces the deleted `ChapterRail.tsx`) with 6 entries (`Panel1`-`Panel5` + `ch-evidence`), then `.dashboard-content`: `<Panel1 />` → `<Panel2 />` → `<Panel3 />` → `<Panel4 />` → `<Panel5 />` → `.export-row` ("Export to PPTX," PR H) → `<EvidenceSurfaceSection />` (unmodified, stays off the main arc per the spec's own instruction). Every prior chapter component (`CoreGridTab`, `CurrentStaffingAnalysis`, `ScenarioBSection`, `HiddenBoardingSection`, `BoardingTransition`, `ConstrainedReallocationSection`, `FundingAskSection`, `FinancePartnerWorksheet`, `SynthesisSection`, `BoardingCoverageSection`, `ShiftMenuFlexibilitySection`) is DELETED — see each Panel row below for what absorbed its content |
 | — Panel 1 | `src/screens/dashboard/Panel1.tsx` | (2026-07-27, PR E of `RESULTS_PAGE_V2_SPEC_2026-07-27.md` §4) "What your department demands, and what you staff against it" — REPLACES the deleted `CoreGridTab.tsx`/`CurrentStaffingAnalysis.tsx`/`HiddenBoardingSection.tsx`. Band comparison (realized wHPPV vs. peer p25-p75, the ONE band comparison on the page per §3.3), the late-ramp sentence (§3.2, demand-peak-hour vs. staffing-peak-hour on the average day), boarding medical/BH ratios + the required RN-understatement callout, effective wHPPV (never band-compared), the hidden-boarding day/night sentences (reused verbatim from `lib/narrative.ts`), the two backlog sentences (§3.1 — STRUCTURAL + CYCLICAL, never the blended actual curve; see `.claude/rules/engine-solver.md`'s PR A section for why), and the verbatim queue-honesty callout. A `VisualFrame` with 4 toggle views (Arrivals/Boarding/Combined/Effective wHPPV) — see `.claude/rules/results-redesign.md`'s PR E section for the judgment calls each view's "capacity" line makes (the spec describes the story, not the exact formula) |
 | — Panel 2 | `src/screens/dashboard/Panel2.tsx` | (2026-07-27, PR E §4) "Could moving hours fix it?" — REPLACES the deleted `ScenarioBSection.tsx`/`ConstrainedReallocationSection.tsx`. Reuses `computeScenarioB` (arrivals only)/`computeCombinedReallocation` (arrivals+boarding) UNCHANGED, toggled: Current · Reallocated for arrivals · Reallocated for arrivals + boarding. Left column ("hours below need"/"worst unbroken stretch" via `lib/whenPattern.ts`'s first real UI caller) updates WITH the toggle — required `VisualFrame` to gain a controlled mode (`activeKey`/`onActiveKeyChange`, optional, defaults to uncontrolled). The honest-cost sentence (reallocating for boarding costs the arrivals picture) renders on EVERY state, not gated behind the "combined" toggle |
 | — Panel 3 | `src/screens/dashboard/Panel3.tsx` | (2026-07-27, PR F of `RESULTS_PAGE_V2_SPEC_2026-07-27.md` §4) "What would it take to fully cover the department?" — REPLACES the deleted `SynthesisSection.tsx`. Reuses `EngineResult.fullCoverageCombined` (PR B) directly, no new engine work. Queue strip renders deliberately BLANK. New dedicated two-bar SVG comparison (total demand, stacked when boarding present, vs. hours staffed today) — degrades to a single (arrivals-only) bar when boarding is absent, per §10 open item 3, resolved this PR |
 | — Panel 4 | `src/screens/dashboard/Panel4.tsx` | (2026-07-27, PR F §4) "Recommended staffing" (R11: "idealized" renamed everywhere) — REPLACES the deleted `FundingAskSection.tsx`/`FinancePartnerWorksheet.tsx` (R8, absorbed into a reframed "benefit per additional shift" section) and folds `ShiftMenuFlexibilitySection.tsx` in, collapsed. R6: a display-level Arrivals/Boarding/Combined toggle — `EngineResult.grid` itself is never mutated; the combined grid is summed cell-wise in the component only. **Judgment call, flagged:** the "hours of unmet need" figure is approximated by scaling `EngineResult.totalBacklogHours` by the same % reduction the (severity-based) marginal curve shows, since the engine doesn't record raw hours per marginal-curve point — see `.claude/rules/results-redesign.md`'s PR F section |
-| — Panel 5 | `src/screens/dashboard/Panel5.tsx` | (2026-07-27, PR G of `RESULTS_PAGE_V2_SPEC_2026-07-27.md` §4) "Test it yourself" — NEW, no predecessor. Two editable day×shift grids (ED nurses / hold nurses, component-local state, no solver call — reuses `computeSandbox` from PR C on every keystroke). §3.5's ED-vs-hold distinction lives ENTIRELY here — nowhere else on the page. **Judgment call, flagged:** hold nurses can only cover medical boarders, but the engine only exposes a per-hour COMBINED boarding curve (medical/BH weekly totals are split, not the per-hour shape) — approximated by a uniform proportional split; see `.claude/rules/results-redesign.md`'s PR G section. Three prefill buttons (current staffing / recommendation-all-ED / recommendation-with-hold-split); the hold-surplus finding is always surfaced as prose when material, never buried |
+| — Panel 5 | `src/screens/dashboard/Panel5.tsx` | (2026-07-27, PR G of `RESULTS_PAGE_V2_SPEC_2026-07-27.md` §4) "Test it yourself" — NEW, no predecessor. Two editable day×shift grids (ED nurses / hold nurses; no solver call — reuses `computeSandbox` from PR C on every keystroke). **PR H moved the grids from component-local state into the store** (`sandboxEdGrid`/`sandboxHoldGrid`) so the PPTX export can read "the user's sandbox scenario" from outside this component — still ephemeral, never touches `EngineInputs`/`compute()`. §3.5's ED-vs-hold distinction lives ENTIRELY here — nowhere else on the page. **Judgment call, flagged:** hold nurses can only cover medical boarders, but the engine only exposes a per-hour COMBINED boarding curve (medical/BH weekly totals are split, not the per-hour shape) — approximated by a uniform proportional split; see `.claude/rules/results-redesign.md`'s PR G section. Three prefill buttons (current staffing / recommendation-all-ED / recommendation-with-hold-split); the hold-surplus finding is always surfaced as prose when material, never buried |
 | — Evidence surface | `src/screens/dashboard/EvidenceSurfaceSection.tsx` | (2026-07-26 PR I §8, Chapter 9) "How this works" — a branch off the main chapter arc, visually set apart (`.evidence-surface`), collapsed by default. Pipeline walkthrough, the `constantsMetadata.ts`-generated constants table, data provenance, known approximations, the reconciliation invariant as a live correctness proof, and decisions/rejected alternatives. **2026-07-27 PR F: two "severity" mentions reworded to "queue cost"** (R7) — a narrow, deliberate departure from "stays as-is," read as being about structure/placement, not an R7 exemption; also fixed a stale cross-reference to the by-then-deleted `FinancePartnerWorksheet` |
 
 Navigation is a single `screen: 'welcome' | 'setup' | 'dashboard'` field in the store
@@ -421,14 +421,25 @@ src/
                        (`DISPLAY_DAY_ORDER`/`DISPLAY_DAY_LABELS`) every day-of-week-rendering
                        component/template imports — see Section 6. Does not touch the
                        engine's day-0-is-Sunday index.
-    pptxExport.ts     — (2026-07-26 PR L, `RESULTS_COMPREHENSION_SPEC_2026-07-26.md` §9)
-                       `exportResultsToPptx` — client-side deck export via `pptxgenjs`. Slide
-                       titles pulled from `narrative.ts`'s functions; Method & Limitations
-                       ALWAYS included (uses `constantsMetadata.ts`'s table); boarding/
-                       constrained-reallocation slides OMITTED when boarding is absent. Loaded
-                       via a dynamic `import()` from `DashboardScreen.tsx`, not a static import
-                       — keeps `pptxgenjs` out of the main bundle. See results-redesign.md's
-                       PR L section.
+    pptxExport.ts     — (2026-07-27, PR H of `RESULTS_PAGE_V2_SPEC_2026-07-27.md` §7, R12 —
+                       REWRITE, replaces the 2026-07-26 PR L version below) `exportResultsToPptx`
+                       — client-side deck export via `pptxgenjs`. SCOPE NARROWED: title →
+                       current-staffing analysis (Panel 1) → the user's sandbox scenario
+                       (Panel 5, or the recommendation if untouched) → the delta → Method &
+                       Limitations. Panels 2/3/4 are NOT exported. Grids are native PPTX
+                       tables with a simplified per-cell lean/rich fill; demand-vs-capacity and
+                       the delta are native `addChart` line/bar charts — no images anywhere.
+                       Title + section-divider slides use a native-shape brand mark (accent
+                       purple `#7C3AED` on pale `#F5F0FF`, the same two colors as the app's
+                       favicon) — one accent color, no image embedding. Needs
+                       `sandboxEdGrid`/`sandboxHoldGrid` (new store fields, lifted out of
+                       Panel5's own component state specifically so this file can read them) +
+                       `arrivals`/`shiftMenu` params, both new since PR L. Method & Limitations
+                       ALWAYS included (uses `constantsMetadata.ts`'s table). Loaded via a
+                       dynamic `import()` from `DashboardScreen.tsx` (button moved to the
+                       bottom of the page, R12) — keeps `pptxgenjs` out of the main bundle. See
+                       results-redesign.md's PR H section (verified with a real, unmocked
+                       >20KB file write this session, not just mocked assertions).
     inputIntegrity.ts — (2026-07-26 PR K, `RESULTS_COMPREHENSION_SPEC_2026-07-26.md` §10)
                        `checkBoardingDurationConsistency`/`checkMonthlyDispersion` — diagnostic-
                        only, never auto-correct. Powers `screens/setup/DataStep.tsx`'s live
@@ -853,6 +864,16 @@ spec handoff (Section 9.3).
 solve should replace, not merge with, a stale manual edit). `flexAxes` (§2.3, default
 `NO_FLEX`) holds the shift-menu flexibility preferences, set via `setFlexAxis` from either
 setup or results. `compareVariants` and its actions were removed with `CompareTab`.
+
+**`sandboxEdGrid`/`sandboxHoldGrid` (2026-07-27, PR H of `RESULTS_PAGE_V2_SPEC_2026-07-27.md`)
+— Panel 5's sandbox grids.** A THIRD grid concept, distinct from both `gridOverride` and
+`currentStaffingGrid`: this is an ephemeral what-if scenario (§3.5's ED-vs-hold-nurse split),
+never touches `EngineInputs`/`compute()`, and starts `null` (read by every consumer as
+"untouched" — the PPTX export path treats `null` as "prefill with the recommendation" rather
+than exporting a blank scenario). Originally PR G's component-local `Panel5.tsx` state, moved
+into the store by PR H specifically so `lib/pptxExport.ts` (called from `DashboardScreen.tsx`,
+not `Panel5`) can read "the user's sandbox scenario" for export — a real architectural
+requirement the export scope surfaced, not a stylistic preference.
 
 **`currentStaffingGrid` (2026-07-22) is a separate concept from `gridOverride` — don't
 merge them.** `gridOverride` layers a manual edit ON TOP of the solver's own recommendation
@@ -1547,6 +1568,39 @@ hard-coded). `copyLayer.test.ts`'s "budget" rule caught this PR's own first-draf
 the banned word — reworded, a live demonstration the guardrail works. 15 e2e tests total (8
 smoke + 7 panel-specific), all green. `npm run build`/`npm test`/`oxlint`/`npm run test:e2e`
 all clean. Manually screenshot-reviewed.
+
+**Built (2026-07-27, PR H of `RESULTS_PAGE_V2_SPEC_2026-07-27.md` — PPTX rewrite, THE FINAL PR
+of this spec):** full rewrite of `lib/pptxExport.ts`. R12 scope: title → current-staffing
+analysis (Panel 1) → the user's sandbox scenario (Panel 5, or the recommendation if untouched)
+→ the delta → Method & Limitations. Panels 2/3/4 are NOT exported. Export button moved from
+the top bar to a new `.export-row` below Panel 5. Real architectural fix surfaced by this PR:
+Panel 5's sandbox grids moved from component-local state into the store
+(`sandboxEdGrid`/`sandboxHoldGrid`) so the export handler (in `DashboardScreen`, not `Panel5`)
+can actually read them. Everything native — grids as PPTX tables with a simplified lean/rich
+cell-fill heuristic, demand-vs-capacity and the delta as native `addChart` line/bar charts, no
+images anywhere. Branding: a native-shape brand mark (accent purple on pale background, the
+app's own favicon colors) on the title slide and three section-divider slides. `pptxExport.test.ts`
+rewritten (6 tests, all calling the REAL `addSlide`/`addTable`/`addChart`/`addShape` — only
+`writeFile` is mocked) plus a real, unmocked file-write verification this session (a temporary,
+not-committed test confirmed a genuine `>20KB` `.pptx` file writes to disk). New
+`e2e/export.spec.ts` confirms the button's new position via an actual bounding-box comparison.
+16 e2e tests total, 219 vitest tests. `npm run build`/`npm test`/`oxlint`/`npm run test:e2e`
+all clean.
+
+## `RESULTS_PAGE_V2_SPEC_2026-07-27.md` — COMPLETE (2026-07-27, PRs A0 through H, all nine)
+
+Every PR in the spec's §8 sequence landed, in order, in one session: A0 (Playwright harness) →
+A (backlog-reporting confirmation + pattern namer) → B (full coverage over combined demand) →
+C (sandbox model) → D (layout shell, shared visual frame, heatmap R1/R2/R3) → E (Panels 1-2)
+→ F (Panels 3-4) → G (Panel 5) → H (PPTX rewrite). All twelve reversals from the spec's §2
+table were implemented as specified, each flagged in its own commit body. See
+`.claude/rules/results-redesign.md`'s "Results Page V2" section (one subsection per PR) for
+the full technical record, including every judgment call flagged where the spec described an
+outcome without a formula (Panel 1's per-toggle "capacity" definitions, Panel 4's hours-of-
+unmet-need approximation, Panel 5's medical/BH boarding split, the deck's cell-fill/chart
+scope reductions) and the one genuinely unreachable spec detail found and proven (§5.2's rung
+3, mathematically impossible at the spec's own fixed thresholds). No `reconcile.test.ts`
+change across all nine PRs — the reconciliation invariant was never touched.
 
 **Not yet built:**
 - Component/UI-level automated tests below the full-page e2e level (React Testing Library-

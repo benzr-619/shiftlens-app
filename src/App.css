@@ -415,15 +415,17 @@ h1 {
 /* Dashboard */
 .dashboard-topbar {
   display: flex;
-  justify-content: space-between;
   align-items: baseline;
   margin-bottom: 12px;
 }
 
-.dashboard-topbar-actions {
-  display: flex;
-  align-items: baseline;
-  gap: 16px;
+/* R12 (RESULTS_PAGE_V2_SPEC_2026-07-27.md §7, PR H) — export moved from the topbar to the
+   bottom of the page, after Panel 5. */
+.export-row {
+  margin: 24px 0;
+  padding: 20px 0;
+  border-top: 1px solid var(--border);
+  text-align: center;
 }
 
 /* R10 (RESULTS_PAGE_V2_SPEC_2026-07-27.md §2/§6, PR D) — REPLACES PR H's sticky left-side

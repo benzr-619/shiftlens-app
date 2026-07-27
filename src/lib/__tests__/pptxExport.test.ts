@@ -28,7 +28,7 @@ function currentGrid(): Grid {
   return grid;
 }
 
-describe('PR L — PPTX export', () => {
+describe('PR H — PPTX export (RESULTS_PAGE_V2_SPEC_2026-07-27.md §7, R12 scope narrowing)', () => {
   let writeFileSpy: ReturnType<typeof vi.spyOn>;
   let addSlideSpy: ReturnType<typeof vi.spyOn>;
 
@@ -45,7 +45,14 @@ describe('PR L — PPTX export', () => {
   it('exports a full dataset (arrivals + boarding + current staffing) without throwing, includes boarding slides', async () => {
     const inputs = baseInputs({ admitRate: 0.2, boardingDuration: 5 });
     const result = compute(inputs);
-    await exportResultsToPptx({ result, inputs, currentStaffingGrid: currentGrid(), wHppvTarget: 1.5 });
+    await exportResultsToPptx({
+      result,
+      inputs,
+      currentStaffingGrid: currentGrid(),
+      wHppvTarget: 1.5,
+      arrivals: inputs.arrivals,
+      shiftMenu: dayNight,
+    });
     expect(writeFileSpy).toHaveBeenCalledWith({ fileName: 'ShiftLens-Results.pptx' });
     expect(addSlideSpy.mock.calls.length).toBeGreaterThan(0);
   });
@@ -54,24 +61,43 @@ describe('PR L — PPTX export', () => {
     const inputs = baseInputs(); // no admitRate/boardingDuration -> boarding absent
     const result = compute(inputs);
     expect(result.boarding).toBeNull();
-    await exportResultsToPptx({ result, inputs, currentStaffingGrid: currentGrid(), wHppvTarget: 1.5 });
+    await exportResultsToPptx({
+      result,
+      inputs,
+      currentStaffingGrid: currentGrid(),
+      wHppvTarget: 1.5,
+      arrivals: inputs.arrivals,
+      shiftMenu: dayNight,
+    });
     expect(writeFileSpy).toHaveBeenCalled();
-    // Boarding + constrained-reallocation slides should both be skipped when boarding is absent.
-    const arrivalsOnlySlideCount = addSlideSpy.mock.calls.length;
-    expect(arrivalsOnlySlideCount).toBeGreaterThan(0);
+    expect(addSlideSpy.mock.calls.length).toBeGreaterThan(0);
   });
 
-  it('a full dataset produces MORE slides than an arrivals-only one (boarding slides included)', async () => {
+  it('a full dataset produces MORE slides than an arrivals-only one (boarding slide included)', async () => {
     const fullInputs = baseInputs({ admitRate: 0.2, boardingDuration: 5 });
     const fullResult = compute(fullInputs);
-    await exportResultsToPptx({ result: fullResult, inputs: fullInputs, currentStaffingGrid: currentGrid(), wHppvTarget: 1.5 });
+    await exportResultsToPptx({
+      result: fullResult,
+      inputs: fullInputs,
+      currentStaffingGrid: currentGrid(),
+      wHppvTarget: 1.5,
+      arrivals: fullInputs.arrivals,
+      shiftMenu: dayNight,
+    });
     const fullCount = addSlideSpy.mock.calls.length;
 
     addSlideSpy.mockClear();
 
     const arrivalsOnlyInputs = baseInputs();
     const arrivalsOnlyResult = compute(arrivalsOnlyInputs);
-    await exportResultsToPptx({ result: arrivalsOnlyResult, inputs: arrivalsOnlyInputs, currentStaffingGrid: currentGrid(), wHppvTarget: 1.5 });
+    await exportResultsToPptx({
+      result: arrivalsOnlyResult,
+      inputs: arrivalsOnlyInputs,
+      currentStaffingGrid: currentGrid(),
+      wHppvTarget: 1.5,
+      arrivals: arrivalsOnlyInputs.arrivals,
+      shiftMenu: dayNight,
+    });
     const arrivalsOnlyCount = addSlideSpy.mock.calls.length;
 
     expect(fullCount).toBeGreaterThan(arrivalsOnlyCount);
@@ -80,7 +106,51 @@ describe('PR L — PPTX export', () => {
   it('handles no current staffing gracefully (does not throw), still includes Method & Limitations', async () => {
     const inputs = baseInputs({ admitRate: 0.2, boardingDuration: 5 });
     const result = compute(inputs);
-    await expect(exportResultsToPptx({ result, inputs, currentStaffingGrid: {}, wHppvTarget: 1.5 })).resolves.not.toThrow();
+    await expect(
+      exportResultsToPptx({ result, inputs, currentStaffingGrid: {}, wHppvTarget: 1.5, arrivals: inputs.arrivals, shiftMenu: dayNight })
+    ).resolves.not.toThrow();
+    expect(writeFileSpy).toHaveBeenCalled();
+  });
+
+  it('R12: an untouched sandbox (no sandboxEdGrid/sandboxHoldGrid) exports without throwing, prefilled with the recommendation', async () => {
+    const inputs = baseInputs({ admitRate: 0.2, boardingDuration: 5 });
+    const result = compute(inputs);
+    await expect(
+      exportResultsToPptx({
+        result,
+        inputs,
+        currentStaffingGrid: currentGrid(),
+        wHppvTarget: 1.5,
+        arrivals: inputs.arrivals,
+        shiftMenu: dayNight,
+        sandboxEdGrid: null,
+        sandboxHoldGrid: null,
+      })
+    ).resolves.not.toThrow();
+    expect(writeFileSpy).toHaveBeenCalled();
+  });
+
+  it('R12: a real sandbox scenario (ED + hold grids provided) exports without throwing', async () => {
+    const inputs = baseInputs({ admitRate: 0.2, boardingDuration: 5 });
+    const result = compute(inputs);
+    const edGrid: Grid = {};
+    const holdGrid: Grid = {};
+    for (let day = 0; day < 7; day++) {
+      edGrid[day] = { day: 5, night: 4 };
+      holdGrid[day] = { day: 1, night: 1 };
+    }
+    await expect(
+      exportResultsToPptx({
+        result,
+        inputs,
+        currentStaffingGrid: currentGrid(),
+        wHppvTarget: 1.5,
+        arrivals: inputs.arrivals,
+        shiftMenu: dayNight,
+        sandboxEdGrid: edGrid,
+        sandboxHoldGrid: holdGrid,
+      })
+    ).resolves.not.toThrow();
     expect(writeFileSpy).toHaveBeenCalled();
   });
 });

@@ -66,6 +66,15 @@ interface StoreState {
   // (static: the idealized grid uses the user's current menu, never a silent substitute).
   flexAxes: FlexAxes;
 
+  // PR H (RESULTS_PAGE_V2_SPEC_2026-07-27.md §7) — Panel 5's sandbox grids, lifted into the
+  // store (rather than staying component-local, PR G's original choice) SPECIFICALLY so the
+  // PPTX export — which runs from DashboardScreen, not Panel5 — can read "the user's sandbox
+  // scenario" per the spec's export-scope requirement. Still ephemeral (not part of
+  // EngineInputs, never sent through compute()) — `null` means "untouched," which the export
+  // path reads as "prefill with the recommendation" rather than exporting a blank scenario.
+  sandboxEdGrid: Grid | null;
+  sandboxHoldGrid: Grid | null;
+
   // 2026-07-26 PR D (SOLVER_REALISM_SPEC_2026-07-26.md, change 7) — headcount semantics, ONE
   // setup question, not role-level modeling. Both null until the user answers (no ED-specific
   // default). DISPLAY-ONLY: neither field is threaded into EngineInputs/compute() — they never
@@ -104,6 +113,8 @@ interface StoreState {
   setCurrentStaffingGrid: (grid: Grid) => void;
   resetCurrentStaffingGrid: () => void;
   setFlexAxis: (axis: keyof FlexAxes, value: boolean) => void;
+  setSandboxEdGrid: (g: Grid | null) => void;
+  setSandboxHoldGrid: (g: Grid | null) => void;
   setHeadcountIncludesIndirectCare: (v: boolean | null) => void;
   setIndirectCareUpliftPct: (v: number | null) => void;
 
@@ -153,6 +164,8 @@ export const useStore = create<StoreState>((set, get) => ({
   gridOverride: null,
   currentStaffingGrid: null,
   flexAxes: { ...NO_FLEX },
+  sandboxEdGrid: null,
+  sandboxHoldGrid: null,
   headcountIncludesIndirectCare: null,
   indirectCareUpliftPct: null,
 
@@ -208,6 +221,8 @@ export const useStore = create<StoreState>((set, get) => ({
   resetCurrentStaffingGrid: () => set({ currentStaffingGrid: null }),
 
   setFlexAxis: (axis, value) => set((s) => ({ flexAxes: { ...s.flexAxes, [axis]: value } })),
+  setSandboxEdGrid: (g) => set({ sandboxEdGrid: g }),
+  setSandboxHoldGrid: (g) => set({ sandboxHoldGrid: g }),
   setHeadcountIncludesIndirectCare: (v) => set({ headcountIncludesIndirectCare: v }),
   setIndirectCareUpliftPct: (v) => set({ indirectCareUpliftPct: v }),
 

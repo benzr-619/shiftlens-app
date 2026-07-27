@@ -1,37 +1,56 @@
-// PR L (RESULTS_COMPREHENSION_SPEC_2026-07-26.md §9) — PPTX export. Client-side only
-// (pptxgenjs), nothing uploaded anywhere — the no-backend constraint holds. Slide titles are
-// pulled from `src/lib/narrative.ts` — the SAME functions the results page renders (or, for
-// sections not yet migrated over to calling narrative.ts directly, the SAME wording those
-// components use, per narrative.ts's own documented scope note) — never a second, hand-written
-// set of titles.
+// PR H (RESULTS_PAGE_V2_SPEC_2026-07-27.md §7) — REWRITE, replacing the PR L export built for
+// the pre-V2 nine-chapter architecture. Client-side only (pptxgenjs), nothing uploaded anywhere
+// — the no-backend constraint holds. Slide titles still pull from `src/lib/narrative.ts` where
+// a matching function exists — never a second, hand-written set of titles.
+//
+// SCOPE NARROWS (R12): title → current-staffing analysis (Panel 1's content) → the user's
+// sandbox scenario (Panel 5) → the delta between them → Method & Limitations. Panels 2, 3 and 4
+// are DELIBERATELY NOT exported — the deck is what a manager wants to present, not a dump of
+// every panel on the page. If the sandbox is untouched (both grids all-zero/null), it's
+// prefilled with the recommendation and slides are labeled as the tool's recommendation rather
+// than the user's own scenario, per the spec's explicit instruction.
+//
+// EVERYTHING NATIVE, NO IMAGES: grids are native PPTX tables (`addTable`, colored cell fills —
+// a simple lean/rich heuristic against each cell's own band, not a pixel-for-pixel copy of the
+// web heatmap's color math) and the demand-vs-capacity/delta visuals are native PPTX charts
+// (`addChart`), not screenshots.
+//
+// BRANDING: the app has no design-tokens system — the only brand asset is the favicon mark
+// (purple #7C3AED on a pale #F5F0FF tile). The deck derives its theme from that mark plus the
+// heatmap's own red/blue scale (lean = red, rich = blue) so the deck and the page read as
+// visibly the same product: a title slide with a simple native-shape mark, one accent color,
+// and a matching section-divider slide before each of the three main sections.
 import PptxGenJS from 'pptxgenjs';
-import { DAY_LABELS, type EngineInputs, type EngineResult, type Grid, type ShiftDef } from '../engine/types';
-import {
-  computeScenarioB,
-  computeHiddenBoardingDiagnostic,
-  computeSynthesis,
-  computeCombinedReallocation,
-  summarizeBacklogSeverity,
-} from '../engine';
+import { DAY_LABELS, DEFAULTS, type EngineInputs, type EngineResult, type Grid, type ShiftDef } from '../engine/types';
+import { computeBacklog, computeHiddenBoardingDiagnostic } from '../engine';
+import { fullWeekCapacity } from '../engine/solver';
+import { recommendWeeklyBoardingGrid } from '../engine/boarding';
+import { computeSandbox } from '../engine/sandbox';
+import { lookupWhppvBand } from './edbaLookup';
+import { averageDay } from './averageDay';
 import { buildConstantsTable } from './constantsMetadata';
-import {
-  scheduleMeansOvercoverageSentence,
-  deliveryPremiumSentence,
-  comparisonHeadlineSentence,
-  scenarioBHeadlineSentence,
-  hiddenBoardingNightSentence,
-  hiddenBoardingDaySentence,
-  synthesisHeadlineSentence,
-  fundingAskAlreadyFundedSentence,
-  fundingAskKneeLeadSentence,
-  type GapKind,
-} from './narrative';
+import { hiddenBoardingNightSentence, hiddenBoardingDaySentence } from './narrative';
 
 const ACCENT = '7C3AED';
+const ACCENT_BG = 'F5F0FF';
 const MUTED = '6B7280';
+const LEAN = 'C23B3B';
+const RICH = '2563EB';
 
 function sortShiftsByStartHour(shifts: ShiftDef[]): ShiftDef[] {
   return [...shifts].sort((a, b) => a.startHour - b.startHour);
+}
+
+function totalWeeklyHours(grid: Grid, shiftMenu: ShiftDef[]): number {
+  let total = 0;
+  for (let day = 0; day < 7; day++) {
+    for (const s of shiftMenu) total += (grid[day]?.[s.id] ?? 0) * s.lengthHours;
+  }
+  return total;
+}
+
+function hasAnyStaffing(grid: Grid | null): boolean {
+  return !!grid && Object.values(grid).some((row) => row && Object.values(row).some((v) => (v ?? 0) > 0));
 }
 
 interface Cell {
@@ -39,7 +58,11 @@ interface Cell {
   options: Record<string, unknown>;
 }
 
-function gridToTableRows(grid: Grid, shiftMenu: ShiftDef[]): Cell[][] {
+/** Native table with a simple per-cell fill: below its own hour's band floor reads lean (red
+ * tint), above the ceiling reads rich (blue tint) — a simplified, not pixel-exact, echo of the
+ * web heatmap's color logic (WhppvHeatmap.tsx), which this deck deliberately doesn't try to
+ * reproduce exactly. */
+function gridToTableRows(grid: Grid, shiftMenu: ShiftDef[], bandFloor168?: number[], bandCeiling168?: number[]): Cell[][] {
   const sorted = sortShiftsByStartHour(shiftMenu);
   const header: Cell[] = [
     { text: 'Day', options: { bold: true, fill: { color: 'EEEEEE' } } },
@@ -52,282 +75,209 @@ function gridToTableRows(grid: Grid, shiftMenu: ShiftDef[]): Cell[][] {
   for (let day = 0; day < 7; day++) {
     rows.push([
       { text: DAY_LABELS[day], options: { bold: true } },
-      ...sorted.map((s) => ({ text: String(grid[day]?.[s.id] ?? 0), options: {} })),
+      ...sorted.map((s) => {
+        const headcount = grid[day]?.[s.id] ?? 0;
+        let fill: { color: string } | undefined;
+        if (bandFloor168 && bandCeiling168) {
+          // Approximate this cell's own global hour as the shift's start hour that day — a
+          // simplification (a shift covers many hours; the table shows one headcount per
+          // cell, so there's no single "the" hour to check against a per-hour band exactly).
+          const g = (day * 24 + s.startHour) % 168;
+          if (headcount < (bandFloor168[g] ?? 0)) fill = { color: 'FBE2E2' };
+          else if (headcount > (bandCeiling168[g] ?? 0)) fill = { color: 'DCE7FB' };
+        }
+        return { text: String(headcount), options: fill ? { fill } : {} };
+      }),
     ]);
   }
   return rows;
 }
 
-function totalWeeklyHours(grid: Grid, shiftMenu: ShiftDef[]): number {
-  let total = 0;
-  for (let day = 0; day < 7; day++) {
-    for (const s of shiftMenu) total += (grid[day]?.[s.id] ?? 0) * s.lengthHours;
-  }
-  return total;
+function markShape(pptx: PptxGenJS, slide: PptxGenJS.Slide, x: number, y: number, size: number) {
+  slide.addShape(pptx.ShapeType.roundRect, { x, y, w: size, h: size, fill: { color: ACCENT }, rectRadius: 0.15 });
+  slide.addText('S', { x, y, w: size, h: size, fontSize: size * 28, bold: true, color: 'FFFFFF', align: 'center', valign: 'middle' });
 }
 
 function titleSlide(pptx: PptxGenJS, wHppvTarget: number) {
   const slide = pptx.addSlide();
-  slide.addText('ShiftLens — Results', { x: 0.5, y: 1.8, w: 9, h: 1, fontSize: 32, bold: true, color: ACCENT });
-  slide.addText(`Target: ${wHppvTarget} weighted hours per patient visit (wHPPV)`, {
-    x: 0.5,
-    y: 2.8,
-    w: 9,
-    h: 0.5,
-    fontSize: 16,
-    color: MUTED,
-  });
-  slide.addNotes(
-    'This deck mirrors the ShiftLens results page. Each slide title is one of the page\'s own quotable, ' +
-      'numbers-first sentences — read it aloud, it stands on its own.'
-  );
+  slide.background = { color: ACCENT_BG };
+  markShape(pptx, slide, 0.6, 0.6, 0.9);
+  slide.addText('Your ShiftLens Results', { x: 0.5, y: 1.9, w: 9, h: 1, fontSize: 32, bold: true, color: ACCENT });
+  slide.addText(`Target: ${wHppvTarget} weighted hours per patient visit (wHPPV)`, { x: 0.5, y: 2.9, w: 9, h: 0.5, fontSize: 16, color: MUTED });
+  slide.addNotes('ShiftLens splits nurse staffing into two separate demands: arrivals and boarding — modeled and reported separately, then added back together.');
 }
 
-function demandSlide(pptx: PptxGenJS, result: EngineResult, inputs: EngineInputs) {
+function sectionDivider(pptx: PptxGenJS, title: string, subtitle?: string) {
   const slide = pptx.addSlide();
-  const title = scheduleMeansOvercoverageSentence(result.weeklyScheduledHours, result.weeklyBudgetHours);
-  slide.addText(title, { x: 0.5, y: 0.3, w: 9, h: 1, fontSize: 20, bold: true, color: ACCENT });
-  const premium = deliveryPremiumSentence(
-    result.weeklyScheduledHours,
-    result.weeklyBudgetHours,
-    inputs.shiftMenu.map((s) => s.lengthHours)
-  );
-  let y = 1.5;
-  if (premium) {
-    slide.addText(premium, { x: 0.5, y, w: 9, h: 0.8, fontSize: 14, color: MUTED });
-    y += 0.9;
-  }
-  slide.addTable(gridToTableRows(result.grid, inputs.shiftMenu), { x: 0.5, y, w: 9, fontSize: 11, autoPage: false });
-  slide.addNotes(
-    'This is the idealized schedule the engine recommends against your own arrivals data and wHPPV target. ' +
-      'The delivery premium (if shown) is shift-block granularity, not waste — whole nurses and fixed-length ' +
-      'shifts can never exactly hit a continuous target.'
+  slide.background = { color: ACCENT_BG };
+  slide.addText(title, { x: 0.5, y: 2.2, w: 9, h: 1, fontSize: 28, bold: true, color: ACCENT, align: 'center' });
+  if (subtitle) slide.addText(subtitle, { x: 0.5, y: 3.2, w: 9, h: 0.6, fontSize: 14, color: MUTED, align: 'center' });
+}
+
+function lineChart(pptx: PptxGenJS, slide: PptxGenJS.Slide, demand: number[], capacity: number[], y: number) {
+  const labels = demand.map((_, i) => `${i}:00`);
+  slide.addChart(
+    pptx.ChartType.line,
+    [
+      { name: 'Demand', labels, values: demand },
+      { name: 'Staffed capacity', labels, values: capacity },
+    ],
+    {
+      x: 0.5,
+      y,
+      w: 9,
+      h: 2.6,
+      chartColors: [LEAN, RICH],
+      showLegend: true,
+      legendPos: 'b',
+      catAxisLabelFontSize: 8,
+      valAxisLabelFontSize: 8,
+    }
   );
 }
 
-function staffedAgainstItSlide(
+function currentStaffingSlides(pptx: PptxGenJS, result: EngineResult, currentStaffingGrid: Grid, arrivals: number[], shiftMenu: ShiftDef[]) {
+  sectionDivider(pptx, 'Your current staffing', 'What your department demands, and what you staff against it');
+
+  const sortedShiftMenu = sortShiftsByStartHour(shiftMenu);
+  const capacity = fullWeekCapacity(currentStaffingGrid, sortedShiftMenu);
+  const weeklyHours = totalWeeklyHours(currentStaffingGrid, sortedShiftMenu);
+  const weeklyArrivals = arrivals.reduce((a, b) => a + b, 0);
+  const realized = weeklyArrivals > 0 ? weeklyHours / weeklyArrivals : 0;
+  const band = lookupWhppvBand(result.annualVisits);
+  const position = realized < band.p25Whppv ? 'below' : realized > band.p75Whppv ? 'above' : 'within';
+
+  const avgDemand = averageDay(result.hourlyRequirement);
+  const avgCapacity = averageDay(capacity);
+  const peakDemandHour = avgDemand.indexOf(Math.max(...avgDemand));
+  const peakCapacityHour = avgCapacity.indexOf(Math.max(...avgCapacity));
+
+  const headlineSlide = pptx.addSlide();
+  headlineSlide.addText('What your department demands, and what you staff against it', { x: 0.5, y: 0.3, w: 9, h: 0.7, fontSize: 18, bold: true, color: ACCENT });
+  headlineSlide.addText(
+    `Realized ${realized.toFixed(2)} wHPPV, running ${position} the peer band (${band.p25Whppv.toFixed(2)}-${band.p75Whppv.toFixed(2)}) at ${weeklyHours.toFixed(0)} hours/week. ` +
+      `On an average day, demand peaks around ${peakDemandHour}:00, staffing peaks around ${peakCapacityHour}:00.`,
+    { x: 0.5, y: 1.1, w: 9, h: 1.2, fontSize: 14 }
+  );
+  lineChart(pptx, headlineSlide, avgDemand, avgCapacity, 2.5);
+  headlineSlide.addNotes('The demand-vs-capacity chart mirrors Panel 1 on the results page, averaged across the week.');
+
+  if (result.boarding) {
+    const hidden = computeHiddenBoardingDiagnostic(result.hourlyRequirement, currentStaffingGrid, sortedShiftMenu, result.boarding.cellBoardingRnHours);
+    const slide = pptx.addSlide();
+    slide.addText('The second demand: boarding', { x: 0.5, y: 0.3, w: 9, h: 0.6, fontSize: 18, bold: true, color: ACCENT });
+    const consumed = result.lostProductivity?.wHppvConsumedByBoarding ?? 0;
+    slide.addText(
+      `Boarding demands the equivalent of ${consumed.toFixed(2)} wHPPV. ${hiddenBoardingNightSentence(hidden.night, hidden.boardingDataPresent)} ${hiddenBoardingDaySentence(hidden.day, hidden.boardingDataPresent)}`,
+      { x: 0.5, y: 1.1, w: 9, h: 3, fontSize: 13 }
+    );
+    slide.addNotes('Effective wHPPV is never compared to the peer band — peer figures include their own boarding load.');
+  }
+
+  const backlog = computeBacklog(currentStaffingGrid, result.hourlyRequirement, sortedShiftMenu);
+  const structuralShort = -backlog.structuralFloorMin;
+  const backlogSlide = pptx.addSlide();
+  backlogSlide.addText('Where your staffing runs lean', { x: 0.5, y: 0.3, w: 9, h: 0.6, fontSize: 18, bold: true, color: ACCENT });
+  backlogSlide.addText(
+    structuralShort > 0.5
+      ? `You are short about ${structuralShort.toFixed(0)} nurse-hours a day against arrivals alone, so you begin each day already behind.`
+      : "Your staffing doesn't leave you starting any day already behind — what backlog exists is shape, not size.",
+    { x: 0.5, y: 1.1, w: 9, h: 1, fontSize: 14 }
+  );
+  backlogSlide.addNotes('Structural (sizing) and cyclical (shape) are reported separately — never the old blended "never clears" stat.');
+
+  const gridSlide = pptx.addSlide();
+  gridSlide.addText('Your current staffing grid', { x: 0.5, y: 0.3, w: 9, h: 0.5, fontSize: 18, bold: true, color: ACCENT });
+  gridSlide.addTable(gridToTableRows(currentStaffingGrid, sortedShiftMenu, result.bandFloorHourly, result.bandCeilingHourly), { x: 0.5, y: 1, w: 9, fontSize: 10 });
+}
+
+function sandboxSlides(
   pptx: PptxGenJS,
   result: EngineResult,
   inputs: EngineInputs,
-  currentStaffingGrid: Grid,
-  hasCurrentStaffing: boolean
-) {
-  const slide = pptx.addSlide();
-  if (!hasCurrentStaffing) {
-    slide.addText('What you staff against it', { x: 0.5, y: 0.3, w: 9, h: 1, fontSize: 20, bold: true, color: ACCENT });
-    slide.addText('No current staffing was entered for this export.', { x: 0.5, y: 1.5, w: 9, h: 0.6, fontSize: 14, color: MUTED });
-    slide.addNotes('No current-staffing grid was entered when this deck was generated.');
-    return;
-  }
-  const currentTotal = totalWeeklyHours(currentStaffingGrid, inputs.shiftMenu);
-  let underHours = 0;
-  let overHours = 0;
-  for (let day = 0; day < 7; day++) {
-    for (const s of inputs.shiftMenu) {
-      const diff = ((result.grid[day]?.[s.id] ?? 0) - (currentStaffingGrid[day]?.[s.id] ?? 0)) * s.lengthHours;
-      if (diff > 0) underHours += diff;
-      else overHours += -diff;
+  arrivals: number[],
+  shiftMenu: ShiftDef[],
+  sandboxEdGrid: Grid | null,
+  sandboxHoldGrid: Grid | null
+): { unmet: number } {
+  const sortedShiftMenu = sortShiftsByStartHour(shiftMenu);
+  const untouched = !hasAnyStaffing(sandboxEdGrid) && !hasAnyStaffing(sandboxHoldGrid);
+
+  let edGrid = sandboxEdGrid ?? {};
+  let holdGrid = sandboxHoldGrid ?? {};
+  if (untouched) {
+    // Prefill with the recommendation, all as ED nurses — per the spec's explicit instruction
+    // ("if the sandbox is untouched, prefill it with the recommendation and label those slides
+    // as the tool's recommendation rather than blocking the export").
+    const band = lookupWhppvBand(result.annualVisits);
+    const boardingGrid =
+      result.boarding && result.lostProductivity
+        ? recommendWeeklyBoardingGrid(result.boarding, sortedShiftMenu, inputs.wHppvTarget, band.p25Whppv, result.lostProductivity.wHppvConsumedByBoarding)
+        : {};
+    edGrid = {};
+    for (let day = 0; day < 7; day++) {
+      edGrid[day] = {};
+      for (const s of sortedShiftMenu) edGrid[day][s.id] = (result.grid[day]?.[s.id] ?? 0) + (boardingGrid[day]?.[s.id] ?? 0);
     }
+    holdGrid = {};
   }
-  const sizeGapHours = underHours - overHours;
-  const shapeGapHours = Math.min(underHours, overHours);
-  const absSizeGap = Math.abs(sizeGapHours);
-  const totalMismatch = absSizeGap + shapeGapHours;
-  const gapKind: GapKind = totalMismatch < 1 ? 'none' : shapeGapHours < 0.2 * totalMismatch ? 'size' : absSizeGap < 0.2 * totalMismatch ? 'shape' : 'both';
-  const title = comparisonHeadlineSentence(currentTotal, result.weeklyScheduledHours, gapKind, sizeGapHours, shapeGapHours, null);
-  slide.addText(title, { x: 0.5, y: 0.3, w: 9, h: 1.3, fontSize: 18, bold: true, color: ACCENT });
-  slide.addTable(gridToTableRows(currentStaffingGrid, inputs.shiftMenu), { x: 0.5, y: 1.8, w: 9, fontSize: 11, autoPage: false });
-  slide.addNotes(
-    'This is what the department actually staffs today, compared against the idealized grid on the previous ' +
-      'slide. A size gap means the wrong total hours; a shape gap means the right total in the wrong shifts.'
-  );
-}
 
-function scenarioBSlide(pptx: PptxGenJS, result: EngineResult, inputs: EngineInputs, currentStaffingGrid: Grid) {
-  const slide = pptx.addSlide();
-  const scenarioB = computeScenarioB(result, inputs, currentStaffingGrid);
-  if (!scenarioB) {
-    slide.addText('Could moving hours fix it?', { x: 0.5, y: 0.3, w: 9, h: 1, fontSize: 20, bold: true, color: ACCENT });
-    slide.addText('No current staffing was entered for this export.', { x: 0.5, y: 1.5, w: 9, h: 0.6, fontSize: 14, color: MUTED });
-    slide.addNotes('Scenario B needs current staffing to compute — none was entered.');
-    return;
+  sectionDivider(
+    pptx,
+    untouched ? "The tool's recommendation" : 'Your scenario',
+    untouched ? 'No sandbox scenario was entered — this is the recommendation, all as ED nurses' : 'Test it yourself'
+  );
+
+  const edCapacity = fullWeekCapacity(edGrid, sortedShiftMenu);
+  const holdCapacity = fullWeekCapacity(holdGrid, sortedShiftMenu);
+  const boarding = result.boarding;
+  const combined = boarding?.cellBoardingRnHours ?? new Array(168).fill(0);
+  const medWeekly = boarding?.medicalWeeklyRnHours ?? null;
+  const bhWeekly = boarding?.bhWeeklyRnHours ?? null;
+  const medFraction = medWeekly !== null && bhWeekly !== null && medWeekly + bhWeekly > 0 ? medWeekly / (medWeekly + bhWeekly) : 1;
+  const medBoarding168 = combined.map((v) => v * medFraction);
+  const bhBoarding168 = combined.map((v) => v * (1 - medFraction));
+  const backlogParams = {
+    abandonRate: inputs.lwbsRate ?? DEFAULTS.backlogAbandonRate,
+    recoveryEfficiency: DEFAULTS.backlogRecoveryEfficiency,
+    maxDrainFraction: DEFAULTS.backlogMaxDrainFraction,
+  };
+  const sandbox = computeSandbox(result.hourlyRequirement, medBoarding168, bhBoarding168, arrivals, edCapacity, holdCapacity, backlogParams);
+  const unmetTotal = sandbox.unmet.reduce((a, b) => a + b, 0);
+  const holdSurplusTotal = sandbox.holdSurplus.reduce((a, b) => a + b, 0);
+
+  const chartSlide = pptx.addSlide();
+  chartSlide.addText('Demand vs. staffed capacity', { x: 0.5, y: 0.3, w: 9, h: 0.5, fontSize: 18, bold: true, color: ACCENT });
+  lineChart(pptx, chartSlide, averageDay(sandbox.residualDemand), averageDay(edCapacity), 1);
+  chartSlide.addText(
+    `Hours below need this week: ${unmetTotal.toFixed(0)}.${holdSurplusTotal >= 0.5 ? ` Hold-nurse surplus: ${holdSurplusTotal.toFixed(0)} hours.` : ''}`,
+    { x: 0.5, y: 3.9, w: 9, h: 0.6, fontSize: 13, color: MUTED }
+  );
+
+  const edSlide = pptx.addSlide();
+  edSlide.addText('ED nurses', { x: 0.5, y: 0.3, w: 9, h: 0.5, fontSize: 18, bold: true, color: ACCENT });
+  edSlide.addTable(gridToTableRows(edGrid, sortedShiftMenu), { x: 0.5, y: 1, w: 9, fontSize: 10 });
+
+  if (hasAnyStaffing(holdGrid)) {
+    const holdSlide = pptx.addSlide();
+    holdSlide.addText('Hold nurses', { x: 0.5, y: 0.3, w: 9, h: 0.5, fontSize: 18, bold: true, color: ACCENT });
+    holdSlide.addTable(gridToTableRows(holdGrid, sortedShiftMenu), { x: 0.5, y: 1, w: 9, fontSize: 10 });
+    holdSlide.addNotes('Hold nurses cover medical/surg boarders only, never BH boarders or arrivals.');
   }
-  const currentSeverity = summarizeBacklogSeverity(currentStaffingGrid, result.hourlyRequirement, inputs.shiftMenu).totalSeverity;
-  const title = scenarioBHeadlineSentence(scenarioB, currentSeverity);
-  slide.addText(title, { x: 0.5, y: 0.3, w: 9, h: 1.5, fontSize: 18, bold: true, color: ACCENT });
-  slide.addText('Computed on the ARRIVALS budget only — never a standalone recommendation without reading the boarding slide.', {
-    x: 0.5,
-    y: 2,
-    w: 9,
-    h: 0.6,
-    fontSize: 12,
-    italic: true,
-    color: MUTED,
-  });
-  slide.addTable(
-    [
-      [
-        { text: 'Hours (unchanged)', options: { bold: true } },
-        { text: 'Severity, today', options: { bold: true } },
-        { text: 'Severity, reallocated', options: { bold: true } },
-      ],
-      [
-        { text: scenarioB.currentTotalWeeklyHours.toFixed(0) },
-        { text: currentSeverity.toFixed(0) },
-        { text: scenarioB.totalSeverity.toFixed(0) },
-      ],
-    ],
-    { x: 0.5, y: 2.8, w: 9, fontSize: 12 }
-  );
-  slide.addNotes(
-    'Scenario B answers "what would my current hours justify against arrivals alone" — a manager can act on ' +
-      'this Monday with no additional funding ask. It never sees boarding; read the boarding slide before acting.'
-  );
+
+  return { unmet: unmetTotal };
 }
 
-function fundingAskSlide(pptx: PptxGenJS, result: EngineResult, wHppvTarget: number) {
+function deltaSlide(pptx: PptxGenJS, currentUnmet: number, scenarioUnmet: number) {
+  sectionDivider(pptx, 'The delta');
   const slide = pptx.addSlide();
-  const { fullCoverage, marginalCurve, marginalKneePoint } = result;
-  const alreadyFunded = fullCoverage.fteDelta <= 0;
-  let title: string;
-  if (alreadyFunded) {
-    title = fundingAskAlreadyFundedSentence(fullCoverage.weeklyHours, fullCoverage.impliedWhppv, wHppvTarget);
-  } else {
-    const worstPoint = marginalCurve.length > 0 ? marginalCurve[marginalCurve.length - 1] : null;
-    const kneePointData = marginalKneePoint !== null ? marginalCurve.find((p) => p.cumulativeHoursAdded === marginalKneePoint) ?? null : null;
-    const kneeFte = marginalKneePoint !== null ? (marginalKneePoint * 52) / 2080 : null;
-    const pctSeverityRemoved =
-      kneePointData && worstPoint && worstPoint.totalSeverity > 0
-        ? Math.max(0, Math.min(100, ((worstPoint.totalSeverity - kneePointData.totalSeverity) / worstPoint.totalSeverity) * 100))
-        : null;
-    const worstStretchLabel = worstPoint?.longestLeanStretchStart
-      ? `${DAY_LABELS[worstPoint.longestLeanStretchStart.day]} ${worstPoint.longestLeanStretchStart.hour.toString().padStart(2, '0')}:00`
-      : null;
-    title =
-      kneeFte !== null && pctSeverityRemoved !== null
-        ? fundingAskKneeLeadSentence(
-            kneeFte,
-            pctSeverityRemoved,
-            fullCoverage.weeklyHours,
-            fullCoverage.fteDelta,
-            fullCoverage.impliedWhppv,
-            wHppvTarget,
-            worstPoint?.longestLeanStretchHours ?? null,
-            worstStretchLabel
-          )
-        : `Full coverage of every hour would take ${fullCoverage.weeklyHours.toFixed(0)} hrs/week.`;
-  }
-  slide.addText(title, { x: 0.5, y: 0.3, w: 9, h: 2, fontSize: 16, bold: true, color: ACCENT });
-  slide.addNotes(
-    'The ask leads with the knee of the marginal-return curve — the FTE ask that buys the most per FTE — not ' +
-      'full coverage. Full coverage is shown as the far end of the range, not the headline.'
+  slide.addText('Hours below need: today vs. this scenario', { x: 0.5, y: 0.3, w: 9, h: 0.6, fontSize: 18, bold: true, color: ACCENT });
+  slide.addChart(
+    pptx.ChartType.bar,
+    [{ name: 'Hours below need', labels: ['Today', 'This scenario'], values: [currentUnmet, scenarioUnmet] }],
+    { x: 1.5, y: 1.1, w: 6, h: 3.2, chartColors: [LEAN], showValue: true, valAxisLabelFontSize: 10, catAxisLabelFontSize: 10 }
   );
-}
-
-function financeWorksheetSlide(pptx: PptxGenJS, result: EngineResult) {
-  const slide = pptx.addSlide();
-  slide.addText('Do the extra hours pay for themselves?', { x: 0.5, y: 0.3, w: 9, h: 0.6, fontSize: 20, bold: true, color: ACCENT });
-  slide.addText(
-    [
-      { text: 'More hours at the right times -> less queued work -> fewer abandoned nurse-hours -> fewer LWBS.\n', options: { fontSize: 14 } },
-      {
-        text: `Today, the model estimates about ${result.estimatedAbandonedHours.toFixed(0)} nurse-hours a week of queued care are abandoned to attrition.\n\n`,
-        options: { fontSize: 14 },
-      },
-      {
-        text: 'This tool does not convert this to a dollar figure — no salary, benefit-factor, or per-visit-margin inputs are collected.\n\n',
-        options: { fontSize: 12, italic: true, color: MUTED },
-      },
-      {
-        text: 'Take the FTE ask and the modeled abandoned-hours reduction to your CFO, and ask them for: cost per FTE, contribution margin per treated visit, and your current LWBS rate.',
-        options: { fontSize: 14 },
-      },
-    ],
-    { x: 0.5, y: 1.2, w: 9, h: 4 }
-  );
-  slide.addNotes('This worksheet deliberately stops short of a dollar figure — see the slide text for why.');
-}
-
-function boardingSlide(pptx: PptxGenJS, result: EngineResult, inputs: EngineInputs, currentStaffingGrid: Grid) {
-  const diagnostic = computeHiddenBoardingDiagnostic(
-    result.hourlyRequirement,
-    currentStaffingGrid,
-    inputs.shiftMenu,
-    result.boarding?.cellBoardingRnHours ?? null
-  );
-  const slide = pptx.addSlide();
-  const nightText = hiddenBoardingNightSentence(diagnostic.night, diagnostic.boardingDataPresent);
-  const dayText = hiddenBoardingDaySentence(diagnostic.day, diagnostic.boardingDataPresent);
-  slide.addText('The second demand: boarding', { x: 0.5, y: 0.3, w: 9, h: 0.6, fontSize: 20, bold: true, color: ACCENT });
-  slide.addText(`${nightText}\n\n${dayText}`, { x: 0.5, y: 1.1, w: 9, h: 2, fontSize: 14 });
-  slide.addTable(
-    [
-      [
-        { text: '', options: { bold: true } },
-        { text: 'Arrivals need', options: { bold: true } },
-        { text: 'Boarding need', options: { bold: true } },
-        { text: 'Staffed', options: { bold: true } },
-        { text: 'vs. arrivals alone', options: { bold: true } },
-      ],
-      ...[diagnostic.day, diagnostic.night].map((b) => [
-        { text: b.label },
-        { text: b.arrivalsNeedHours.toFixed(0) },
-        { text: (b.boardingNeedHours ?? 0).toFixed(0) },
-        { text: b.staffedHours.toFixed(0) },
-        { text: `${b.vsArrivalsAlone > 0 ? '+' : ''}${b.vsArrivalsAlone.toFixed(0)}` },
-      ]),
-    ],
-    { x: 0.5, y: 3.2, w: 9, fontSize: 12 }
-  );
-  slide.addNotes(
-    'ShiftLens budgets arrivals and boarding separately. Where nights look staffed beyond what arrivals justify, ' +
-      'that\'s usually boarding, absorbed into a schedule never sized for it — not overstaffing.'
-  );
-}
-
-function constrainedReallocationSlide(pptx: PptxGenJS, result: EngineResult, inputs: EngineInputs, currentStaffingGrid: Grid) {
-  const realloc = computeCombinedReallocation(result, inputs, currentStaffingGrid);
-  if (!realloc) return;
-  const slide = pptx.addSlide();
-  const arrivalsCost = Math.max(0, realloc.arrivalsShortfallHoursAfter - realloc.arrivalsShortfallHoursBefore);
-  slide.addText("If you can't get additional hours for boarding", { x: 0.5, y: 0.3, w: 9, h: 0.7, fontSize: 18, bold: true, color: ACCENT });
-  slide.addText('A compromise, not a recommendation — it takes from arrivals coverage to cover boarders.', {
-    x: 0.5,
-    y: 1.1,
-    w: 9,
-    h: 0.5,
-    fontSize: 12,
-    italic: true,
-    color: MUTED,
-  });
-  slide.addTable(
-    [
-      [{ text: 'Combined shortfall, today', options: { bold: true } }, { text: 'Combined shortfall, reallocated', options: { bold: true } }, { text: 'Cost on arrivals side', options: { bold: true } }],
-      [
-        { text: realloc.shortfallHoursBefore.toFixed(0) },
-        { text: realloc.shortfallHoursAfter.toFixed(0) },
-        { text: arrivalsCost.toFixed(0) },
-      ],
-    ],
-    { x: 0.5, y: 1.8, w: 9, fontSize: 12 }
-  );
-  slide.addNotes('Same total hours, reallocated against combined arrivals+boarding demand — the cost on the arrivals side is named, never hidden.');
-}
-
-function synthesisSlide(pptx: PptxGenJS, result: EngineResult, inputs: EngineInputs, currentStaffingGrid: Grid) {
-  const synthesis = computeSynthesis(result, inputs, currentStaffingGrid);
-  const slide = pptx.addSlide();
-  slide.addText('Both budgets together', { x: 0.5, y: 0.3, w: 9, h: 0.6, fontSize: 20, bold: true, color: ACCENT });
-  if (!synthesis) {
-    slide.addText('No current staffing was entered for this export.', { x: 0.5, y: 1.5, w: 9, h: 0.6, fontSize: 14, color: MUTED });
-    slide.addNotes('The synthesis needs current staffing to compute — none was entered.');
-    return;
-  }
-  slide.addText(synthesisHeadlineSentence(synthesis), { x: 0.5, y: 1.2, w: 9, h: 2.5, fontSize: 16 });
-  slide.addNotes(
-    'Four numbers and a subtraction — this is the whole answer to "am I understaffed, or misallocated." No ' +
-      'interpretive sentence follows; the arithmetic speaks for every department shape.'
-  );
+  slide.addNotes('Same shared frame the results page uses throughout — every chart on this page and in this deck reads the same way.');
 }
 
 function methodSlide(pptx: PptxGenJS, result: EngineResult) {
@@ -363,30 +313,44 @@ export interface PptxExportInputs {
   inputs: EngineInputs;
   currentStaffingGrid: Grid;
   wHppvTarget: number;
+  arrivals: number[];
+  shiftMenu: ShiftDef[];
+  sandboxEdGrid?: Grid | null;
+  sandboxHoldGrid?: Grid | null;
 }
 
 /**
  * Builds and downloads the results deck. Client-side only — nothing is uploaded anywhere.
- * Skips the Scenario B / boarding / constrained-reallocation slides' DATA (not always the
- * slide itself — see each slide function) when the underlying data isn't computed; the
- * Method & Limitations slide is ALWAYS included, per spec §9.
+ * R12: title -> current-staffing analysis (Panel 1) -> sandbox scenario (Panel 5) -> the delta
+ * -> Method & Limitations. Panels 2/3/4 are deliberately NOT exported. Method & Limitations is
+ * ALWAYS included, never optional.
  */
-export async function exportResultsToPptx({ result, inputs, currentStaffingGrid, wHppvTarget }: PptxExportInputs): Promise<void> {
+export async function exportResultsToPptx({
+  result,
+  inputs,
+  currentStaffingGrid,
+  wHppvTarget,
+  arrivals,
+  shiftMenu,
+  sandboxEdGrid = null,
+  sandboxHoldGrid = null,
+}: PptxExportInputs): Promise<void> {
   const pptx = new PptxGenJS();
-  const hasCurrentStaffing =
-    !!currentStaffingGrid && Object.values(currentStaffingGrid).some((row) => row && Object.values(row).some((v) => (v ?? 0) > 0));
 
   titleSlide(pptx, wHppvTarget);
-  demandSlide(pptx, result, inputs);
-  staffedAgainstItSlide(pptx, result, inputs, currentStaffingGrid, hasCurrentStaffing);
-  scenarioBSlide(pptx, result, inputs, currentStaffingGrid);
-  fundingAskSlide(pptx, result, wHppvTarget);
-  financeWorksheetSlide(pptx, result);
-  if (result.boarding) {
-    boardingSlide(pptx, result, inputs, currentStaffingGrid);
-    if (hasCurrentStaffing) constrainedReallocationSlide(pptx, result, inputs, currentStaffingGrid);
+
+  if (hasAnyStaffing(currentStaffingGrid)) {
+    currentStaffingSlides(pptx, result, currentStaffingGrid, arrivals, shiftMenu);
+  } else {
+    sectionDivider(pptx, 'Your current staffing', 'No current staffing was entered for this export');
   }
-  synthesisSlide(pptx, result, inputs, currentStaffingGrid);
+
+  const { unmet: scenarioUnmet } = sandboxSlides(pptx, result, inputs, arrivals, shiftMenu, sandboxEdGrid, sandboxHoldGrid);
+
+  const currentCapacity = fullWeekCapacity(currentStaffingGrid, sortShiftsByStartHour(shiftMenu));
+  const currentUnmet = result.hourlyRequirement.reduce((acc, req, i) => acc + Math.max(0, req - (currentCapacity[i] ?? 0)), 0);
+  deltaSlide(pptx, currentUnmet, scenarioUnmet);
+
   methodSlide(pptx, result); // ALWAYS included, never optional
 
   await pptx.writeFile({ fileName: 'ShiftLens-Results.pptx' });

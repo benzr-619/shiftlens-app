@@ -27,7 +27,17 @@ const CHAPTERS: StepBarEntry[] = [
  * "Results Page V2" section.
  */
 export function DashboardScreen() {
-  const { setScreen, getResult, buildEngineInputs, currentStaffingGrid, wHppvTarget } = useStore();
+  const {
+    setScreen,
+    getResult,
+    buildEngineInputs,
+    currentStaffingGrid,
+    wHppvTarget,
+    arrivals,
+    shiftMenu,
+    sandboxEdGrid,
+    sandboxHoldGrid,
+  } = useStore();
   const [exporting, setExporting] = useState(false);
 
   async function handleExport() {
@@ -41,6 +51,10 @@ export function DashboardScreen() {
         inputs: buildEngineInputs(),
         currentStaffingGrid: currentStaffingGrid ?? {},
         wHppvTarget,
+        arrivals,
+        shiftMenu,
+        sandboxEdGrid,
+        sandboxHoldGrid,
       });
     } finally {
       setExporting(false);
@@ -52,19 +66,14 @@ export function DashboardScreen() {
       {/* Top-left, above everything else on the page — the one navigational escape hatch off
           this screen. The "ShiftLens — Results" <h1> that used to sit here was retired
           2026-07-27: `.results-welcome` below already opens with "Welcome to the Results
-          Page," so a second page title right above it was pure duplication. */}
+          Page," so a second page title right above it was pure duplication. R12 (PR H,
+          RESULTS_PAGE_V2_SPEC_2026-07-27.md §7): "Export to PPTX" MOVED out of this topbar,
+          down to the bottom of the page, after Panel 5 — you export after testing your own
+          scenario, not before you've read anything. */}
       <div className="dashboard-topbar">
         <button className="btn-link" onClick={() => setScreen('setup')}>
           ← Back to setup
         </button>
-        <div className="dashboard-topbar-actions">
-          {/* PR L (RESULTS_COMPREHENSION_SPEC_2026-07-26.md §9) — client-side PPTX export,
-              nothing uploaded anywhere. Slide titles pull from src/lib/narrative.ts, the SAME
-              functions/wording the page itself uses — see pptxExport.ts's header. */}
-          <button className="btn-secondary" onClick={handleExport} disabled={exporting}>
-            {exporting ? 'Exporting…' : 'Export to PPTX'}
-          </button>
-        </div>
       </div>
 
       {/* PR H (RESULTS_COMPREHENSION_SPEC_2026-07-26.md §6.1/§8) — THE WELCOME/ORIENTATION
@@ -100,6 +109,16 @@ export function DashboardScreen() {
         <Panel3 />
         <Panel4 />
         <Panel5 />
+
+        {/* R12 — export lives here now, below the sandbox: the deck's scope (title -> current
+            staffing -> the sandbox scenario just above -> the delta -> Method & Limitations,
+            §7) only makes sense once a scenario actually exists to export. */}
+        <div className="export-row">
+          <button className="btn-secondary" onClick={handleExport} disabled={exporting}>
+            {exporting ? 'Exporting…' : 'Export to PPTX'}
+          </button>
+        </div>
+
         <div id="ch-evidence">
           <EvidenceSurfaceSection />
         </div>

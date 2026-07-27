@@ -1728,3 +1728,85 @@ reviewed: both grids render, start at zero, and the frame/heatmap populate corre
 **Invariants:** no engine changes (Panel 5 is a pure consumer of PR C's `computeSandbox`).
 `reconcile.test.ts` untouched. Vitest count unchanged at 217 (this PR is UI/e2e only). `npm
 run build`/`npm test`/`oxlint`/`npm run test:e2e` all clean.
+
+### PR H — PPTX rewrite (§7, R12): the final PR, the spec is fully implemented
+
+Full rewrite of `lib/pptxExport.ts`, replacing the PR L deck built for the pre-V2 nine-chapter
+architecture (that deck's slide functions — Scenario B, funding-ask, finance-worksheet,
+boarding, constrained-reallocation, synthesis — are all gone; their content either doesn't
+belong in the narrower deck or is superseded by the current-staffing/sandbox slides below).
+
+**R12 scope, exactly as specified:** title → current-staffing analysis (Panel 1's content) →
+the user's sandbox scenario (Panel 5) → the delta between them → Method & Limitations. Panels
+2, 3 and 4 are deliberately NOT exported — the deck is what a manager wants to present, not a
+dump of the tool. **Export moved from the top bar to the bottom of the page** (new
+`.export-row`, after `<Panel5 />`) — you export after testing your own scenario, not before
+you've read anything. `.dashboard-topbar-actions` (now empty) removed from `App.css`.
+
+**A real architectural requirement this PR surfaced, not anticipated in PR G:** "export the
+user's sandbox scenario" requires that scenario to be readable from `DashboardScreen`, but PR
+G put Panel 5's `edGrid`/`holdGrid` in component-local `useState` — invisible outside Panel 5.
+Fixed by lifting `sandboxEdGrid`/`sandboxHoldGrid` (+ setters) into the zustand store — still
+ephemeral (not part of `EngineInputs`, never touches `compute()`), just readable from the
+export handler now. `Panel5.tsx` itself is otherwise behaviorally unchanged; its `useState`
+calls became thin wrappers around the store setters (see the component's own comment). `null`
+in either store field means "untouched," which the export path reads as "prefill with the
+recommendation, all as ED nurses" and labels those slides as the tool's own recommendation
+rather than the user's scenario — per the spec's explicit instruction.
+
+**Everything native, no images:**
+- **Grids → native PPTX tables** (`addTable`, unchanged mechanism from PR L) with a NEW simple
+  per-cell fill heuristic (below that cell's own approximate hour's band floor → light red;
+  above the ceiling → light blue) — a simplified echo of the web heatmap's color logic, not a
+  pixel-exact reproduction. Flagged approximation: a table cell holds one headcount per
+  (day, shift), but the band is per-HOUR — the cell is checked against its shift's own start
+  hour as a representative point, not averaged across every hour the shift covers.
+- **Demand-vs-capacity → native line charts** (`addChart(pptx.ChartType.line, ...)`), reused
+  for both the current-staffing slide and the sandbox-scenario slide — the SAME chart shape
+  in both places, matching the shared `VisualFrame`'s own "one frame, reused" philosophy.
+- **The delta → a native bar chart** (`addChart(pptx.ChartType.bar, ...)`) — hours below need,
+  today vs. the scenario, one glance.
+- **Scope reduction, flagged:** the deck does NOT attempt a native queue-depth strip chart or
+  the Panel 3 two-bar comparison (Panel 3 isn't exported at all per R12, so this is moot for
+  that one, but the queue strip's cyclical-curve visual is also not reproduced in the deck —
+  only the demand/capacity line and the summary numbers are). A full native reproduction of
+  every web chart type was judged lower priority than a working, tested deck within this PR's
+  scope; if a future session wants full parity, this is the place to extend.
+
+**Branding, per §7's explicit instruction:** title slide gets a plain native-shape "mark" (a
+rounded rectangle in the accent purple `#7C3AED` with a bold white "S" — `markShape()`, no
+image embedding, since PPTX images would need a base64-inlined asset and the spec's own
+framing is "derive the theme from the mark," not "reproduce the mark pixel-for-pixel") on a
+pale `#F5F0FF` background — the SAME two colors the web app's favicon uses. One accent color
+throughout. **Section-divider slides** (`sectionDivider()`) before each of the three main
+sections (Your current staffing / Your scenario or the tool's recommendation / The delta),
+same background/accent treatment as the title slide, so the deck reads as one visual system
+end to end, matching the page's own use of one repeated frame.
+
+**Tests, both layers:** `pptxExport.test.ts` rewritten (6 tests) — the four original cases
+(full dataset, arrivals-only, full > arrivals-only slide count, no-current-staffing) updated
+for the new required `arrivals`/`shiftMenu` params, plus two NEW cases for R12's sandbox
+scope: an untouched sandbox exports without throwing (prefilled path), and a real sandbox
+scenario (both grids populated) exports without throwing. All six call the REAL `addSlide`/
+`addTable`/`addChart`/`addShape` methods (only `writeFile` is mocked), so a malformed chart-
+data shape or table-row shape would have failed these tests, not just gone unnoticed.
+**Additionally verified with a real, unmocked file write this session** (a temporary,
+not-committed test): `exportResultsToPptx` actually writes a `>20KB` `.pptx` file to disk and
+the file was deleted after confirming its size — stronger evidence than the mocked test suite
+alone that the deck's charts/tables are real, valid pptxgenjs output, not just non-throwing
+calls. **Not verified this session** (consistent with every prior PPTX-export note in this
+file): the generated file was not opened in PowerPoint/Keynote to visually inspect slide
+layout, chart rendering, or table fill colors — no such tooling is available in this
+environment.
+
+New `e2e/export.spec.ts` — confirms "Export to PPTX" is no longer in `.dashboard-topbar` and
+IS present in `.export-row`, positioned below `#ch-sandbox` in document order (a real
+`boundingBox()` Y-coordinate comparison, not just DOM order, since CSS could in principle
+reorder visually). 16 e2e tests total, all green.
+
+**Invariants:** no engine changes. `reconcile.test.ts` untouched. Vitest count reached 219 (2
+new pptxExport cases). `npm run build`/`npm test`/`oxlint`/`npm run test:e2e` all clean.
+
+**This completes `RESULTS_PAGE_V2_SPEC_2026-07-27.md` in full — PRs A0 through H, all nine,
+landed.** See CLAUDE.md's Feature Status for the consolidated summary and the session's final
+written account of every flagged judgment call, per §11's closing instruction.
