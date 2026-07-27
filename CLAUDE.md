@@ -441,6 +441,16 @@ src/
                        than calling these directly yet — see this file's own header and
                        `.claude/rules/results-redesign.md`'s PR H section for the full scope
                        note and why.
+    whenPattern.ts    — (2026-07-27, PR A of `RESULTS_PAGE_V2_SPEC_2026-07-27.md` §5.2)
+                       `namePattern(values168, direction)` — the ONE shared "when is it
+                       worst" phrase generator (e.g. "weekday mornings," "Tuesdays"). A
+                       5-rung ladder (block-every-day → weekday/weekend×block → single-
+                       day×block → single day → fallback single hour), each rung tried in
+                       order, first to clear a 50%-capture/60%-purity bar against the fixed
+                       42-hour worst quartile wins. **FLAGGED FINDING:** rung 3 (single
+                       day×block) is mathematically unreachable at these fixed constants —
+                       see the function's own header comment and its test file for the proof
+                       — implemented literally as specified rather than silently rescaled.
     __tests__/
   components/
     ConceptCallout.tsx   — (2026-07-26 PR J, `RESULTS_COMPREHENSION_SPEC_2026-07-26.md` §8,
@@ -1342,6 +1352,27 @@ suites — vitest was otherwise picking up and failing on the Playwright specs. 
 prerequisite the rest of `RESULTS_PAGE_V2_SPEC_2026-07-27.md` (PRs A-H, a five-panel results-
 page rebuild) needs before any of its visual work (PR D onward) can be verified rather than
 just claimed. `npm run build`/`npm test`/`oxlint`/`npm run test:e2e` all clean.
+
+**Built (2026-07-27, PR A of `RESULTS_PAGE_V2_SPEC_2026-07-27.md` §5.1/§5.2 — backlog
+reporting confirmation + pattern namer):** PR A0 must land first (verification tooling).
+**§5.1:** confirmed, per the spec's own instruction, that the heatmap's backlog overlay
+(`CoreGridTab.tsx`/`CurrentStaffingAnalysis.tsx`) reads `BacklogResult.backlog` (the ACTUAL
+blended curve) against the old absolute `BACKLOG_CAUGHT_UP_THRESHOLD` — never migrated to PR
+E's structural/cyclical split or its relative `caughtUpThresholdForHour`. This is the
+mechanical cause of both the §3.1 misleading-stat bug AND the §3.2 near-uniform-spine
+artifact; recorded in `.claude/rules/engine-solver.md`'s new PR A section. No engine change
+was needed — `cyclicalBacklog`/`structuralFloorByDay`/`structuralFloorMin` all already exist
+(PR E); only the UI never read them. The actual reporting/UI fix (replacing the stat, removing
+the spine) is deferred to PRs D/E per the spec's own PR sequence — this PR only confirms and
+records the finding. **§5.2:** new `src/lib/whenPattern.ts`'s `namePattern(values168,
+direction)` — the shared "when is it worst" phrase generator (5-rung ladder, see Module Map
+above). **Flagged finding, not silently patched:** rung 3 (single day × block) is
+mathematically unreachable under the spec's own fixed thresholds for a 168-hour input —
+proven directly in `src/lib/__tests__/whenPattern.test.ts` (6 tests: rungs 1/2/4, the
+fallback, a direction-flip check, and a maximally-concentrated rung-3 attempt that still falls
+through). Test count reached 212. `npm run build`/`npm test`/`oxlint`/`npm run test:e2e` all
+clean. No UI changes in this PR (per the spec's own PR-sequence table — "Engine/lib only, no
+UI").
 
 **Not yet built:**
 - Component/UI-level automated tests below the full-page e2e level (React Testing Library-

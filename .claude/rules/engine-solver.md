@@ -707,6 +707,34 @@ solve output). `annualVisits`/`annualCoreRnHoursBudget`/`hourlyRequirement` unto
 the above. All 121 pre-existing tests pass UNCHANGED (verified, not assumed) plus 12 new ones
 (`backlog.test.ts`'s two new describe blocks) — test count reached 133.
 
+## PR A (2026-07-27, `RESULTS_PAGE_V2_SPEC_2026-07-27.md` §5.1) — the heatmap overlay's mechanical bug, confirmed
+
+Per the spec's own instruction ("confirm which curve and which threshold the heatmap overlay
+was using before deleting it") — checked before R3 (the spine's removal, PR D) touches
+anything. Both `CoreGridTab.tsx` and `CurrentStaffingAnalysis.tsx` compute the overlay as:
+
+```ts
+const cellBacklog = backlog.backlog[day * 24 + hour] ?? 0;              // the ACTUAL (blended) curve
+const inBacklogStreak = cellBacklog >= BACKLOG_CAUGHT_UP_THRESHOLD;      // the OLD ABSOLUTE flat bar
+```
+
+**This is exactly the mechanical cause of the §3.1 reporting bug**, not a separate issue: the
+heatmap overlay was never updated to PR E's structural/cyclical split or its relative
+`caughtUpThresholdForHour` — it still reads `BacklogResult.backlog` (the blended curve PR E's
+own header explicitly warns conflates a sizing signal with a shape signal) against
+`BACKLOG_CAUGHT_UP_THRESHOLD` (the flat 0.5-nurse-hour bar PR E retired in favor of a per-hour
+relative one, kept exported under its old name only for type-level back-compat — see PR E's
+section above). So on a department that's short in aggregate (a real sizing problem), nearly
+every cell reads as "still carrying backlog" against the old absolute bar, which is exactly the
+near-uniform-weight-on-every-cell artifact §3.2 describes ("reads as a table border, not
+data") — the same underlying defect surfaces as BOTH the misleading text stat (§3.1) and the
+uninformative heatmap spine (§3.2), from one root cause: the UI never migrated off the
+pre-PR-E blended-curve/absolute-threshold pair. R3 (PR D) removes the spine outright rather
+than fixing it in place; R4 (PR E's panel-level backlog reporting) replaces the text stat with
+the two-sentence structural/cyclical framing described in the spec's §3.1. No engine change
+was needed for this PR — `cyclicalBacklog`/`structuralFloorByDay`/`structuralFloorMin`/
+`caughtUpThresholdForHour` all already exist (PR E, above); only the UI never read them.
+
 ## Department-level ENA floor (5.6, `enforceDepartmentFloor`)
 
 Runs **after** the budget trim, as a final pass — it can push scheduled hours back above
