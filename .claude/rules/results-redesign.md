@@ -1516,3 +1516,84 @@ build`/`npm test`/`oxlint`/`npm run test:e2e` all clean — the e2e smoke suite 
 heatmap/StepBar changes indirectly (still mounted via the old `CoreGridTab`/`DashboardScreen`),
 confirmed via a manual screenshot review this session (headcount-only cell numbers, saturated
 blue, no spine, horizontal top bar all visually present).
+
+### PR E — Panels 1 and 2, `VisualFrame`'s first real mount
+
+New `screens/dashboard/Panel1.tsx` and `Panel2.tsx`. **Deletes** (R9) `CoreGridTab.tsx`,
+`CurrentStaffingAnalysis.tsx` (fully absorbed into Panel 1), `ScenarioBSection.tsx` (absorbed
+into Panel 2), `HiddenBoardingSection.tsx` (absorbed into Panel 1), `BoardingTransition.tsx`
+(its one idea — effective wHPPV after boarding — folded into Panel 1's effective-wHPPV bullet),
+`ConstrainedReallocationSection.tsx` (absorbed into Panel 2's "reallocated for arrivals +
+boarding" toggle). Verified before deleting: no other file imported any of the five.
+`DashboardScreen.tsx`'s `CHAPTERS` list is unchanged in SIZE (still 7 — `ch-funding-ask`
+through `ch-evidence` are still the old architecture, PR F/G's job) but its first two entries
+now point at real panels.
+
+**`VisualFrame` gained a controlled mode** (`activeKey`/`onActiveKeyChange` props, both
+optional) — a gap found while building Panel 2, not anticipated in PR D. Panel 1's toggle can
+stay uncontrolled (its left-column text is static, doesn't need to track which view is active),
+but Panel 2's left-column stats ("hours below need," "worst unbroken stretch") explicitly MUST
+update WITH the toggle per §4 — that requires the panel to know which view is active, which an
+internally-state-owning frame can't expose. Uncontrolled remains the default (`views[0]?.key`
+seed, frame owns its own state) so Panel 1's usage is unaffected.
+
+**`averageDay` moved out of `VisualFrame.tsx` into new `lib/averageDay.ts`** — a component file
+exporting a non-component function trips oxlint's fast-refresh rule (same reasoning
+`lib/whppvColorDomain.ts`'s own header already documents for `computeColorDomain`). Both
+`VisualFrame.tsx` and `Panel1.tsx` (for its late-ramp sentence, §3.2) import the one shared copy.
+
+**Judgment calls this panel makes explicit — the spec describes each toggle's STORY but not
+its exact formula, so these are documented choices, not silent guesses (§11):**
+- **Panel 1's "Boarding" toggle capacity line** = `max(0, currentCapacity - hourlyRequirement)`
+  — how much of today's actual staffing, once arrivals are served, is left over for boarding.
+  This directly operationalizes the panel's own bullet ("whether boarding is currently staffed
+  for at all") using the SAME arithmetic the hidden-boarding diagnostic already does, just at
+  168-hour grain instead of day/night blocks.
+- **Its heatmap band** for that toggle sets `bandFloor = bandCeiling = boardingDemand` exactly
+  (a zero-width neutral point at the demand value itself) rather than inventing a boarding-
+  specific benchmark band that doesn't exist — anything at/above demand reads neutral/rich,
+  anything below reads lean, via the same `cellVisual` mechanism unchanged.
+- **Panel 1's "Combined" toggle band** shifts the existing arrivals band (`bandFloorHourly`/
+  `bandCeilingHourly`) up by the same per-hour boarding demand — directly matching §3.4's
+  "summing the two demand curves is what smooths effective wHPPV" framing, applied to the band
+  rather than re-deriving a new one.
+- **Panel 1's "Effective wHPPV" toggle** inverts the chart's usual demand/capacity semantics:
+  the flat `wHppvTarget` line stands in for "demand" (what should hold steady) and the actual
+  per-hour effective-wHPPV curve stands in for "capacity" (what actually happens) — this is
+  the cleanest way to show the target-vs-actual gap in the SAME two-line chart shape every
+  other view uses, without inventing a fourth chart type. Its heatmap reuses the Combined
+  view's cells verbatim (a per-hour wHPPV ratio has no natural headcount-shaped heatmap
+  rendering; the wHPPV story is already carried by the chart line and the text).
+- **Panel 2's per-toggle queue/backlog** is computed fresh per state (`computeBacklog` against
+  that state's own grid + demand curve) rather than reusing Panel 1's — a genuinely different
+  question (what would backlog look like AFTER this reallocation) needs its own computation.
+
+**`namePattern` (§5.2) gets its first real UI caller** — Panel 2's "worst unbroken stretch"
+stat calls `namePattern(activeBacklog.cyclicalBacklog, 'higher-is-worse')`, updating with the
+toggle same as the "hours below need" number beside it.
+
+**R7 compliance (severity removed from the UI) — self-policed in this PR, not yet enforced by
+`copyLayer.test.ts`.** Neither Panel 1 nor Panel 2 uses the word "severity" or exposes a raw
+severity number anywhere; Panel 2 reports `totalBacklogHours`/nurse-hours instead of
+`totalSeverity`. **§5.5's copy-layer test extensions (forbidding "severity"/"idealized" as bare
+words) are DEFERRED to PR F, not added here — flagged, not silently skipped.** Several
+still-live files this PR doesn't touch (`ConvexityDemo.tsx`, `FinancePartnerWorksheet.tsx`,
+`ShiftMenuFlexibilitySection.tsx`, `EvidenceSurfaceSection.tsx`) currently contain both words in
+rendered UI text; adding the ban now would either fail immediately against files outside this
+PR's assigned scope or need a broad allowlist that defeats the guardrail's purpose. PR F is the
+natural point to add it — it deletes/renames the last of the "idealized" grid language (R11,
+Panel 4) and deletes `FinancePartnerWorksheet.tsx` (R8) outright.
+
+**Tests:** `e2e/panel1-2.spec.ts` (new) — both panels render, their toggles switch views
+(`aria-selected` flips), the frame's three elements (`.frame-demand-chart`/`.frame-queue-
+strip`/`.whppv-heatmap`) are all present, and Panel 2's left-column stat text actually changes
+when the toggle changes (proving the controlled-mode wiring genuinely works, not just that the
+buttons exist). All 8 smoke-spec profiles re-verified green with Panel 1/2 now live — this is
+`VisualFrame`'s first real e2e verification, closing the gap PR D explicitly flagged. Manually
+screenshot-reviewed: both panels render two-column with a sticky right-hand frame, toggle
+buttons, and correctly-populated charts/heatmaps.
+
+**Invariants:** no engine changes. `reconcile.test.ts` untouched (its own test file wasn't
+touched; the invariant itself doesn't depend on anything this PR changed). Vitest count
+unchanged at 215 (this PR is UI/e2e only, no new engine/lib unit tests) — 10 e2e tests now
+(8 smoke + 2 panel-specific). `npm run build`/`npm test`/`oxlint`/`npm run test:e2e` all clean.

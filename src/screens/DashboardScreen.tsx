@@ -1,25 +1,22 @@
 import { useState } from 'react';
 import { useStore } from '../store';
 import { StepBar, type StepBarEntry } from '../components/StepBar';
-import { CoreGridTab } from './dashboard/CoreGridTab';
-import { ScenarioBSection } from './dashboard/ScenarioBSection';
+import { Panel1 } from './dashboard/Panel1';
+import { Panel2 } from './dashboard/Panel2';
 import { FundingAskSection } from './dashboard/FundingAskSection';
 import { FinancePartnerWorksheet } from './dashboard/FinancePartnerWorksheet';
 import { ShiftMenuFlexibilitySection } from './dashboard/ShiftMenuFlexibilitySection';
-import { HiddenBoardingSection } from './dashboard/HiddenBoardingSection';
-import { BoardingTransition } from './dashboard/BoardingTransition';
 import { BoardingCoverageSection } from './dashboard/BoardingCoverageSection';
-import { ConstrainedReallocationSection } from './dashboard/ConstrainedReallocationSection';
 import { SynthesisSection } from './dashboard/SynthesisSection';
 import { EvidenceSurfaceSection } from './dashboard/EvidenceSurfaceSection';
 
-// R10 (RESULTS_PAGE_V2_SPEC_2026-07-27.md §2/§6, PR D) — `ChapterRail` is retired, replaced by
-// `StepBar` (same scroll-spy/click-to-jump logic, a horizontal top bar instead of a sticky
-// left sidebar — frees full page width for each panel's visual frame). STILL THE OLD 7-ENTRY
-// LIST, mid-migration: PR D only replaces the SHELL, not the content — PRs E/F/G redistribute
-// this page's content into exactly five real panels and will shrink this list to 5 as they
-// land (see .claude/rules/results-redesign.md's "Results Page V2" section). Each chapter
-// still closes one possible explanation for "it feels understaffed," reached by elimination.
+// PR E (RESULTS_PAGE_V2_SPEC_2026-07-27.md §8) — Panels 1 and 2 now real, replacing
+// `CoreGridTab`/`CurrentStaffingAnalysis` (Panel 1) and `ScenarioBSection` (Panel 2).
+// `HiddenBoardingSection`, `BoardingTransition`, `ConstrainedReallocationSection` are DELETED
+// (R9) — their content is absorbed into Panel 1 (hidden-boarding diagnostic) and Panel 2 (the
+// combined-reallocation toggle). `ch-funding-ask`/`ch-shift-menu`/`ch-boarding`/`ch-synthesis`/
+// `ch-evidence` are STILL the old architecture — PR F/G finish the migration (Panels 3/4/5),
+// see .claude/rules/results-redesign.md's "Results Page V2" PR E section.
 const CHAPTERS: StepBarEntry[] = [
   { id: 'ch-current-staffing', label: 'Your current staffing' },
   { id: 'ch-scenario-b', label: 'Could moving hours fix it?' },
@@ -31,20 +28,11 @@ const CHAPTERS: StepBarEntry[] = [
 ];
 
 /**
- * Single scrolling results page (no tabs) — order follows the redesign narrative: current-
- * staffing analysis + idealized comparison + wHPPV/heatmap (CoreGridTab), then Scenario B
- * ("the same hours, better placed" — PR F, RESULTS_COMPREHENSION_SPEC_2026-07-26.md §5, the
- * only scenario with no ask attached), then the funding-ask surface (§ PR D change 3 — "what
- * does closing the gap buy," full coverage vs. what delivering the target costs) + the
- * finance-partner worksheet (PR G), then the shift-menu flexibility section (§2.3, "is this
- * menu as good as it could be" — absorbed the old Compare tab), then the hidden-boarding
- * diagnostic + the short boarding-transition bridge (§2.5) + the additive boarding coverage
- * recommendation, then the synthesis chapter (PR G, "both budgets together" — THE ANSWER). See
- * CLAUDE.md Section 3/6 + .claude/rules/results-redesign.md. PR H added the (now-retired,
- * R10) sticky chapter rail; PR D of RESULTS_PAGE_V2_SPEC_2026-07-27.md replaced it with the
- * horizontal `StepBar` below — each `<div id="...">` wrapper is a scroll-spy/jump target; the
- * id list and `CHAPTERS` above must stay in sync. This content list itself is still the OLD
- * 7-section architecture, mid-migration — PRs E/F/G redistribute it into five real panels.
+ * Single scrolling results page (no tabs). PR E of `RESULTS_PAGE_V2_SPEC_2026-07-27.md`:
+ * Panel 1 ("what your department demands, and what you staff against it") and Panel 2
+ * ("could moving hours fix it") are now the real five-panel architecture; everything after
+ * `ch-funding-ask` is still the pre-V2 chapter architecture pending PRs F/G. See CLAUDE.md
+ * Section 3/6 + .claude/rules/results-redesign.md's "Results Page V2" section.
  */
 export function DashboardScreen() {
   const { setScreen, getResult, buildEngineInputs, currentStaffingGrid, wHppvTarget } = useStore();
@@ -115,12 +103,8 @@ export function DashboardScreen() {
           two-column flex — `.dashboard-content` is now the page's only column. */}
       <StepBar steps={CHAPTERS} />
       <div className="dashboard-content">
-        <div id="ch-current-staffing">
-          <CoreGridTab />
-        </div>
-        <div id="ch-scenario-b">
-          <ScenarioBSection />
-        </div>
+        <Panel1 />
+        <Panel2 />
         <div id="ch-funding-ask">
           <FundingAskSection />
           <FinancePartnerWorksheet />
@@ -129,10 +113,7 @@ export function DashboardScreen() {
           <ShiftMenuFlexibilitySection />
         </div>
         <div id="ch-boarding">
-          <HiddenBoardingSection />
-          <BoardingTransition />
           <BoardingCoverageSection />
-          <ConstrainedReallocationSection />
         </div>
         <div id="ch-synthesis">
           <SynthesisSection />

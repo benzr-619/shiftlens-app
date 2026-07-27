@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { ShiftDef } from '../engine/types';
 import { WhppvHeatmap, type WhppvHeatmapCell } from './WhppvHeatmap';
+import { averageDay } from '../lib/averageDay';
 
 /**
  * PR D (RESULTS_PAGE_V2_SPEC_2026-07-27.md §4) — THE SHARED VISUAL FRAME, built once and
@@ -31,16 +32,6 @@ export interface VisualFrameView {
    * baseline (e.g. when `queueDepth168` is also null). */
   structuralFloor: number | null;
   heatmapCells: WhppvHeatmapCell[];
-}
-
-function averageDay(values168: number[]): number[] {
-  const out = new Array(24).fill(0);
-  for (let hour = 0; hour < 24; hour++) {
-    let sum = 0;
-    for (let day = 0; day < 7; day++) sum += values168[day * 24 + hour] ?? 0;
-    out[hour] = sum / 7;
-  }
-  return out;
 }
 
 function linePath(values: number[], width: number, height: number, pad: number, max: number): string {
@@ -101,8 +92,24 @@ function QueueStrip({ queueDepth, structuralFloor }: { queueDepth: number[] | nu
   );
 }
 
-export function VisualFrame({ views, shiftMenu }: { views: VisualFrameView[]; shiftMenu: ShiftDef[] }) {
-  const [activeKey, setActiveKey] = useState(views[0]?.key ?? '');
+export function VisualFrame({
+  views,
+  shiftMenu,
+  activeKey: controlledActiveKey,
+  onActiveKeyChange,
+}: {
+  views: VisualFrameView[];
+  shiftMenu: ShiftDef[];
+  /** Optional controlled mode — pass both to let a parent panel keep its own left-column
+   * stats (e.g. Panel 2's "hours below need," which must update WITH the toggle) in sync
+   * with whichever view is active, rather than duplicating the toggle in two places.
+   * Uncontrolled (Panel 1's usage) when omitted — the frame owns its own state. */
+  activeKey?: string;
+  onActiveKeyChange?: (key: string) => void;
+}) {
+  const [uncontrolledActiveKey, setUncontrolledActiveKey] = useState(views[0]?.key ?? '');
+  const activeKey = controlledActiveKey ?? uncontrolledActiveKey;
+  const setActiveKey = onActiveKeyChange ?? setUncontrolledActiveKey;
   const [fullWeek, setFullWeek] = useState(false);
   const active = views.find((v) => v.key === activeKey) ?? views[0];
   if (!active) return null;

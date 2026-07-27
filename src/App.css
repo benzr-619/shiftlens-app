@@ -1255,3 +1255,49 @@ h1 {
 .frame-demand-chart {
   margin-bottom: 2px;
 }
+
+/* PR E (RESULTS_PAGE_V2_SPEC_2026-07-27.md §4) — panel wrapper + two-column layout ("words
+   left, one fixed visual frame on the right"). Roughly viewport height is a soft target, not
+   enforced with a hard min-height — real content length varies too much per department. */
+.panel {
+  padding: 24px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.panel h2 {
+  margin-top: 0;
+  font-size: 20px;
+}
+
+.panel-columns {
+  display: flex;
+  gap: 32px;
+  align-items: flex-start;
+}
+
+.panel-words {
+  flex: 1 1 380px;
+  min-width: 300px;
+}
+
+.panel-frame {
+  flex: 1 1 480px;
+  min-width: 320px;
+  position: sticky;
+  top: 60px;
+}
+
+@media (max-width: 900px) {
+  .panel-columns {
+    flex-direction: column;
+  }
+  .panel-frame {
+    position: static;
+    width: 100%;
+  }
+}
+
+.queue-honesty-callout {
+  font-size: 13px;
+  line-height: 1.6;
+}
