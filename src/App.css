@@ -1301,3 +1301,14 @@ h1 {
   font-size: 13px;
   line-height: 1.6;
 }
+
+/* PR F (RESULTS_PAGE_V2_SPEC_2026-07-27.md §4) — Panel 3's two-bar comparison. */
+.two-bar-wrap {
+  margin-top: 16px;
+  max-width: 320px;
+}
+.two-bar-chart {
+  width: 100%;
+  height: auto;
+  display: block;
+}

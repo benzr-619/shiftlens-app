@@ -1597,3 +1597,82 @@ buttons, and correctly-populated charts/heatmaps.
 touched; the invariant itself doesn't depend on anything this PR changed). Vitest count
 unchanged at 215 (this PR is UI/e2e only, no new engine/lib unit tests) — 10 e2e tests now
 (8 smoke + 2 panel-specific). `npm run build`/`npm test`/`oxlint`/`npm run test:e2e` all clean.
+
+### PR F — Panels 3 and 4, §5.5's copy-layer bans finally added
+
+New `screens/dashboard/Panel3.tsx` ("what would it take to fully cover the department") and
+`Panel4.tsx` ("recommended staffing"). **Deletes** (R8/R9) `FundingAskSection.tsx`,
+`FinancePartnerWorksheet.tsx`, `SynthesisSection.tsx`, `BoardingCoverageSection.tsx`,
+`ShiftMenuFlexibilitySection.tsx` — the last one folded into Panel 4 (collapsed, at the
+bottom), not deleted-and-lost; its content (axis toggles + best-candidate comparison) is
+identical, just relocated. Verified no other file imported any of the five before removing.
+`StepBar`'s `CHAPTERS` list finally shrinks from 7 to the real 5 panels.
+
+**Panel 3** reuses `EngineResult.fullCoverageCombined` (PR B) directly — no new engine work.
+Queue strip renders deliberately BLANK (`queueDepth168: null`), per §4's explicit instruction
+that an empty strip after two panels of watching a queue build is itself the finding. New
+**two-bar comparison** (`TwoBarComparison`, a small dedicated inline SVG — not the shared
+`VisualFrame` chart, since a stacked-bar comparison is a genuinely different visual than a
+demand/capacity line chart) replaces `SynthesisSection`'s paragraph. **§10 open item 3
+resolved:** when boarding is absent, the demand bar is a single (arrivals-only) segment, not
+a half-empty stacked bar — a smaller, still-correctly-scaled total is the honest degraded
+state, not an incomplete-looking chart.
+
+**Panel 4** — R11 applied throughout its own copy ("recommended," never "idealized"). R6
+(display-level combined grid, `EngineResult.grid` itself never mutated) implemented by
+summing `result.grid` and a freshly-computed `recommendWeeklyBoardingGrid(...)` cell-by-cell
+in the component only. The shift-menu flexibility subsection reuses `searchFlexibleMenus`/
+`FlexAxesToggles` unchanged, collapsed inside a `<details>`.
+
+**Judgment call, flagged (no new engine work was scoped for this conversion):** the spec asks
+for "each additional shift removes roughly X HOURS of unmet need" — the engine's marginal
+curve (`EngineResult.marginalCurve`) only records convex queue-cost (the internal `severity`
+objective) per point, not raw backlog-hours per point. Panel 4 approximates the hours figure
+by scaling `EngineResult.totalBacklogHours` (the real current total) by the SAME percentage
+reduction the queue-cost curve already shows between "today" and the knee point — a disclosed
+approximation, not a fabricated number, but an approximation nonetheless. When this scales to
+a negligible amount (a department whose recommendation is already close to full arrivals
+coverage), Panel 4 shows a plain "not a meaningful curve here" sentence instead of a
+confusing "removes roughly 0 hours" line — found and fixed via the manual screenshot review
+this PR, not assumed.
+
+**§5.5's copy-layer test additions, deferred from PR E, land here:** `copyLayer.test.ts`
+gained two more describe blocks — "severity" (R7) and "idealized" (R11) banned as bare words
+in `src/screens`/`src/components`, same strip-comments-then-grep strategy as the existing
+"budget" rule. Fixing the repo to actually PASS these needed real changes, not just the test:
+- **`components/ConvexityDemo.tsx`** — its whole teaching purpose is showing the REAL convex
+  `severity` function's behavior (spec §8 teaching layer, unchanged by this PR otherwise), so
+  the word couldn't just be deleted — it needed a rename. Display text now says "queue cost"
+  everywhere; the import is aliased (`import { severity as computeQueueCost }`) so the bare
+  identifier only appears once, at the import site.
+- **`screens/dashboard/EvidenceSurfaceSection.tsx`** — TWO live "severity" mentions reworded
+  to "queue cost" (same rename as ConvexityDemo, for consistency). **This is a deliberate,
+  narrow departure from the spec's "EvidenceSurfaceSection stays as-is" instruction** — read
+  as being about STRUCTURE/PLACEMENT (don't restructure or move this section), not an
+  exemption from R7's own "removed from the UI entirely." Also fixed a genuinely stale
+  cross-reference to the now-deleted `FinancePartnerWorksheet` ("the finance-partner worksheet
+  names the three numbers...") — a real correctness bug independent of either copy rule,
+  found while making this pass.
+- **`screens/setup/ShiftMenuStep.tsx`** — THREE live "idealized" mentions renamed to
+  "recommended"/"recommended grid." R11 says "idealized" is renamed "everywhere in the UI,"
+  and `copyLayer.test.ts` scans `src/screens` recursively (including `setup/`) — this setup
+  screen was in scope and was missed by an initial read that only considered results-page
+  panels. Found by actually running the new test against the whole repo before declaring it
+  passing, not by inspection alone.
+- **ONE allowlisted exception**, same technique the "budget" rule already established:
+  `ConvexityDemo.tsx`'s one `import { severity as computeQueueCost } from '../engine/solver'`
+  line is unavoidable — importing an export literally requires naming it once, so no rename
+  can make the word disappear from that one line. Allowlisted by exact substring match.
+
+**Tests:** `e2e/panel3-4.spec.ts` (new) — Panel 3's queue strip is confirmed blank
+(`.frame-queue-strip-blank` visible) and the two-bar chart renders; Panel 4's toggle switches
+between arrivals/boarding/combined nurses and its folded-in shift-flexibility `<details>` is
+present. `copyLayer.test.ts` now has 3 passing describe blocks (budget/severity/idealized), all
+verified to actually pass against the current repo state, not just written and assumed. All 8
+smoke-spec profiles + all 4 panel-specific specs green (12 e2e tests total). Manually
+screenshot-reviewed: all four live panels render correctly end to end, including the two-bar
+comparison and the corrected "no meaningful curve" fallback text.
+
+**Invariants:** no engine changes. `reconcile.test.ts` untouched. Vitest count reached 217
+(the two new copyLayer describe blocks). `npm run build`/`npm test`/`oxlint`/`npm run
+test:e2e` all clean.

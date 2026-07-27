@@ -20,6 +20,25 @@ const ALLOWED_BUDGET_SUBSTRINGS = [
   "that's the arrivals budget alone talking",
   'Boarding gets its own budget',
 ];
+
+// PR F (RESULTS_PAGE_V2_SPEC_2026-07-27.md §5.5) — extends this file's existing strategy to
+// two more banned words:
+//   - "severity" (R7) — the solver's internal objective, never a user-facing figure/word.
+//   - "idealized" (R11) — renamed "recommended" everywhere in the UI; engine field names
+//     (`EngineResult.grid`, etc.) are unchanged, same non-renaming convention as "budget."
+// Both additions were deliberately DEFERRED past PR E (see .claude/rules/results-redesign.md's
+// PR E section) until PR F actually removed/renamed the last live UI text using either word —
+// adding the ban earlier would have failed against files outside that PR's scope.
+//
+// ONE unavoidable exception: importing the engine's own `severity` function requires the
+// literal substring "severity" to appear in the import statement itself (`import { severity as
+// X } from ...`) — there is no way to reference an export without naming it once at the import
+// site. `components/ConvexityDemo.tsx` aliases it to `computeQueueCost` immediately and never
+// uses the bare name again, but that one import line is allowlisted below by exact substring,
+// the same technique the "budget" rule already uses for its one legitimate exception.
+const ALLOWED_SEVERITY_SUBSTRINGS = ["import { severity as computeQueueCost } from '../engine/solver';"];
+const ALLOWED_IDEALIZED_SUBSTRINGS: string[] = [];
+
 import { describe, expect, it } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'fs';
 import { join } from 'path';
@@ -58,5 +77,37 @@ describe('PR F copy-layer rule: never call the target-derived figure a "budget" 
       });
     }
     expect(offenders, `Found "budget" in rendered UI code (use "target-implied hours" instead):\n${offenders.join('\n')}`).toEqual([]);
+  });
+});
+
+describe('PR F copy-layer rule (R7): "severity" never appears in the UI', () => {
+  it('no rendered code in src/screens or src/components contains the bare word "severity"', () => {
+    const files = [...listTsxFiles(SCREENS_DIR), ...listTsxFiles(COMPONENTS_DIR)];
+    const offenders: string[] = [];
+    for (const file of files) {
+      const code = stripComments(readFileSync(file, 'utf-8'));
+      code.split('\n').forEach((line, i) => {
+        if (!/\bseverity\b/i.test(line)) return;
+        if (ALLOWED_SEVERITY_SUBSTRINGS.some((allowed) => line.includes(allowed))) return;
+        offenders.push(`${file}:${i + 1}: ${line.trim()}`);
+      });
+    }
+    expect(offenders, `Found "severity" in rendered UI code (it's the solver's internal objective — use "hours below need"/"queue cost"):\n${offenders.join('\n')}`).toEqual([]);
+  });
+});
+
+describe('PR F copy-layer rule (R11): "idealized" is renamed "recommended" everywhere in the UI', () => {
+  it('no rendered code in src/screens or src/components contains the bare word "idealized"', () => {
+    const files = [...listTsxFiles(SCREENS_DIR), ...listTsxFiles(COMPONENTS_DIR)];
+    const offenders: string[] = [];
+    for (const file of files) {
+      const code = stripComments(readFileSync(file, 'utf-8'));
+      code.split('\n').forEach((line, i) => {
+        if (!/\bidealized\b/i.test(line)) return;
+        if (ALLOWED_IDEALIZED_SUBSTRINGS.some((allowed) => line.includes(allowed))) return;
+        offenders.push(`${file}:${i + 1}: ${line.trim()}`);
+      });
+    }
+    expect(offenders, `Found "idealized" in rendered UI code (use "recommended" instead):\n${offenders.join('\n')}`).toEqual([]);
   });
 });

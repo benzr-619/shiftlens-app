@@ -63,7 +63,7 @@ export function EvidenceSurfaceSection() {
             <li>
               <strong>Step 3 — shift-fit solve.</strong> A greedy full-coverage search finds the minimum staff that
               covers every hour, then a joint whole-week trim removes headcount one unit at a time — whichever cut
-              adds the least convex "severity" (queued backlog normalized by that hour's own requirement) — until
+              adds the least convex "queue cost" (queued backlog normalized by that hour's own requirement) — until
               the schedule fits the target-implied hours plus a small tolerance, protected by a peer-benchmark
               floor. Why: an integer, shift-block schedule can never exactly hit a continuous target; the trim
               finds the least-bad way to fit one to the other.
@@ -209,8 +209,8 @@ export function EvidenceSurfaceSection() {
               <li><strong>Mean, not median, for boarding duration.</strong> Duration multiplies directly into total boarding hours — a ratio of means correctly rescales that product term; a ratio of medians would not (the median of a product isn't the product of medians).</li>
             )}
             <li><strong>p75 (busy-hour) arrivals never enter the point target.</strong> They only raise the protective floor and the trim's marginal cost at volatile hours — folding p75 into the point target itself would silently inflate the annual total-hours figure and break the reconciliation check above.</li>
-            <li><strong>Severity is normalized by requirement, not raw nurse-hours.</strong> Two nurses short at an hour needing ten is a bad hour; two short at an hour needing three is a crisis — raw nurse-hours can't tell the difference, which is exactly why an earlier, linear version of this objective was willing to flatten real peaks.</li>
-            <li><strong>No dollar layer, anywhere.</strong> No salary, benefit-factor, or per-visit-margin inputs are collected — a fabricated ROI is the first thing a finance partner attacks. The finance-partner worksheet names the three numbers a CFO already owns instead.</li>
+            <li><strong>Queue cost is normalized by requirement, not raw nurse-hours.</strong> Two nurses short at an hour needing ten is a bad hour; two short at an hour needing three is a crisis — raw nurse-hours can't tell the difference, which is exactly why an earlier, linear version of this objective was willing to flatten real peaks.</li>
+            <li><strong>No dollar layer, anywhere.</strong> No salary, benefit-factor, or per-visit-margin inputs are collected — a fabricated ROI is the first thing a finance partner attacks. Panel 4's benefit-per-shift framing names the three numbers a CFO already owns instead, in the tool's own units.</li>
             <li><strong>Arrivals and boarding are modeled as two separate demands, additively.</strong> A reader who doesn't know this sees the tool cutting their nights and concludes it doesn't understand their department. The two are added back together only for the reader, in the synthesis chapter — never inside the solved grid itself.</li>
             <li><strong>ESI 3 as the unbiased anchor for auto-normalization.</strong> An inference from one department's data (its dashboard's zero-day-dropping artifact hit sparse ESI 1-2/4-5 hardest, ESI 3 least) — not a proven universal. If a different bias pattern shows up elsewhere, this should be revisited before hard-coding it further.</li>
           </ul>

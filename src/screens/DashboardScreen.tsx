@@ -3,36 +3,30 @@ import { useStore } from '../store';
 import { StepBar, type StepBarEntry } from '../components/StepBar';
 import { Panel1 } from './dashboard/Panel1';
 import { Panel2 } from './dashboard/Panel2';
-import { FundingAskSection } from './dashboard/FundingAskSection';
-import { FinancePartnerWorksheet } from './dashboard/FinancePartnerWorksheet';
-import { ShiftMenuFlexibilitySection } from './dashboard/ShiftMenuFlexibilitySection';
-import { BoardingCoverageSection } from './dashboard/BoardingCoverageSection';
-import { SynthesisSection } from './dashboard/SynthesisSection';
+import { Panel3 } from './dashboard/Panel3';
+import { Panel4 } from './dashboard/Panel4';
 import { EvidenceSurfaceSection } from './dashboard/EvidenceSurfaceSection';
 
-// PR E (RESULTS_PAGE_V2_SPEC_2026-07-27.md §8) — Panels 1 and 2 now real, replacing
-// `CoreGridTab`/`CurrentStaffingAnalysis` (Panel 1) and `ScenarioBSection` (Panel 2).
-// `HiddenBoardingSection`, `BoardingTransition`, `ConstrainedReallocationSection` are DELETED
-// (R9) — their content is absorbed into Panel 1 (hidden-boarding diagnostic) and Panel 2 (the
-// combined-reallocation toggle). `ch-funding-ask`/`ch-shift-menu`/`ch-boarding`/`ch-synthesis`/
-// `ch-evidence` are STILL the old architecture — PR F/G finish the migration (Panels 3/4/5),
-// see .claude/rules/results-redesign.md's "Results Page V2" PR E section.
+// PR F (RESULTS_PAGE_V2_SPEC_2026-07-27.md §8) — Panels 3 and 4 now real, replacing
+// `FundingAskSection`/`FinancePartnerWorksheet`/`SynthesisSection`/`BoardingCoverageSection`
+// (R8/R9) and folding `ShiftMenuFlexibilitySection` into Panel 4, collapsed. Combined with PR
+// E, the five-panel architecture (§4) is now COMPLETE except Panel 5 (PR G, the sandbox).
+// `EvidenceSurfaceSection` stays exactly where it is, unmodified, per the spec's own
+// instruction — off the main arc, below everything, protecting the tool when a number is
+// challenged. See .claude/rules/results-redesign.md's "Results Page V2" PR F section.
 const CHAPTERS: StepBarEntry[] = [
   { id: 'ch-current-staffing', label: 'Your current staffing' },
   { id: 'ch-scenario-b', label: 'Could moving hours fix it?' },
-  { id: 'ch-funding-ask', label: 'What this costs, what it buys' },
-  { id: 'ch-shift-menu', label: 'Would a different shift pattern help?' },
-  { id: 'ch-boarding', label: 'The second demand: boarding' },
-  { id: 'ch-synthesis', label: 'Both budgets together' },
+  { id: 'ch-full-coverage', label: 'What would full coverage take?' },
+  { id: 'ch-recommended', label: 'Recommended staffing' },
   { id: 'ch-evidence', label: 'How this works' },
 ];
 
 /**
- * Single scrolling results page (no tabs). PR E of `RESULTS_PAGE_V2_SPEC_2026-07-27.md`:
- * Panel 1 ("what your department demands, and what you staff against it") and Panel 2
- * ("could moving hours fix it") are now the real five-panel architecture; everything after
- * `ch-funding-ask` is still the pre-V2 chapter architecture pending PRs F/G. See CLAUDE.md
- * Section 3/6 + .claude/rules/results-redesign.md's "Results Page V2" section.
+ * Single scrolling results page (no tabs). As of PR F of `RESULTS_PAGE_V2_SPEC_2026-07-27.md`,
+ * four of the five real panels are live (Panel 5 — the sandbox — is PR G); `StepBar`'s list is
+ * down to 5 entries. See CLAUDE.md Section 3/6 + .claude/rules/results-redesign.md's "Results
+ * Page V2" section.
  */
 export function DashboardScreen() {
   const { setScreen, getResult, buildEngineInputs, currentStaffingGrid, wHppvTarget } = useStore();
@@ -105,19 +99,8 @@ export function DashboardScreen() {
       <div className="dashboard-content">
         <Panel1 />
         <Panel2 />
-        <div id="ch-funding-ask">
-          <FundingAskSection />
-          <FinancePartnerWorksheet />
-        </div>
-        <div id="ch-shift-menu">
-          <ShiftMenuFlexibilitySection />
-        </div>
-        <div id="ch-boarding">
-          <BoardingCoverageSection />
-        </div>
-        <div id="ch-synthesis">
-          <SynthesisSection />
-        </div>
+        <Panel3 />
+        <Panel4 />
         <div id="ch-evidence">
           <EvidenceSurfaceSection />
         </div>

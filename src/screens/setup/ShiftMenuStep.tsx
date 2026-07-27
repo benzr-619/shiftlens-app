@@ -47,10 +47,10 @@ export function ShiftMenuStep() {
 
         <div className="flex-axes-setup">
           <h3>
-            Open to alternatives? <EvidenceBadge status="OPTIONAL" note="Optional — leave all unchecked to keep the idealized grid on your exact menu." />
+            Open to alternatives? <EvidenceBadge status="OPTIONAL" note="Optional — leave all unchecked to keep the recommended grid on your exact menu." />
           </h3>
           <p>
-            Your idealized staffing always uses the menu above — this only controls whether we also search for a
+            Your recommended staffing always uses the menu above — this only controls whether we also search for a
             more efficient spread of the same hours. Pick any axes you're open to, or none; you can change this
             later.
           </p>
@@ -70,8 +70,8 @@ export function ShiftMenuStep() {
         <p>
           Optional, but recommended: tell us how many nurses you actually staff on each shift today. On the
           results page we'll open with an analysis of this grid and show, cell by cell, where your current
-          schedule and the idealized recommendation diverge. Skip it and the results page will start from the
-          idealized grid instead, with a link to add this later. Enter it directly in the grid below, or —
+          schedule and the recommendation diverge. Skip it and the results page will start from the
+          recommended grid instead, with a link to add this later. Enter it directly in the grid below, or —
           for a longer shift menu — download a template, fill it in, and upload it back.
         </p>
 
