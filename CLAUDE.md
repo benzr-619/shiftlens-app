@@ -165,6 +165,7 @@ specific ED's data, always framed as "what similar EDs run at" and always user-e
 | — Panel 2 | `src/screens/dashboard/Panel2.tsx` | (2026-07-27, PR E §4) "Could moving hours fix it?" — REPLACES the deleted `ScenarioBSection.tsx`/`ConstrainedReallocationSection.tsx`. Reuses `computeScenarioB` (arrivals only)/`computeCombinedReallocation` (arrivals+boarding) UNCHANGED, toggled: Current · Reallocated for arrivals · Reallocated for arrivals + boarding. Left column ("hours below need"/"worst unbroken stretch" via `lib/whenPattern.ts`'s first real UI caller) updates WITH the toggle — required `VisualFrame` to gain a controlled mode (`activeKey`/`onActiveKeyChange`, optional, defaults to uncontrolled). The honest-cost sentence (reallocating for boarding costs the arrivals picture) renders on EVERY state, not gated behind the "combined" toggle |
 | — Panel 3 | `src/screens/dashboard/Panel3.tsx` | (2026-07-27, PR F of `RESULTS_PAGE_V2_SPEC_2026-07-27.md` §4) "What would it take to fully cover the department?" — REPLACES the deleted `SynthesisSection.tsx`. Reuses `EngineResult.fullCoverageCombined` (PR B) directly, no new engine work. Queue strip renders deliberately BLANK. New dedicated two-bar SVG comparison (total demand, stacked when boarding present, vs. hours staffed today) — degrades to a single (arrivals-only) bar when boarding is absent, per §10 open item 3, resolved this PR |
 | — Panel 4 | `src/screens/dashboard/Panel4.tsx` | (2026-07-27, PR F §4) "Recommended staffing" (R11: "idealized" renamed everywhere) — REPLACES the deleted `FundingAskSection.tsx`/`FinancePartnerWorksheet.tsx` (R8, absorbed into a reframed "benefit per additional shift" section) and folds `ShiftMenuFlexibilitySection.tsx` in, collapsed. R6: a display-level Arrivals/Boarding/Combined toggle — `EngineResult.grid` itself is never mutated; the combined grid is summed cell-wise in the component only. **Judgment call, flagged:** the "hours of unmet need" figure is approximated by scaling `EngineResult.totalBacklogHours` by the same % reduction the (severity-based) marginal curve shows, since the engine doesn't record raw hours per marginal-curve point — see `.claude/rules/results-redesign.md`'s PR F section |
+| — Panel 5 | `src/screens/dashboard/Panel5.tsx` | (2026-07-27, PR G of `RESULTS_PAGE_V2_SPEC_2026-07-27.md` §4) "Test it yourself" — NEW, no predecessor. Two editable day×shift grids (ED nurses / hold nurses, component-local state, no solver call — reuses `computeSandbox` from PR C on every keystroke). §3.5's ED-vs-hold distinction lives ENTIRELY here — nowhere else on the page. **Judgment call, flagged:** hold nurses can only cover medical boarders, but the engine only exposes a per-hour COMBINED boarding curve (medical/BH weekly totals are split, not the per-hour shape) — approximated by a uniform proportional split; see `.claude/rules/results-redesign.md`'s PR G section. Three prefill buttons (current staffing / recommendation-all-ED / recommendation-with-hold-split); the hold-surplus finding is always surfaced as prose when material, never buried |
 | — Evidence surface | `src/screens/dashboard/EvidenceSurfaceSection.tsx` | (2026-07-26 PR I §8, Chapter 9) "How this works" — a branch off the main chapter arc, visually set apart (`.evidence-surface`), collapsed by default. Pipeline walkthrough, the `constantsMetadata.ts`-generated constants table, data provenance, known approximations, the reconciliation invariant as a live correctness proof, and decisions/rejected alternatives. **2026-07-27 PR F: two "severity" mentions reworded to "queue cost"** (R7) — a narrow, deliberate departure from "stays as-is," read as being about structure/placement, not an R7 exemption; also fixed a stale cross-reference to the by-then-deleted `FinancePartnerWorksheet` |
 
 Navigation is a single `screen: 'welcome' | 'setup' | 'dashboard'` field in the store
@@ -1526,6 +1527,26 @@ e2e tests total, all green. `npm run build`/`npm test`/`oxlint`/`npm run test:e2
 Manually screenshot-reviewed: all four live panels render correctly, including a copy fix
 found during that review (a "removes roughly 0 hours" line that read as broken now shows a
 plain "no meaningful curve here" fallback instead).
+
+**Built (2026-07-27, PR G of `RESULTS_PAGE_V2_SPEC_2026-07-27.md` — Panel 5, the sandbox):**
+new `screens/dashboard/Panel5.tsx` ("test it yourself") — completes the five-panel
+architecture (§4) in full; `StepBar`'s chapter list gained its final `ch-sandbox` entry. Two
+editable day×shift grids (ED nurses / hold nurses, component-local state, no store persistence
+— ephemeral what-if scenario), reusing PR C's `computeSandbox` on every keystroke, no solver
+call. §3.5's ED-vs-hold-nurse distinction lives ENTIRELY in this one panel. **Judgment call,
+flagged:** the engine only exposes a per-hour COMBINED boarding curve (medical/BH weekly
+totals are split, only on the measured census path — the per-hour SHAPE of that split doesn't
+exist anywhere in the engine), so hold-nurse-eligible medical demand is approximated via a
+uniform proportional split rather than a true per-hour medical curve. Three prefill buttons;
+hold-nurse surplus (capacity staffed against medical boarders who aren't there) is always
+surfaced as prose when material. New `e2e/panel5.spec.ts` (3 tests) — prefill buttons verified
+by reading back actual DOM input values, hold-surplus text appears when hold nurses are pushed
+above medical boarding demand, and a heavy-BH profile produces a real result in both states
+(the specific "barely moves coverage" claim is a finding about that profile's own data, not
+hard-coded). `copyLayer.test.ts`'s "budget" rule caught this PR's own first-draft copy using
+the banned word — reworded, a live demonstration the guardrail works. 15 e2e tests total (8
+smoke + 7 panel-specific), all green. `npm run build`/`npm test`/`oxlint`/`npm run test:e2e`
+all clean. Manually screenshot-reviewed.
 
 **Not yet built:**
 - Component/UI-level automated tests below the full-page e2e level (React Testing Library-

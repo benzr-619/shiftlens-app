@@ -1676,3 +1676,55 @@ comparison and the corrected "no meaningful curve" fallback text.
 **Invariants:** no engine changes. `reconcile.test.ts` untouched. Vitest count reached 217
 (the two new copyLayer describe blocks). `npm run build`/`npm test`/`oxlint`/`npm run
 test:e2e` all clean.
+
+### PR G — Panel 5, the sandbox: the five-panel architecture is complete
+
+New `screens/dashboard/Panel5.tsx` ("test it yourself"). All five panels of §4 are now live;
+`StepBar`'s chapter list gained its final entry (`ch-sandbox`, 6 total including
+`ch-evidence`). Two editable day×shift grids (component-local `useState<Grid>`, NOT the
+zustand store — this is ephemeral what-if state, same convention the old
+`BoardingCoverageSection`'s `cellOverrides` used, not something that needs to persist beyond
+the page). Reuses `computeSandbox` (PR C) verbatim on every keystroke — no solver call, per
+the spec.
+
+**§3.5's hard rule lives ENTIRELY in this panel** — nowhere else on the page distinguishes ED
+nurses from hold nurses; every other panel treats all nursing demand as one pool.
+
+**Judgment call, flagged — a genuine engine data gap, not a design choice:** hold nurses can
+only ever cover MEDICAL boarders (§3.5), but `EngineResult.boarding.cellBoardingRnHours` is a
+single PER-HOUR curve that already blends medical and BH together — only the WEEKLY totals
+(`medicalWeeklyRnHours`/`bhWeeklyRnHours`) are split apart, and only on the measured census
+path. No PR in this sequence scoped a new per-hour medical/BH split. Panel 5 approximates it:
+on the measured path with both streams present, the combined curve is split proportionally by
+the weekly medical:BH ratio, applied UNIFORMLY across all 168 hours (assumes both streams
+share the same hourly shape — a real simplification, not a proven one); everywhere else
+(derived path, or measured with only medical tracked), the entire curve is treated as medical,
+since the derived path has no BH-specific concept to split out of in the first place. This is
+disclosed in the component's own header comment, not silently assumed.
+
+**Three prefill buttons**, per §4: "My current staffing" (ED = current grid, hold = zero);
+"The recommendation, all as ED nurses" (ED = `result.grid` + the recommended boarding grid,
+summed — the full ask as one flexible pool, hold = zero); "The recommendation, with boarding
+covered by hold nurses" (ED = `result.grid` alone, hold = the recommended boarding grid — the
+SAME approximation call as Panel 4's R6 combined view, reused here rather than re-derived).
+
+**The hold-surplus finding is surfaced as prose, not buried in a number** — whenever
+`holdSurplus` totals ≥0.5 hours, the panel states plainly that hold nurses are staffed against
+medical boarders who aren't there and that this capacity can't help with BH boarders or
+arrivals, per §5.4's "must be surfaced" rule.
+
+**Tests:** `e2e/panel5.spec.ts` (3, new) — prefill buttons genuinely populate the ED grid
+(read back via each `<input>`'s live DOM value, not just "button exists"); typing a large
+number into every hold-nurse cell makes the hold-surplus sentence appear; and a heavy-BH
+profile (`measuredBoardingCensus`) produces a real, finite "hours below need" figure in both
+the current and hold-covered states — the SPECIFIC claim that hold nurses barely move
+coverage for a BH-heavy department is a finding about that profile's own medical:BH mix, not
+hard-coded as a fixed percentage in the test. `copyLayer.test.ts`'s "budget" rule caught this
+PR's own first draft using the word in Panel 5's two-grids explanation — reworded to "pools of
+hours," a live demonstration of the guardrail actually working, not just passing by
+construction. All 15 e2e tests green (8 smoke + 7 panel-specific). Manually screenshot-
+reviewed: both grids render, start at zero, and the frame/heatmap populate correctly.
+
+**Invariants:** no engine changes (Panel 5 is a pure consumer of PR C's `computeSandbox`).
+`reconcile.test.ts` untouched. Vitest count unchanged at 217 (this PR is UI/e2e only). `npm
+run build`/`npm test`/`oxlint`/`npm run test:e2e` all clean.

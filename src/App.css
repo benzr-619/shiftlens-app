@@ -1312,3 +1312,8 @@ h1 {
   height: auto;
   display: block;
 }
+
+/* PR G (RESULTS_PAGE_V2_SPEC_2026-07-27.md §4) — Panel 5's two editable sandbox grids. */
+.sandbox-grid {
+  margin-bottom: 16px;
+}

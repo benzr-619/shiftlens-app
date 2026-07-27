@@ -5,28 +5,26 @@ import { Panel1 } from './dashboard/Panel1';
 import { Panel2 } from './dashboard/Panel2';
 import { Panel3 } from './dashboard/Panel3';
 import { Panel4 } from './dashboard/Panel4';
+import { Panel5 } from './dashboard/Panel5';
 import { EvidenceSurfaceSection } from './dashboard/EvidenceSurfaceSection';
 
-// PR F (RESULTS_PAGE_V2_SPEC_2026-07-27.md §8) — Panels 3 and 4 now real, replacing
-// `FundingAskSection`/`FinancePartnerWorksheet`/`SynthesisSection`/`BoardingCoverageSection`
-// (R8/R9) and folding `ShiftMenuFlexibilitySection` into Panel 4, collapsed. Combined with PR
-// E, the five-panel architecture (§4) is now COMPLETE except Panel 5 (PR G, the sandbox).
-// `EvidenceSurfaceSection` stays exactly where it is, unmodified, per the spec's own
-// instruction — off the main arc, below everything, protecting the tool when a number is
-// challenged. See .claude/rules/results-redesign.md's "Results Page V2" PR F section.
+// PR G (RESULTS_PAGE_V2_SPEC_2026-07-27.md §8) — Panel 5 (the sandbox) lands, completing the
+// five-panel architecture (§4) in full. `EvidenceSurfaceSection` stays exactly where it is,
+// unmodified — off the main arc, below everything, protecting the tool when a number is
+// challenged. See .claude/rules/results-redesign.md's "Results Page V2" PR G section.
 const CHAPTERS: StepBarEntry[] = [
   { id: 'ch-current-staffing', label: 'Your current staffing' },
   { id: 'ch-scenario-b', label: 'Could moving hours fix it?' },
   { id: 'ch-full-coverage', label: 'What would full coverage take?' },
   { id: 'ch-recommended', label: 'Recommended staffing' },
+  { id: 'ch-sandbox', label: 'Test it yourself' },
   { id: 'ch-evidence', label: 'How this works' },
 ];
 
 /**
- * Single scrolling results page (no tabs). As of PR F of `RESULTS_PAGE_V2_SPEC_2026-07-27.md`,
- * four of the five real panels are live (Panel 5 — the sandbox — is PR G); `StepBar`'s list is
- * down to 5 entries. See CLAUDE.md Section 3/6 + .claude/rules/results-redesign.md's "Results
- * Page V2" section.
+ * Single scrolling results page (no tabs). All five panels of `RESULTS_PAGE_V2_SPEC_2026-07-
+ * 27.md` §4 are now live. See CLAUDE.md Section 3/6 + .claude/rules/results-redesign.md's
+ * "Results Page V2" section.
  */
 export function DashboardScreen() {
   const { setScreen, getResult, buildEngineInputs, currentStaffingGrid, wHppvTarget } = useStore();
@@ -101,6 +99,7 @@ export function DashboardScreen() {
         <Panel2 />
         <Panel3 />
         <Panel4 />
+        <Panel5 />
         <div id="ch-evidence">
           <EvidenceSurfaceSection />
         </div>
