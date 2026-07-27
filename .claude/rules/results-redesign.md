@@ -1335,3 +1335,58 @@ session and then REVERTED — see `.claude/rules/template-parsing.md`'s reversal
 why, and don't reintroduce either without checking first. `ReviewStep.tsx` gained a "Download
 my data file" export (Part 3, the app's only persistence) — see template-parsing.md's export
 section for the round-trip guarantee and test.
+
+---
+
+## Results Page V2 (`RESULTS_PAGE_V2_SPEC_2026-07-27.md`) — five panels, one visual frame, a sandbox
+
+The next full rebuild of this results page, superseding almost everything documented above in
+this file about the current chapter-by-chapter architecture (`CoreGridTab`/`ScenarioBSection`/
+`FundingAskSection`/etc.) — see the spec's own §2 for the full reversal list (R1-R12), each
+confirmed with Ben after reviewing the rendered page against a real department's data. PRs land
+in the sequence the spec's §8 table specifies (A0 → H); this section accrues one entry per PR,
+same convention as the rest of this file. **Read the spec in full before touching any PR in this
+sequence** — it is the governing document, not a paraphrase of it.
+
+### PR A0 — Playwright browser test harness
+
+Full detail lives in `.claude/rules/synthetic-fixtures.md`'s Playwright section (the harness is
+fixture-adjacent, not results-page-specific) — `@playwright/test`, `npm run test:e2e`, the
+`window.__shiftlensSeed` dev-only hook, `e2e/smoke.spec.ts` covering all eight named profiles.
+Built first per the spec's own instruction, since every PR from D onward is visual and this repo
+had never had a way to verify visual work before this.
+
+### PR A — backlog reporting confirmation + pattern namer
+
+Full detail lives in `.claude/rules/engine-solver.md`'s new "PR A" section (the backlog-curve/
+threshold finding is solver-adjacent) and `src/lib/whenPattern.ts`'s own header (the pattern-namer
+ladder + its flagged rung-3-unreachability finding). Engine/lib only, no UI — the actual heatmap/
+stat changes this finding motivates land in PRs D/E.
+
+### PR B — full coverage over combined demand (§5.3)
+
+New `EngineResult.fullCoverageCombined: { weeklyHours: number; grid: Grid }` (`engine/index.ts`)
+— Panel 3's ceiling. Reuses `solveFullCoverageWeek` verbatim against the COMBINED demand curve
+(`hourlyRequirement + boarding.cellBoardingRnHours` when boarding is present) — no second solver,
+per the spec's explicit instruction. **Resource-agnostic by construction**: `solveFullCoverageWeek`
+has no concept of ED-vs-hold nurses (§3.5 is a Panel-5-only distinction) — it only ever asks "how
+many total nurse-hours, placed where, cover this demand curve with zero shortfall anywhere."
+
+**Always computed, never null** — a deliberate choice over returning `null` when boarding is
+absent. With no boarding data the combined curve degenerately equals `hourlyRequirement` alone,
+so `fullCoverageCombined.weeklyHours === fullCoverage.weeklyHours` exactly — the mathematically
+correct answer for "zero boarding demand," not a special case needing a guard. Consumers that
+need to know whether boarding was actually included should check `result.boarding` (already
+nullable), not infer it from whether this field differs from `fullCoverage`.
+
+Computed AFTER `boarding` in `compute()`'s body (moved from where `fullCoverage`, the
+arrivals-only version, is computed — that one still runs before `boarding` since it doesn't need
+it) — the one structural change this PR made to `engine/index.ts`'s existing code, since the
+combined curve needs `boarding.cellBoardingRnHours` to exist first.
+
+**Tests** (`engine/__tests__/fullCoverageCombined.test.ts`, 4): the no-boarding degenerate-equality
+case; strictly-greater-than-arrivals-only when boarding is present; a direct reconstruction of
+capacity from the returned grid, confirming it never falls short of the combined demand curve at
+any of the 168 hours (not just trusting the solver's own invariant); and confirmation that
+`annualVisits`/`annualCoreRnHoursBudget`/`hourlyRequirement`/`reconciliation` are completely
+untouched by any of this. `reconcile.test.ts` itself passes with a zero-line diff.

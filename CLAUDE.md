@@ -1374,6 +1374,20 @@ through). Test count reached 212. `npm run build`/`npm test`/`oxlint`/`npm run t
 clean. No UI changes in this PR (per the spec's own PR-sequence table — "Engine/lib only, no
 UI").
 
+**Built (2026-07-27, PR B of `RESULTS_PAGE_V2_SPEC_2026-07-27.md` §5.3 — full coverage over
+combined demand):** new `EngineResult.fullCoverageCombined: { weeklyHours: number; grid: Grid
+}` — Panel 3's ceiling ("what would it take to fully cover the department"), reusing
+`solveFullCoverageWeek` verbatim against `hourlyRequirement + boarding.cellBoardingRnHours`
+(no second solver). Resource-agnostic by construction (no hold/ED concept — §3.5 is
+Panel-5-only). Always computed, never null — degenerately equals `fullCoverage` when boarding
+is absent, the mathematically correct answer rather than a guarded special case. See
+`.claude/rules/results-redesign.md`'s new "Results Page V2" section, PR B, for the full
+detail including the one structural reorder this required in `compute()`. Test count reached
+214 (`fullCoverageCombined.test.ts` new, including a direct capacity-vs-combined-demand
+reconstruction, not just trusting the solver's own invariant). `reconcile.test.ts` passes with
+a zero-line diff. `npm run build`/`npm test`/`oxlint`/`npm run test:e2e` all clean. No UI in
+this PR, per the spec's own sequence.
+
 **Not yet built:**
 - Component/UI-level automated tests below the full-page e2e level (React Testing Library-
   style unit tests for a single component in isolation) — `engine`/`lib` have vitest coverage,

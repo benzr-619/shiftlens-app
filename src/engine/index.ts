@@ -200,6 +200,25 @@ export function compute(inputs: EngineInputs): EngineResult {
     }
   );
 
+  // PR B (RESULTS_PAGE_V2_SPEC_2026-07-27.md §5.3) — Panel 3's "what would it take to fully
+  // cover the department" ceiling: full coverage over the COMBINED arrivals+boarding demand
+  // curve. Reuses solveFullCoverageWeek verbatim (no second solver) against
+  // hourlyRequirement + boarding's base representative-week curve
+  // (cellBoardingRnHours — the same pre-seasonality, per-hour-requirement-shaped curve
+  // hiddenBoarding.ts already combines with hourlyRequirement, see .claude/rules/
+  // results-redesign.md's PR F section). Resource-agnostic by construction — solveFullCoverageWeek
+  // has no concept of ED-vs-hold nurses (§3.5); it just asks "how many total nurse-hours,
+  // placed where, cover this demand curve with zero shortfall anywhere." Always computed
+  // (never null) — with no boarding data the combined curve degenerately equals the arrivals-only
+  // curve, which is the mathematically correct answer, not a special case to guard against.
+  const combinedRequirement168 = hourlyRequirement.map((v, i) => v + (boarding ? boarding.cellBoardingRnHours[i] : 0));
+  const fullCoverageCombinedGrid = solveFullCoverageWeek(combinedRequirement168, inputs.shiftMenu);
+  const fullCoverageCombinedWeeklyHours = Object.values(fullCoverageCombinedGrid).reduce(
+    (acc, hc) => acc + inputs.shiftMenu.reduce((a, s) => a + (hc[s.id] ?? 0) * s.lengthHours, 0),
+    0
+  );
+  const fullCoverageCombined = { weeklyHours: fullCoverageCombinedWeeklyHours, grid: fullCoverageCombinedGrid };
+
   // Productivity Target Buffer method (ENA-referenced): what the boarding load would cost
   // in ED-facing wHPPV if it were absorbed by core staff rather than separately covered.
   const lostProductivity = boarding
@@ -228,6 +247,7 @@ export function compute(inputs: EngineInputs): EngineResult {
     backlogFeedbackPassCount: feedback.passesRun,
     backlogFeedbackStillImprovingAtCap: feedback.stillImprovingAtCap,
     fullCoverage,
+    fullCoverageCombined,
     marginalCurve,
     marginalKneePoint,
     esiConfidenceFlag: !hasEsi,

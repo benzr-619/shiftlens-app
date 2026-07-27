@@ -236,6 +236,14 @@ export interface EngineResult {
   // generous wHPPV target already funds full coverage (a real, not-hypothetical edge case in a
   // low-volume ED); UI must handle that explicitly rather than rendering a negative ask.
   fullCoverage: { weeklyHours: number; impliedWhppv: number; fteDelta: number };
+  // PR B (RESULTS_PAGE_V2_SPEC_2026-07-27.md §5.3) — Panel 3's ceiling: full coverage over
+  // the COMBINED arrivals+boarding demand curve (hourlyRequirement + boarding's
+  // cellBoardingRnHours when boarding is present, degenerately equal to `fullCoverage` when
+  // it's absent). Reuses solveFullCoverageWeek verbatim — resource-agnostic, no hold/ED
+  // concept (§3.5 is a Panel-5-only distinction, never this). `grid` is exposed (unlike
+  // `fullCoverage` above, which is display-numbers-only) because Panel 3 shows "one number,
+  // one grid."
+  fullCoverageCombined: { weeklyHours: number; grid: Grid };
   // `trimWeekToBudgetWithTrajectory`'s recorded trim trajectory (ONE-SHOT solve — see
   // engine/index.ts and .claude/rules/engine-solver.md's PR D section for why this is
   // deliberately NOT threaded through the Phase 2b relaxation loop), read BACKWARDS for
