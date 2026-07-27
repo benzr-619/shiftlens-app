@@ -257,6 +257,16 @@ src/
                       zero, when absent). Diagnostic-only, no solver interaction. Powers
                       `screens/dashboard/HiddenBoardingSection.tsx` — see
                       `.claude/rules/results-redesign.md`'s PR F section.
+    sandbox.ts      — (2026-07-27, PR C of `RESULTS_PAGE_V2_SPEC_2026-07-27.md` §5.4)
+                      `computeSandbox(...)` — Panel 5's "test it yourself" arithmetic, pure/
+                      no-solve (same cheap-live-recompute convention as `recomputeAfterEdit`).
+                      Nets a hold-nurses grid (medical-boarding-only, capped) and an ED-nurses
+                      grid into ONE combined `residualDemand`/`unmet`/`spare` (never
+                      attributed by source — §3.5's sandbox-only ED-vs-hold distinction lives
+                      here and nowhere else in the engine); `queueDepth` reuses
+                      `backlogModel.ts`'s recurrence verbatim; `effectiveWhppv` can go
+                      negative, reported honestly; `holdSurplus` always surfaced. See
+                      `.claude/rules/results-redesign.md`'s PR C section.
     bandFloor.ts    — (2026-07-25) `computeBandFloorViolations` — diagnostic-only (same
                       convention as computeBacklog), counts hours below `EngineResult
                       .bandFloorHourly` + longest run + which shift. Powers CoreGridTab's
@@ -1387,6 +1397,21 @@ detail including the one structural reorder this required in `compute()`. Test c
 reconstruction, not just trusting the solver's own invariant). `reconcile.test.ts` passes with
 a zero-line diff. `npm run build`/`npm test`/`oxlint`/`npm run test:e2e` all clean. No UI in
 this PR, per the spec's own sequence.
+
+**Built (2026-07-27, PR C of `RESULTS_PAGE_V2_SPEC_2026-07-27.md` §5.4 — sandbox model,
+engine only):** new `src/engine/sandbox.ts`'s `computeSandbox(...)` — Panel 5's "test it
+yourself" arithmetic, pure and solve-free (same cheap-live-recompute convention as
+`recomputeAfterEdit`). Two editable-grid inputs (ED nurses / hold nurses, §3.5's
+sandbox-only distinction) net into ONE combined `residualDemand`/`unmet`/`spare` picture —
+never attributed by source, per the spec's explicit rule — plus a `queueDepth` strip reusing
+`backlogModel.ts`'s recurrence verbatim, and a per-hour `effectiveWhppv` that can go negative
+and is reported honestly (no clamping). `holdSurplus` (hold-nurse-hours staffed against
+medical boarders who aren't there) is always surfaced, never silently absorbed — the honest
+cost of the cheaper-looking hold-nurse ask. Test count reached 219
+(`engine/__tests__/sandbox.test.ts`, 5 — including an exact-value negative-effective-wHPPV
+case and a full-coverage zero-queue case). See `.claude/rules/results-redesign.md`'s new
+"Results Page V2" section, PR C. `npm run build`/`npm test`/`oxlint`/`npm run test:e2e` all
+clean. No UI in this PR — Panel 5's editable grids and prefill buttons are PR G.
 
 **Not yet built:**
 - Component/UI-level automated tests below the full-page e2e level (React Testing Library-

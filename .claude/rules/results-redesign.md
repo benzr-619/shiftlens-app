@@ -1390,3 +1390,48 @@ capacity from the returned grid, confirming it never falls short of the combined
 any of the 168 hours (not just trusting the solver's own invariant); and confirmation that
 `annualVisits`/`annualCoreRnHoursBudget`/`hourlyRequirement`/`reconciliation` are completely
 untouched by any of this. `reconcile.test.ts` itself passes with a zero-line diff.
+
+### PR C — sandbox model (§5.4), engine only
+
+New `src/engine/sandbox.ts`, `computeSandbox(arrivalsRequirement168, medBoarding168,
+bhBoarding168, arrivals168, edNurses168, hold168, backlogParams)` → `SandboxResult`. Pure
+arithmetic, no solve — same cheap-live-recompute convention as `recomputeAfterEdit`, so Panel 5
+(PR G) can call it on every keystroke against two editable grids without a re-solve.
+
+**The exact formula, per the spec:**
+```
+holdApplied[h]    = min(hold[h], medBoarding[h])
+holdSurplus[h]    = max(0, hold[h] - medBoarding[h])
+residualDemand[h] = arrivalsRequirement[h] + (medBoarding[h] - holdApplied[h]) + bhBoarding[h]
+unmet[h]          = max(0, residualDemand[h] - edNurses[h])
+spare[h]          = max(0, edNurses[h] - residualDemand[h])
+```
+`queueDepth` reuses `backlogModel.ts`'s `backlogRecurrence(edNurses168, residualDemand168,
+params)` verbatim — no new recurrence, no second copy of the formula. `effectiveWhppv[h] =
+(edNurses[h] - unabsorbedMedBoarding[h] - bhBoarding[h]) / arrivals[h]` — can go NEGATIVE,
+reported honestly (never clamped by this function; a clamp is a display/color concern for
+whichever PR builds Panel 5's UI). Guarded to `0` (not `NaN`/`Infinity`) at an hour with zero
+arrivals, since there's no meaningful "per ED visit" figure there.
+
+**Two hard rules from §5.4, both load-bearing and both tested:**
+- **Never attribute `unmet` between arrivals and boarding** — `residualDemand`/`unmet`/`spare`
+  are each ONE combined number per hour, never decomposed by source. This is why `holdApplied`
+  is capped at `medBoarding[h]` rather than netted against the blended `residualDemand` some
+  other way — the cap has to happen BEFORE the three demand sources are summed into one curve,
+  or there'd be no principled way to "give back" the boarding-specific relief afterward.
+- **`holdSurplus` must be surfaced, never silently absorbed** — hold nurses staffed against
+  medical boarders who aren't there is a real, honest cost of the cheaper-looking hold-nurse
+  ask (§1's governing test: a manager needs to be able to explain this, not have it smoothed
+  over). Tested directly: once `hold >= medBoarding` at an hour, `holdApplied` stays capped at
+  `medBoarding` and every additional hold-nurse-hour becomes pure `holdSurplus` — `residualDemand`
+  /`unmet` are provably UNCHANGED beyond that point (more hold does nothing further).
+
+**Tests** (`engine/__tests__/sandbox.test.ts`, 5): hold has literally zero effect on
+`residualDemand`/`unmet`/`spare` when `medBoarding = 0` everywhere (proves hold can never
+reduce arrivals/BH shortfall, since its only lever — `holdApplied` — is capped at medical
+boarding demand, which is zero here); the surplus-capping property above; a full-coverage
+input (`edNurses = residualDemand` exactly) produces zero `unmet` and a flat (all-zero)
+`queueDepth`; a heavy-uncovered-boarding scenario producing a genuinely negative
+`effectiveWhppv`, asserted by exact value, not just "is negative"; and the zero-arrivals guard.
+No engine changes elsewhere; `reconcile.test.ts` untouched. This PR has no UI — Panel 5's
+editable grids and prefill buttons are PR G.
