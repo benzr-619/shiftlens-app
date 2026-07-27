@@ -1,7 +1,8 @@
 import { useMemo } from 'react';
 import { useStore } from '../store';
-import { DAY_LABELS } from '../engine/types';
 import type { ShiftDef } from '../engine/types';
+import { DISPLAY_DAY_ORDER, DISPLAY_DAY_LABELS } from '../lib/dayOrder';
+import { NumberCell } from './NumberCell';
 
 /** Shift-menu columns render in startHour order, not upload/creation order — a mid-shift
  * must sit between Day and Night rather than tacking onto the end. Mirrors
@@ -42,16 +43,14 @@ export function CurrentStaffingGrid() {
           </tr>
         </thead>
         <tbody>
-          {DAY_LABELS.map((label, day) => (
+          {DISPLAY_DAY_ORDER.map((day, idx) => (
             <tr key={day}>
-              <td className="day-cell">{label}</td>
+              <td className="day-cell">{DISPLAY_DAY_LABELS[idx]}</td>
               {sortedShiftMenu.map((s) => (
                 <td key={s.id}>
-                  <input
-                    type="number"
-                    min={0}
+                  <NumberCell
                     value={currentStaffingGrid?.[day]?.[s.id] ?? 0}
-                    onChange={(e) => setCurrentStaffingCell(day, s.id, Number(e.target.value))}
+                    onCommit={(next) => setCurrentStaffingCell(day, s.id, next)}
                   />
                 </td>
               ))}

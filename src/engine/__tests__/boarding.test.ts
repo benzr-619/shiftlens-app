@@ -2,12 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { compute } from '../index';
 import {
   annualBoardingCoveredByWeeklyGrid,
+  annualStaffingHoursForWeeklyGrid,
   boardingCoverageFte,
   computeBoarding,
   effectiveEdWhppvAtCoverage,
   recommendWeeklyBoardingGrid,
   weeklyBoardingCoveredByGrid,
   weeklyBoardingDemandByCell,
+  weeklyStaffingHoursForGrid,
 } from '../boarding';
 import type { Grid, ShiftDef } from '../types';
 
@@ -254,6 +256,88 @@ describe('§2.6 single representative-week coverage model', () => {
   });
 });
 
+describe('§2.6.1 staffing FTE vs. coverage FTE (efficiency overhead of fixed-length shift blocks)', () => {
+  it('weeklyStaffingHoursForGrid sums headcount x shift length across the whole grid, uncapped by demand', () => {
+    // day shift is 12h; 2 x day + 1 x night = 2*12 + 1*12 = 36, regardless of any demand.
+    const grid: Grid = { 1: { day: 2, night: 1 }, 3: { day: 1 } };
+    expect(weeklyStaffingHoursForGrid(grid, shiftMenu)).toBeCloseTo(2 * 12 + 1 * 12 + 1 * 12, 6);
+  });
+
+  it('staffing hours count headcount on cells with NO demand slot too — unlike coverage, which ignores them', () => {
+    const demand = new Map([['1::day', 10]]);
+    const grid: Grid = { 1: { day: 1 }, 5: { night: 2 } }; // day5/night has no entry in `demand`
+    const covered = weeklyBoardingCoveredByGrid(grid, demand, shiftMenu); // ignores day5/night entirely
+    const staffed = weeklyStaffingHoursForGrid(grid, shiftMenu); // counts everything staffed
+    expect(covered).toBeCloseTo(10, 6); // min(1*12, 10)
+    expect(staffed).toBeCloseTo(12 + 2 * 12, 6); // 12 (day1) + 24 (night5), no cap
+    expect(staffed).toBeGreaterThan(covered);
+  });
+
+  it('staffing FTE >= coverage FTE whenever a shift block overshoots a cell\'s demand (the general/overlap case)', () => {
+    const arrivals = randomArrivals168(41);
+    const boarding = computeBoarding(arrivals, 0.2, 4, 4, shiftMenu, undefined, undefined)!;
+    const demand = weeklyBoardingDemandByCell(boarding);
+    // Round every cell's demand UP to a whole number of shifts, +1 extra unit, to force a clear
+    // overshoot at every staffed cell (demand is virtually never an exact multiple of 12h).
+    const grid: Grid = {};
+    for (const [key, cellDemand] of demand) {
+      const [dayStr, shiftId] = key.split('::');
+      const len = shiftMenu.find((s) => s.id === shiftId)!.lengthHours;
+      const headcount = Math.ceil(cellDemand / len) + 1;
+      grid[Number(dayStr)] = { ...(grid[Number(dayStr)] ?? {}), [shiftId]: headcount };
+    }
+
+    const coveredAnnual = annualBoardingCoveredByWeeklyGrid(grid, boarding, shiftMenu, null);
+    const staffingAnnual = annualStaffingHoursForWeeklyGrid(grid, boarding, shiftMenu, null);
+    expect(staffingAnnual).toBeGreaterThan(coveredAnnual); // strict overshoot everywhere
+    expect(boardingCoverageFte(staffingAnnual)).toBeGreaterThan(boardingCoverageFte(coveredAnnual));
+  });
+
+  it('staffing FTE == coverage FTE only in the edge case where the grid exactly equals capped per-cell demand', () => {
+    const arrivals = randomArrivals168(42);
+    const boarding = computeBoarding(arrivals, 0.2, 4, 4, shiftMenu, undefined, undefined)!;
+    const demand = weeklyBoardingDemandByCell(boarding);
+
+    // Set headcount to the EXACT (possibly fractional) value that makes headcount x length land
+    // precisely on that cell's demand — no headcount anywhere else. This is the only way
+    // scheduled hours can equal demand-capped hours exactly, since real shift blocks are
+    // discrete and almost never divide demand evenly (hence "edge case", not the normal state).
+    const exactGrid: Grid = {};
+    for (const [key, cellDemand] of demand) {
+      const [dayStr, shiftId] = key.split('::');
+      const len = shiftMenu.find((s) => s.id === shiftId)!.lengthHours;
+      exactGrid[Number(dayStr)] = { ...(exactGrid[Number(dayStr)] ?? {}), [shiftId]: cellDemand / len };
+    }
+
+    const coveredAnnual = annualBoardingCoveredByWeeklyGrid(exactGrid, boarding, shiftMenu, null);
+    const staffingAnnual = annualStaffingHoursForWeeklyGrid(exactGrid, boarding, shiftMenu, null);
+    expect(staffingAnnual).toBeCloseTo(coveredAnnual, 6);
+    expect(boardingCoverageFte(staffingAnnual)).toBeCloseTo(boardingCoverageFte(coveredAnnual), 6);
+
+    // Confirm it's a genuine edge case, not something that holds generally: rounding the SAME
+    // exact-match grid up to whole shift blocks breaks the equality again.
+    const roundedUpGrid: Grid = {};
+    for (const [key, cellDemand] of demand) {
+      const [dayStr, shiftId] = key.split('::');
+      const len = shiftMenu.find((s) => s.id === shiftId)!.lengthHours;
+      roundedUpGrid[Number(dayStr)] = {
+        ...(roundedUpGrid[Number(dayStr)] ?? {}),
+        [shiftId]: Math.ceil(cellDemand / len),
+      };
+    }
+    const coveredRounded = annualBoardingCoveredByWeeklyGrid(roundedUpGrid, boarding, shiftMenu, null);
+    const staffingRounded = annualStaffingHoursForWeeklyGrid(roundedUpGrid, boarding, shiftMenu, null);
+    expect(staffingRounded).toBeGreaterThan(coveredRounded);
+  });
+
+  it('an empty grid has zero staffing FTE and zero coverage FTE (both, not just coverage)', () => {
+    const arrivals = randomArrivals168(43);
+    const boarding = computeBoarding(arrivals, 0.2, 4, 4, shiftMenu, undefined, undefined)!;
+    expect(annualStaffingHoursForWeeklyGrid({}, boarding, shiftMenu, null)).toBe(0);
+    expect(annualBoardingCoveredByWeeklyGrid({}, boarding, shiftMenu, null)).toBe(0);
+  });
+});
+
 describe('Effective ED wHPPV at a given coverage level (ASSUMPTION: linear proportional recovery)', () => {
   it('at 0% coverage, effective wHPPV equals target minus the full amount consumed by boarding', () => {
     expect(effectiveEdWhppvAtCoverage(1.7, 0.3, 0)).toBeCloseTo(1.4, 9);
@@ -293,5 +377,128 @@ describe('Lost-productivity metric (Productivity Target Buffer method)', () => {
     const consumed = result.boarding!.annualBoardingHours / result.annualVisits;
     expect(result.lostProductivity!.wHppvConsumedByBoarding).toBeCloseTo(consumed, 9);
     expect(result.lostProductivity!.wHppvAvailableForEdCare).toBeCloseTo(1.7 - consumed, 9);
+  });
+});
+
+// 2026-07-27 (SETUP_AND_MEASURED_BOARDING_SPEC_2026-07-27.md §3) — the measured boarding
+// path, a new PRIMARY input alongside (not replacing) admitRate/boardingDuration.
+describe('Measured boarding census path', () => {
+  function medCensus168(seedBase: number): number[] {
+    return Array.from({ length: 168 }, (_, i) => 8 + ((i * 13 + seedBase) % 6));
+  }
+  function bhCensus168(seedBase: number): number[] {
+    return Array.from({ length: 168 }, (_, i) => 2 + ((i * 7 + seedBase) % 3));
+  }
+
+  it('conservation holds exactly: sum(cellBoardingRnHours) === sum(census)/ratio (medical only)', () => {
+    const arrivals = randomArrivals168(1);
+    const census = medCensus168(1);
+    const boarding = computeBoarding(arrivals, undefined, undefined, 4, shiftMenu, undefined, undefined, {
+      boardingCensusMedical: census,
+    })!;
+    expect(boarding).not.toBeNull();
+    const total = boarding.cellBoardingRnHours.reduce((a, b) => a + b, 0);
+    const expected = census.reduce((a, b) => a + b, 0) / 4;
+    expect(total).toBeCloseTo(expected, 9);
+    expect(boarding.censusSource).toBe('measured');
+  });
+
+  it('two-stream ratio arithmetic: medical at 1:4 and BH at 1:10 combine correctly per cell', () => {
+    const arrivals = randomArrivals168(2);
+    const med = medCensus168(2);
+    const bh = bhCensus168(2);
+    const boarding = computeBoarding(arrivals, undefined, undefined, 4, shiftMenu, undefined, undefined, {
+      boardingCensusMedical: med,
+      boardingCensusBH: bh,
+      bhBoardingRatioTarget: 10,
+    })!;
+    for (let i = 0; i < 168; i++) {
+      expect(boarding.cellBoardingRnHours[i]).toBeCloseTo(med[i] / 4 + bh[i] / 10, 9);
+    }
+    expect(boarding.medicalWeeklyRnHours).toBeCloseTo(med.reduce((a, b) => a + b, 0) / 4, 9);
+    expect(boarding.bhWeeklyRnHours).toBeCloseTo(bh.reduce((a, b) => a + b, 0) / 10, 9);
+  });
+
+  it('BH census absent => BH contributes zero hours, no NaN, bhWeeklyRnHours === null', () => {
+    const arrivals = randomArrivals168(3);
+    const med = medCensus168(3);
+    const boarding = computeBoarding(arrivals, undefined, undefined, 4, shiftMenu, undefined, undefined, {
+      boardingCensusMedical: med,
+    })!;
+    expect(boarding.bhWeeklyRnHours).toBeNull();
+    expect(boarding.cellBoardingRnHours.every((v) => Number.isFinite(v))).toBe(true);
+    expect(boarding.cellBoardingRnHours.every((v, i) => Math.abs(v - med[i] / 4) < 1e-9)).toBe(true);
+  });
+
+  it('precedence: a measured census present makes admitRate/boardingDuration provably unused', () => {
+    const arrivals = randomArrivals168(4);
+    const med = medCensus168(4);
+    const withOneAdmitRate = computeBoarding(arrivals, 0.1, 3, 4, shiftMenu, undefined, undefined, {
+      boardingCensusMedical: med,
+    })!;
+    const withDifferentAdmitRate = computeBoarding(arrivals, 0.9, 20, 4, shiftMenu, undefined, undefined, {
+      boardingCensusMedical: med,
+    })!;
+    expect(withOneAdmitRate.cellBoardingRnHours).toEqual(withDifferentAdmitRate.cellBoardingRnHours);
+    expect(withOneAdmitRate.annualBoardingHours).toBeCloseTo(withDifferentAdmitRate.annualBoardingHours, 9);
+  });
+
+  it('weighted monthFactors: two opposing-seasonality streams produce a factor between them, weighted toward the higher-RN-hour stream', () => {
+    const arrivals = randomArrivals168(5);
+    // Medical peaks early months, BH peaks late months — genuinely opposing shapes.
+    const medMonthly = Array.from({ length: 12 }, (_, m) => 10 * (1 + 0.5 * Math.cos((m / 12) * 2 * Math.PI)));
+    const bhMonthly = Array.from({ length: 12 }, (_, m) => 10 * (1 - 0.5 * Math.cos((m / 12) * 2 * Math.PI)));
+    // Medical carries far more RN-hour weight (1:4 vs 1:10, and a much bigger census).
+    const med = medCensus168(5).map((v) => v * 5);
+    const bh = bhCensus168(5);
+    const boarding = computeBoarding(arrivals, undefined, undefined, 4, shiftMenu, undefined, undefined, {
+      boardingCensusMedical: med,
+      boardingCensusBH: bh,
+      bhBoardingRatioTarget: 10,
+      monthlyBoardingCensusMedical: medMonthly,
+      monthlyBoardingCensusBH: bhMonthly,
+    })!;
+    expect(boarding.hasMonthlySeasonality).toBe(true);
+    const factors = boarding.monthFactors!;
+    const medIdx = medMonthly.map((v) => v / (medMonthly.reduce((a, b) => a + b, 0) / 12));
+    const bhIdx = bhMonthly.map((v) => v / (bhMonthly.reduce((a, b) => a + b, 0) / 12));
+    // Month 0: medical index is high, BH index is low (opposing) — combined factor must land
+    // strictly between the two, closer to medical since it carries far more RN-hour weight.
+    expect(factors[0]).toBeGreaterThan(bhIdx[0]);
+    expect(factors[0]).toBeLessThan(medIdx[0]);
+    expect(Math.abs(factors[0] - medIdx[0])).toBeLessThan(Math.abs(factors[0] - bhIdx[0]));
+  });
+
+  it('monthly medical census absent => no month dimension at all, even if monthly BH census is provided', () => {
+    const arrivals = randomArrivals168(6);
+    const med = medCensus168(6);
+    const bh = bhCensus168(6);
+    const bhMonthly = Array.from({ length: 12 }, () => 5);
+    const boarding = computeBoarding(arrivals, undefined, undefined, 4, shiftMenu, undefined, undefined, {
+      boardingCensusMedical: med,
+      boardingCensusBH: bh,
+      monthlyBoardingCensusBH: bhMonthly,
+    })!;
+    expect(boarding.hasMonthlySeasonality).toBe(false);
+    expect(boarding.monthFactors).toBeNull();
+  });
+
+  it('weeklyBoardingDemandByCell reads cellBoardingRnHours directly on the measured path (no scope round-trip) and still sums to the weekly total', () => {
+    const arrivals = randomArrivals168(7);
+    const med = medCensus168(7);
+    const boarding = computeBoarding(arrivals, undefined, undefined, 4, shiftMenu, undefined, undefined, {
+      boardingCensusMedical: med,
+    })!;
+    const demand = weeklyBoardingDemandByCell(boarding, shiftMenu);
+    const total = [...demand.values()].reduce((a, b) => a + b, 0);
+    expect(total).toBeCloseTo(boarding.weeklyBoardingHours, 6);
+  });
+
+  it('the derived path is completely unaffected — censusSource is "derived", census fields are null', () => {
+    const arrivals = randomArrivals168(9);
+    const boarding = computeBoarding(arrivals, 0.2, 4, 4, shiftMenu, undefined, undefined)!;
+    expect(boarding.censusSource).toBe('derived');
+    expect(boarding.medicalWeeklyRnHours).toBeNull();
+    expect(boarding.bhWeeklyRnHours).toBeNull();
   });
 });

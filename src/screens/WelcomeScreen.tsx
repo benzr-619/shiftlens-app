@@ -8,10 +8,9 @@ export function WelcomeScreen() {
       <img src="/favicon.svg" alt="ShiftLens" className="welcome-logo" />
       <h1>ShiftLens</h1>
       <p className="subtitle">
-        ShiftLens is an ED RN staffing calculator. Enter your emergency department's
-        arrivals data, a target wHPPV, and your shift menu, and it builds an idealized
-        day-by-shift staffing grid — honestly reporting shortfalls and boarding-driven
-        FTE need instead of hiding them behind an average.
+        You already have a staffing pattern. ShiftLens compares it, hour by hour, to what
+        your ED's demand actually calls for so you can see where it diverges, weigh what
+        changing it would cost or gain, and plan ahead.
       </p>
       <button className="btn-primary btn-large" onClick={() => setScreen('setup')}>
         Start Setup

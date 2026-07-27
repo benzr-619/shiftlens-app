@@ -420,6 +420,95 @@ h1 {
   margin-bottom: 12px;
 }
 
+.dashboard-topbar-actions {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+}
+
+/* PR H — chapter rail layout. Desktop-first (spec §12.3's mobile carve-out: a narrow-viewport
+   top bar is a nice-to-have, not a gate) — below the breakpoint the rail simply stacks above
+   the content instead of sitting beside it, still fully usable via ordinary scrolling. */
+.dashboard-body {
+  display: flex;
+  gap: 32px;
+  align-items: flex-start;
+}
+
+.dashboard-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.chapter-rail {
+  position: sticky;
+  top: 16px;
+  width: 220px;
+  flex-shrink: 0;
+  align-self: flex-start;
+}
+
+.chapter-rail ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-left: 2px solid var(--border);
+}
+
+.chapter-rail-link {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-left: 2px solid transparent;
+  margin-left: -2px;
+  padding: 6px 12px;
+  font-size: 13px;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 0;
+}
+
+.chapter-rail-link:hover {
+  color: var(--text);
+}
+
+.chapter-rail-active {
+  color: var(--accent);
+  border-left-color: var(--accent);
+  font-weight: 600;
+}
+
+@media (max-width: 900px) {
+  .dashboard-body {
+    flex-direction: column;
+  }
+  .chapter-rail {
+    position: static;
+    width: 100%;
+  }
+  .chapter-rail ul {
+    flex-direction: row;
+    flex-wrap: wrap;
+    border-left: none;
+    border-bottom: 2px solid var(--border);
+    padding-bottom: 8px;
+  }
+  .chapter-rail-link {
+    border-left: none;
+    border-bottom: 2px solid transparent;
+    margin-left: 0;
+  }
+  .chapter-rail-active {
+    border-left-color: transparent;
+    border-bottom-color: var(--accent);
+  }
+}
+
 .banner {
   border-radius: 10px;
   padding: 12px 16px;
@@ -436,6 +525,61 @@ h1 {
   background: rgba(240, 168, 168, 0.15);
   border: 1px solid var(--error);
   color: var(--error);
+}
+
+/* PR I — Chapter 9, "How this works." Visually set apart from the narrative chapters above it
+   (spec §8's own instruction: branches are set apart, not styled like another narrative card). */
+.evidence-surface {
+  background: var(--bg-card-muted);
+  border-top: 3px solid var(--border);
+}
+.evidence-surface-body h3 {
+  margin-top: 20px;
+}
+.evidence-surface-body h3:first-child {
+  margin-top: 8px;
+}
+.pipeline-walkthrough li,
+.evidence-surface-body ul li {
+  margin-bottom: 10px;
+  line-height: 1.5;
+}
+.constants-table td,
+.provenance-table td {
+  font-size: 13px;
+  vertical-align: top;
+}
+
+/* PR H (§6.1/§8), 5th revision, 2026-07-27 — the welcome/orientation section at the top of
+   the results page. Deliberately NOT `.card`/`.banner`: no border, a plain/lightly-tinted
+   background, and generous bottom margin so it reads as a distinct welcome rather than
+   another chapter card (`.comparison-unit`, `.current-analysis`, etc. all use `.card`'s
+   bordered look — this must not match it). */
+.results-welcome {
+  background: var(--bg-card-muted);
+  border-radius: 12px;
+  padding: 24px 28px;
+  margin: 8px 0 40px;
+}
+.results-welcome-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.results-welcome-icon {
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+}
+.results-welcome h2 {
+  margin: 0;
+  font-size: 20px;
+}
+.results-welcome p {
+  margin: 0;
+  line-height: 1.6;
+  color: var(--text-muted);
 }
 
 .wHPPV-unit {
@@ -480,6 +624,7 @@ h1 {
 
 .stat-warning { color: var(--warning); }
 .stat-negative { color: var(--error); }
+.stat-muted { color: var(--text-muted); }
 
 .wHPPV-caveat {
   font-size: 13px;
@@ -507,6 +652,62 @@ h1 {
   font-size: 13px;
 }
 
+/* PR J — teaching layer. ConceptCallout reuses .why-toggle/.why-explainer (above); these rules
+   are just the layout wrapper + the one interactive (convexity). */
+.concept-callout-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  margin-top: 10px;
+}
+.concept-callout {
+  flex: 1 1 auto;
+}
+
+.convexity-demo {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 24px;
+  align-items: flex-end;
+  margin-top: 10px;
+}
+.convexity-scenario {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+.convexity-scenario h4 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+.convexity-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  height: 80px;
+}
+.convexity-bar-track {
+  width: 20px;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+  background: var(--bg-card-muted);
+  border-radius: 3px;
+}
+.convexity-bar {
+  width: 100%;
+  background: var(--accent);
+  border-radius: 3px;
+  min-height: 2px;
+}
+.convexity-total {
+  font-size: 13px;
+  margin: 0;
+}
+
 .why-explainer {
   margin-top: 10px;
   padding: 12px 14px;
@@ -520,6 +721,15 @@ h1 {
 
 .why-explainer p:first-child { margin-top: 0; }
 .why-explainer p:last-child { margin-bottom: 0; }
+
+.whppv-explainer {
+  padding: 10px 14px;
+  background: var(--bg-card-muted);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.5;
+}
 
 .shortfall-dot {
   display: inline-block;
@@ -551,6 +761,23 @@ h1 {
   text-align: right;
 }
 
+/* §5: horizontal rules land at each distinct shift-menu start hour, not fixed hour marks —
+   ties the heatmap to the one lever a manager actually controls. */
+.whppv-heatmap tr.shift-boundary td,
+.whppv-heatmap tr.shift-boundary th {
+  border-top: 2px solid var(--accent);
+}
+
+.shift-boundary-label {
+  display: block;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
 .heat-cell-inner {
   position: relative;
   min-height: 20px;
@@ -560,6 +787,8 @@ h1 {
 .heat-cell-value {
   font-variant-numeric: tabular-nums;
   color: var(--text);
+  position: relative;
+  z-index: 1;
 }
 
 .heat-cell-risk {
@@ -574,57 +803,85 @@ h1 {
   line-height: 1;
   font-weight: 700;
   color: var(--error);
+  z-index: 1;
 }
 
-/* §2.4 backlog overlay: amber corner dot on hours still digging out of an earlier hole.
-   Distinct from the red ENA-floor outline/badge so the two can co-occur on one cell. */
-.heat-backlog-dot {
+/* §2 (2026-07-25 legibility rework): backlog is a run of CONSECUTIVE HOURS, which runs
+   vertically down a day column — so its marker is a vertical spine on the cell's left inside
+   edge, not a bottom bar/corner dot (those read as horizontal lines across days, perpendicular
+   to the thing being encoded). top/bottom extend 1px past the cell's own border box so the
+   spine bridges the collapsed table border between vertically adjacent flagged cells — a
+   streak then reads as one continuous bracket, never a stack of separate dashes. Width/opacity
+   are set inline per-cell (proportional to that cell's backlog over the shared backlogMax
+   prop — see WhppvHeatmap.tsx) so a trivial hour is a hairline and a deep hole is a thick,
+   opaque bar; streak length is then legible as the bracket's height, weight as its thickness. */
+.heat-backlog-spine {
   position: absolute;
-  bottom: 1px;
-  left: 2px;
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--warning);
+  left: 0;
+  top: -1px;
+  bottom: -1px;
+  z-index: 0;
 }
 
-.heat-cell-backlog {
-  box-shadow: inset 0 -3px 0 rgba(232, 196, 104, 0.85);
+/* Legend-only swatch: a short static spine sample, not scaled to any real backlog value. */
+.heat-legend-backlog-swatch {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  background: var(--bg-card-muted);
+  border: 1px solid var(--border);
 }
 
-/* Both at once: keep the red safety outline AND the amber backlog bar. */
-.heat-cell-risk.heat-cell-backlog {
-  box-shadow: inset 0 0 0 2px var(--error), inset 0 -3px 0 rgba(232, 196, 104, 0.85);
+.heat-legend-spine {
+  display: inline-block;
+  width: 4px;
+  height: 14px;
+  background: rgba(232, 196, 104, 0.75);
 }
 
 .whppv-heatmap-legend {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 18px;
+  gap: 14px 18px;
   margin-top: 10px;
   font-size: 12px;
   color: var(--text-muted);
 }
 
-.heat-legend-gradient {
+.heat-legend-band {
   display: flex;
   align-items: center;
   gap: 6px;
+  flex-basis: 100%;
 }
 
-.heat-legend-bar {
-  width: 60px;
-  height: 10px;
+.heat-legend-band-text {
+  flex-basis: 100%;
+  font-size: 12px;
+}
+
+.heat-legend-swatch {
+  display: inline-block;
+  width: 16px;
+  height: 12px;
   border: 1px solid var(--border);
-  border-radius: 5px 0 0 5px;
-  background: linear-gradient(to right, rgba(194, 59, 59, 0.65), rgba(194, 59, 59, 0.1));
+  border-radius: 3px;
 }
 
-.heat-legend-bar-richer {
-  border-radius: 0 5px 5px 0;
-  border-left: none;
-  background: linear-gradient(to right, rgba(37, 106, 191, 0.1), rgba(37, 106, 191, 0.65));
+.heat-legend-swatch-lean {
+  background: rgba(194, 59, 59, 0.55);
+}
+
+.heat-legend-swatch-neutral {
+  background: transparent;
+}
+
+.heat-legend-swatch-rich {
+  background: rgba(110, 132, 150, 0.55);
 }
 
 .heat-legend-risk {
@@ -689,6 +946,20 @@ h1 {
   line-height: 1.5;
 }
 
+/* PR G — the finance-partner worksheet's "hand this to your CFO" box. Visually distinct from
+   the surrounding prose (a bordered card-within-a-card) so it reads as something copyable. */
+.finance-worksheet-box {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px 18px;
+  background: var(--bg-card-muted);
+  margin-top: 12px;
+}
+.finance-worksheet-box ul {
+  margin: 6px 0 0;
+  padding-left: 20px;
+}
+
 .reconciliation-callout {
   display: flex;
   flex-wrap: wrap;
@@ -701,7 +972,7 @@ h1 {
 }
 
 /* A subtle left accent cues which gap dominates — not a verdict color, just a pointer. */
-.reconciliation-budget { border-left: 3px solid var(--warning); }
+.reconciliation-size { border-left: 3px solid var(--warning); }
 .reconciliation-shape { border-left: 3px solid var(--accent); }
 .reconciliation-both { border-left: 3px solid var(--error); }
 .reconciliation-none { border-left: 3px solid var(--border); }
@@ -791,7 +1062,103 @@ h1 {
   box-shadow: inset 0 0 0 1px var(--accent);
 }
 
-/* Compare tab */
+/* §2.3 shift-menu flexibility */
+.flex-axes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 20px;
+  margin: 10px 0;
+}
+
+.flex-axis-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.flex-axes-setup {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.flex-axes-setup h3 {
+  font-size: 15px;
+  margin: 0 0 4px;
+}
+
+.flex-candidate {
+  margin: 14px 0;
+  padding: 14px 16px;
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  background: var(--bg-card-muted);
+}
+
+.flex-manual {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.flex-manual h3 {
+  font-size: 15px;
+  margin: 0 0 10px;
+}
+
+.flex-compare-table {
+  border-collapse: collapse;
+  margin: 12px 0;
+  font-size: 14px;
+}
+
+.flex-compare-table th,
+.flex-compare-table td {
+  border: 1px solid var(--border);
+  padding: 6px 14px;
+  text-align: left;
+}
+
+.flex-compare-table thead th {
+  font-weight: 600;
+}
+
+.flex-compare-table td.flex-better {
+  color: var(--success, #2e7d32);
+  font-weight: 700;
+}
+
+.flex-compare-table td.flex-worse {
+  color: var(--error);
+  font-weight: 700;
+}
+
+.volume-band-table {
+  border-collapse: collapse;
+  margin: 16px 0 0;
+  font-size: 14px;
+  width: 100%;
+}
+
+.volume-band-table th,
+.volume-band-table td {
+  border: 1px solid var(--border);
+  padding: 6px 14px;
+  text-align: left;
+}
+
+.volume-band-table thead th {
+  font-weight: 600;
+}
+
+.volume-band-table tr.volume-band-own {
+  background: var(--accent-bg, rgba(124, 58, 237, 0.12));
+  font-weight: 700;
+}
+
+/* Compare tab (legacy) */
 .compare-columns {
   display: flex;
   gap: 16px;
@@ -821,4 +1188,41 @@ h1 {
   margin: 8px 0;
   font-size: 13px;
   color: var(--text-muted);
+}
+
+/* 2026-07-27 guided-setup-walkthrough prompt — entry fork + tutorial flow + boarding fork */
+.entry-fork-cards {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+}
+
+.entry-fork-card {
+  flex: 1 1 240px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.entry-fork-card h3 {
+  margin: 0;
+}
+
+.tutorial-flow .tutorial-item {
+  margin: 16px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.boarding-fork-question,
+.boarding-fork-answer {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 8px;
 }

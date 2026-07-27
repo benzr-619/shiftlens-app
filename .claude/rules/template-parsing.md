@@ -35,7 +35,12 @@ ONE downloadable `.xlsx` (`downloadConsolidatedTemplateXlsx`), four tabs, genera
 doesn't serialize meaningfully into one CSV, so CSV upload only supports the single-tab
 Arrivals/ESI shape (see below).
 
-- **Arrivals** — `Day`, `Hour`, `Average Arrivals`. 168 rows, required.
+- **Arrivals** — `Day`, `Hour`, `Average Arrivals`, `P75 Arrivals`. 168 rows; `Average
+  Arrivals` required, `P75 Arrivals` optional/all-or-nothing (2026-07-26, Phase 2a of
+  `BACKLOG_FEEDBACK_AND_VARIANCE_SPEC_2026-07-25.md` — the busy-hour arrivals count feeding
+  `engine/demandBand.ts`'s demand-volatility buffer; see `.claude/rules/engine-solver.md`'s
+  "Budget-capped trim" section). Deliberately a 4th column on the SAME tab, not a 5th tab —
+  matches the one-consolidated-template rule below.
 - **ESI Mix** — `Day`, `Hour`, `Average ESI 1-2 Count`, `Average ESI 3 Count`, `Average ESI
   4-5 Count`. 168 rows, optional, all-or-nothing (unchanged rule, see below).
 - **Scalars** — `Field`, `Value`. Two rows: `Admit Rate`, `Mean Boarding Duration (hrs)`.
@@ -138,11 +143,34 @@ tolerance.
 - All three live in `DAY_ALIASES`/`MONTH_ALIASES`/`parseHour()` — extend there, not inline
   in a row loop.
 
+## Row emission order is Mon-first (2026-07-25) — display-only, does not affect parsing
+
+`lib/template.ts` now emits rows Mon-Sun (weekend contiguous), not Sun-Sat, in the Arrivals/
+ESI Mix tabs' `hourGridRows()` and the current-staffing template's `staffingRows()` — both
+now loop over the shared `lib/dayOrder.ts`'s `DISPLAY_DAY_ORDER` instead of `0..6`. This is
+**purely a row-emission-order change for the generated template file** — it has zero effect
+on parsing, because this file's whole tolerant-parsing philosophy (top of this file) already
+matches a row to a day by NAME (`DAY_ALIASES` in `parseUpload.ts`, reused by
+`parseStaffingUpload.ts`), never by row position. A legacy Sun-first template a user saved
+before this change re-uploads and parses identically to a freshly-downloaded Mon-first one.
+
+This claim is the thing that makes the display-order change safe, so it's backed by a
+regression test, not just an assertion: `lib/__tests__/parseUpload.test.ts`'s "§4 regression"
+test builds a hand-rolled Sun-first arrivals workbook and a Mon-first one carrying the same
+per-cell values, parses both through `parseXlsxFile`, and asserts the resulting `arrivals`
+arrays are `toEqual` each other. If a future change to the parser ever makes row position
+matter (it shouldn't), this is the test that will catch it. `lib/__tests__/template.test.ts`
+and `lib/__tests__/staffingTemplate.smoke.test.ts` separately assert the generated templates
+themselves are actually Mon-first (a day-block-order check on the generator output, not the
+parser). See CLAUDE.md Section 6's Mon-Sun paragraph and
+`.claude/rules/results-redesign.md`'s heatmap-legibility section (§4) for the full rework.
+
 ## All-or-nothing optional fields
 
-ESI mix (168-row) and both boarding-seasonality totals (12-row / 7-row) are each accepted
-only if **every row in that field's table** has a value — a partially-filled optional
-field is treated as absent (with a warning), not partially applied. Same reasoning as
+ESI mix (168-row), P75 arrivals (168-row, 2026-07-26), and both boarding-seasonality totals
+(12-row / 7-row) are each accepted only if **every row in that field's table** has a
+value — a partially-filled optional field is treated as absent (with a warning), not
+partially applied. Same reasoning as
 always: a sparse optional field is far more likely a data-entry mistake than an intentional
 partial input, and silently half-applying it would violate the "never estimate from a
 placeholder" rule (algorithm spec Section 1.2 / Section 8's admit-rate lesson). Do not
@@ -159,3 +187,251 @@ The generated template (`template.ts`) must never contain example values in any 
 every row ships blank except its label column(s) (Day/Hour, Field, Month/Day of Week).
 This is a hard constraint from the original spec, not just a style choice: no ED-specific
 data (validation or otherwise) may appear as a default anywhere in the shipped product.
+
+## Current-staffing template (2026-07-25) — a SECOND, separate template, not a fifth tab on the consolidated one
+
+`ShiftMenuStep.tsx` (setup Step 3) got its own download-template/upload pair, alongside the
+existing direct-entry `CurrentStaffingGrid`, so a manager with a longer shift menu doesn't
+have to hand-type every cell. This is deliberately NOT a new tab on the consolidated Step-1
+workbook — current staffing depends on the user's `shiftMenu`, which doesn't exist yet at
+Step-1 time (chicken-and-egg), so it can't share that download. It's the narrowest
+exception to "one consolidated template" this file's history section warns about: the
+one-template rule was about not fragmenting a SINGLE step's data entry into multiple
+patterns (that's what caused the 2026-07-14 reversal); this is a different step with a
+different data dependency, reusing the same tolerant-upload conventions rather than
+inventing a new interaction pattern. If a future session is tempted to "fix" this back into
+one big template, it can't — shiftMenu isn't known until Step 3.
+
+- `lib/template.ts`: `generateStaffingTemplateXlsxBlob(shiftMenu)` /
+  `downloadStaffingTemplateXlsx(shiftMenu)` — ONE sheet ("Current Staffing"), columns `Day`,
+  `Shift`, `Start Hour`, `Length (Hrs)`, `Headcount`. 7 × N blank rows (N = shift count),
+  sorted by `startHour` (same convention as everywhere else — CLAUDE.md Section 6). No
+  seeded headcount values, same hard constraint as above.
+- `lib/parseStaffingUpload.ts` (new file, not part of `parseUpload.ts`, since it needs the
+  live `shiftMenu` as a parse-time argument that the other tabs never require):
+  `parseStaffingUploadFile(file, shiftMenu)` → `{ grid?, warnings, errors }`, dispatching
+  `.csv`/`.xlsx` like the main parser. **Matches rows to a shift by `Start Hour` (and
+  `Length (Hrs)` to disambiguate two shifts sharing a start hour) — never by the `Shift`
+  label text.** This means renaming the Shift column's contents doesn't break the upload,
+  which matters because the template's Shift column is filled with whatever `label || id`
+  the user's shift menu happened to have at download time; if they change a shift's label
+  before re-uploading an old copy of the template, the row still resolves correctly off the
+  numeric columns. A row whose Start Hour matches no current shift is skipped with a
+  warning, not silently dropped or misassigned to the nearest shift.
+- Reuses `matchColumn`/`parseDay`/`parseNum`/`isBlankRow` exported from `parseUpload.ts`
+  (promoted from private to exported for this reuse) rather than duplicating the
+  alias-matching machinery — keep using those exports for any future second parser, don't
+  reimplement day/number parsing inline.
+- Store: `setCurrentStaffingGrid(grid)` (new, alongside the existing
+  `setCurrentStaffingCell`) **merges** the parsed grid cell-by-cell onto whatever
+  `currentStaffingGrid` already holds, rather than replacing it wholesale — an upload only
+  touches the day/shift cells it actually populated (blank Headcount cells are skipped by
+  the parser, never written as an explicit 0), so a partial upload doesn't clobber cells
+  entered by hand or a prior upload. This is a different merge policy from `setArrivals`
+  (which fully replaces the array on upload) — arrivals is a single required dataset with
+  no "layer partial uploads over time" use case, whereas current staffing already supports
+  incremental hand-entry via `setCurrentStaffingCell`, so the bulk setter had to compose
+  with that instead of fighting it.
+- UI (`ShiftMenuStep.tsx`): download/upload buttons sit above the existing
+  `CurrentStaffingGrid`, same visual pattern as `DataStep.tsx`'s buttons (`.button-row`,
+  `.upload-msgs`/`.msg-error`/`.msg-warning`) — both buttons disabled when `shiftMenu` is
+  empty, since there's nothing to key the template's Start Hour/Length columns off of. The
+  grid stays visible and directly editable at all times (unlike `DataStep`'s
+  collapsed-by-default `ArrivalsGrid`) — it's small enough (7 × shift-count cells) that
+  hiding it added no value and it doubles as the immediate touch-up surface right after an
+  upload.
+- Tests: `lib/__tests__/staffingTemplate.smoke.test.ts` — blank-template shape/no-seeded-values,
+  round-trip parse, renamed-Shift-label tolerance (proves the numeric-column matching claim
+  above), missing-required-columns error path.
+
+## The Boarding Census tab + measured boarding path (2026-07-27)
+
+`SETUP_AND_MEASURED_BOARDING_SPEC_2026-07-27.md` added a fifth consolidated-template tab,
+**Boarding Census** (`Day`, `Hour`, `Medical Boarding Census`, `BH Boarding Census`,
+`Pre-Bed-Request Census`) — 168 rows, each column independently all-or-nothing, same rule as
+ESI mix/P75 arrivals. This is the new PREFERRED boarding input, read exclusively by
+`computeBoarding`'s measured path when `boardingCensusMedical` is present (ignoring
+`admitRate`/`boardingDuration` entirely — no blending). The derived path (admit rate + mean
+boarding duration, Scalars tab) is UNCHANGED and stays the fallback. See
+`.claude/rules/boarding-seasonality.md`'s measured-path section for the full engine detail.
+
+**Precise, load-bearing definition — not a paraphrase:** patients physically in the ED who
+have a bed request placed and no inpatient bed assigned, counted at each hour. There is
+deliberately **no arrival-clocked variant and no clock-start setting**. A department that
+can't produce exactly that uses the admit-rate/boarding-duration fallback instead — two
+clean paths, no hybrid, and the user must never be shown both the census grid and the
+admit-rate fields at once (`BoardingFork.tsx`'s tri-state `boardingPath` selector).
+
+**Parser:** `looksLikeBoardingCensusSheet` + `BOARDING_CENSUS_HEADER_ALIASES`, checked
+*before* the generic Arrivals/ESI detector in `parseXlsxFile`'s elif chain (both shapes share
+a Day+Hour column pair — the more specific detector must win or a Boarding Census tab
+misclassifies as an empty Arrivals/ESI tab). The Boarding Seasonality tab also gained two
+monthly census columns (`Mean Medical/BH Boarding Census by Month`) alongside its existing
+duration-mean columns — the census columns win when both are present, same precedence as the
+hourly tab.
+
+## REVERSAL (2026-07-27, same day): a Settings tab was built, then removed
+
+A prior pass in this same session added a sixth tab, **Settings** (`Setting`, `Value`) —
+wHPPV target, both boarding ratios, ENA floor, LWBS rate, and a `boardingCensusClockStart`
+field — carrying policy values through the upload. **This was wrong and was reverted.** It
+violated the standing rule, already documented above, that `boardingRatioTarget` is "the one
+typed policy field that stays [in the UI], since it's a policy choice, not data to pull" —
+adding five more policy fields to the upload was the exact inconsistency that rule exists to
+prevent, just re-introduced through a new tab instead of new typed fields.
+
+**The rule going forward: the uploaded file carries DATA. Policy values (wHPPV target,
+boarding ratios, ENA floor, LWBS rate) are set in the UI, never parsed from a workbook.**
+`SETTINGS_HEADER_ALIASES`/`SETTINGS_FIELD_ALIASES`/`looksLikeSettingsSheet`/`rowsToSettings`
+and the Settings sheet generator are gone from `lib/parseUpload.ts`/`lib/template.ts` — don't
+reintroduce a settings-values parse path without checking first. The two boarding ratios live
+in `ShiftMenuStep.tsx`'s "Boarding Staffing Ratios" card (store `boardingRatioTarget`/
+`bhBoardingRatioTarget`, defaults 4/10) — this is where `boardingRatioTarget` already lived
+before this session; `bhBoardingRatioTarget` was added alongside it, not moved from anywhere.
+
+The `boardingCensusClockStart` field (and its "counted from arrival, here's a caveat"
+compromise) was deleted for the same reason described above — see the measured-path section
+of `.claude/rules/boarding-seasonality.md` for why a caveat beside a wrong number wasn't an
+acceptable fix and why there's no clock-start setting at all now.
+
+## Bug fix (2026-07-27): staffing upload now recovers shifts it doesn't recognize, instead of silently skipping them
+
+Found via a real upload: `TutorialFlow.tsx`'s "Current staffing" tutorial item was rendering
+the generic `UploadRow` (download/upload for the CONSOLIDATED arrivals/ESI/boarding template)
+wired to the STAFFING parser (`handleStaffingFile`) — its download button gave the wrong file
+shape entirely. Fixed by giving that step its own dedicated upload control (paired with the
+already-correct `downloadStaffingTemplateXlsx` button), same pattern as `ShiftMenuStep.tsx`.
+
+Separately, and worth keeping regardless of the above: a staffing template row already fully
+specifies a shift (`Start Hour` + `Length (Hrs)` columns), so a row whose combination doesn't
+match anything in the current `shiftMenu` isn't necessarily bad data — it's a shift the app
+doesn't know about yet (e.g. downloaded against an old 2-shift menu, filled in for a 3rd "Mid"
+shift the user added later, or uploaded during the tutorial before Step 3's shift menu is even
+set). `rowsToStaffingGrid` (`lib/parseStaffingUpload.ts`) now does a first pass collecting
+distinct `(startHour, lengthHours)` pairs that don't match `shiftMenu`, builds a `ShiftDef` for
+each (id `uploaded-shift-N`, label from the row's `Shift` column text if present — read for
+labeling ONLY, matching itself is still exclusively by Start Hour/Length, unchanged), and
+matches the actual grid rows against `shiftMenu` extended with those. Returns them as
+`ParsedStaffingUpload.newShifts`; both `ShiftMenuStep.tsx` and `TutorialFlow.tsx` call
+`setShiftMenu([...shiftMenu, ...parsed.newShifts])` before applying the grid. A row still
+warns-and-skips only when it has NO Length column at all to recover a full shift definition
+from. Tests in `lib/__tests__/staffingTemplate.smoke.test.ts`'s new describe block.
+
+## Export extended (2026-07-27, same day): current-staffing grid + "Setup Decisions" tab
+
+Ben's follow-up ask: the export was missing the current-staffing grid entirely (a real
+persistence gap — re-importing on the 'returning' path left `shiftMenu` at its default and
+`currentStaffingGrid` at `null`) and any record of workflow decisions made while going through
+the guided walkthrough (the boarding fork's answer, headcount semantics, which flex axes were
+explored) — those had to be re-answered on every re-import even though the underlying data
+reloaded fine.
+
+- **Current Staffing tab** — `lib/template.ts`'s `staffingRows(shiftMenu, grid?)` now takes an
+  optional grid (same function serves the blank staffing template AND this export, like
+  `hourGridRows` already does for the hourly tabs). Written into the SAME exported workbook as
+  its own "Current Staffing" tab (only when a non-empty `shiftMenu` is passed) — same shape as
+  the standalone staffing template (`generateStaffingTemplateXlsxBlob`), so
+  `parseStaffingUploadFile` reads it unchanged. On re-import (`SetupEntryFork.tsx`'s
+  'returning' path), `parseStaffingUploadFile` is called a SECOND time against the same file
+  (alongside `parseUploadFile`) — passing the still-default `shiftMenu` is fine, since the
+  tab's own Start Hour/Length columns fully specify each shift and get recovered via the
+  shift-recovery fix (previous section) regardless of what menu was passed in. A missing
+  Current Staffing tab (e.g. no current staffing was ever entered) is treated as an expected,
+  silent case — only its warnings surface when a tab WAS found, its errors never do (a
+  "no recognizable tab" error there would misleadingly read as a problem with the whole
+  import).
+- **Setup Decisions tab** — NEW, `Decision`/`Value` shaped (deliberately NOT `Field`/`Setting`,
+  so it can't collide with Scalars or resurrect the reverted Settings-tab shape). Carries
+  `boardingPath` (`census`/`classic`/`skip`), `headcountIncludesIndirectCare` (yes/no),
+  `indirectCareUpliftPct`, and the three `flexAxes` booleans. **This is deliberately NOT a
+  reversal of the Settings-tab decision above** — the distinction: Settings carried TOOL-WIDE
+  POLICY (wHPPV target, both boarding ratios, ENA floor, LWBS rate) that stays a fresh UI
+  decision every setup pass; Setup Decisions carries PER-DATASET WORKFLOW ANSWERS — how THIS
+  department's data should be read, which is closer to data-about-the-department than an
+  adjustable tool default. wHPPV target/ratios/ENA floor/LWBS rate still never appear in any
+  exported file. Parsed by `lib/parseUpload.ts`'s `rowsToDecisions`/`looksLikeDecisionsSheet`,
+  wired into `parseXlsxFile`'s normal dispatch (not a second parser call, unlike staffing).
+- Both are additive to `ExportableSetupData`/`ParsedUpload` — `ReviewStep.tsx`'s export button
+  now passes `shiftMenu`/`currentStaffingGrid`/`boardingPath`/`headcountIncludesIndirectCare`/
+  `indirectCareUpliftPct`/`flexAxes` alongside the existing data fields.
+- Tests: `lib/__tests__/exportRoundTrip.test.ts` gained a describe covering the staffing-grid
+  round-trip (via a SECOND `parseStaffingUploadFile` call, shifts recovered from an EMPTY
+  passed-in menu — proving the whole export->reimport path works, not just a hand-built
+  upload) and the decisions round-trip, plus updated the "no policy values" test to assert the
+  Setup Decisions tab exists but Settings/Current-Staffing don't (when not applicable).
+
+## Fix (2026-07-27, same day): "Current staffing" removed as a tutorial item — one or the other, not both
+
+`TutorialFlow.tsx` originally had SIX items, including "Current staffing" as item 2 — shown
+BEFORE the outer wizard's Step 2 (`ShiftMenuStep.tsx`), which also has its own "Your current
+staffing" card (`CurrentStaffingGrid` + staffing template download/upload). Duplicative in the
+UI, and actively worse than duplicative: `CurrentStaffingGrid`'s columns ARE the shift menu,
+which doesn't exist in its real form yet at tutorial time (still whatever the default 2-shift
+placeholder is) — anything entered there could silently orphan itself once the user actually
+customizes their menu on Step 2. **Removed entirely from the tutorial** — current staffing now
+lives ONLY on `ShiftMenuStep.tsx`, which is the right place for it (shift menu already
+finalized by then). `TutorialFlow.tsx` is down to FIVE items (0-4): Arrivals, Busy-hour
+arrivals, Boarding, Boarding seasonality, ESI mix. `store.ts`'s `tutorialStep` clamp and
+`TUTORIAL_STEP_LABELS` were updated to match — if a future session is tempted to add current
+staffing back to the tutorial, put it on `ShiftMenuStep.tsx`'s side or delete that card first,
+don't have both again.
+
+## Guided setup walkthrough (2026-07-27) — supersedes the old single-page DataStep.tsx
+
+`DataStep.tsx` (the old single-page "download template / upload / explainer list / manual
+grid" step) is **deleted**. Setup now opens on `SetupEntryFork.tsx` — three cards
+(`setupMode: 'tutorial' | 'colleague' | 'returning'`) — before any data entry:
+
+- **'tutorial'** → `TutorialFlow.tsx`, a one-item-per-screen guided sub-wizard (own
+  `tutorialStep` 0-5, own Back/Next/Skip controls) occupying the outer 4-step wizard's Step 0
+  slot. Six items: Arrivals (required) → Current staffing → Busy-hour arrivals → Boarding
+  (forked, see below) → Boarding seasonality → ESI mix. Each item follows the same four-part
+  structure: what this is / what to pull / enter it (upload the consolidated template, or
+  type into a grid — both always available) / skip (one line naming what's lost, disabled on
+  the required item). Once inside, there is **no "ask a colleague" escape hatch** — linear.
+- **'colleague'** → `ColleagueRequestPage.tsx` — the expanded "copy this for your data team"
+  block (all six items' exact definitions + template download), plus an upload control for
+  when the data comes back. Occupies the same Step 0 slot, but uses the OUTER wizard's normal
+  Back/Next chrome (it isn't itself multi-step).
+- **'returning'** → handled entirely inside `SetupEntryFork.tsx` itself: upload a previously
+  exported file (see the export section below), then jump straight to `setSetupStep(3)`
+  (Review) — Step 0 is never rendered for this path.
+
+`SetupScreen.tsx` hides its own StepIndicator/Back/Next row whenever
+`setupMode === 'tutorial' && setupStep === 0` (`TutorialFlow` owns that chrome for itself);
+every other step/mode combination uses the outer wizard's normal controls unchanged.
+
+**The boarding fork** (`BoardingFork.tsx`, tutorial item 4) asks ONE question before showing
+any boarding input: "Can you get a boarding census report from bed management?" — Yes → the
+census grid(s) (medical, optionally BH); No → typed admit-rate/mean-boarding-duration number
+fields (a deliberate, scoped exception to "no typed fields for report-sourced numbers" — see
+below); Skip → boarding withheld, states plainly that this hides roughly half the department's
+demand. `boardingPath` is a tri-state store field precisely so the user can never see both the
+census grid and the admit-rate fields at once.
+
+**Scoped exception, flagged explicitly:** the boarding fork's "No" branch puts typed number
+inputs for admit rate and mean boarding duration directly in the UI — the first typed
+scalar-data fields since the 2026-07-14 "no typed fields for report-sourced numbers, everything
+comes from the template" rule. This is intentional, from the governing prompt itself, not a
+drift: admit rate/duration are two single numbers with no natural grid shape, "type into the
+grid" doesn't apply to a scalar, and the template-upload path (Scalars tab) still works
+identically alongside it — both write to the same `admitRate`/`boardingDuration` store fields.
+Don't read this as license to add typed fields for anything else that has a template column.
+
+## Data export round-trip (Part 3, 2026-07-27) — the app's only form of persistence
+
+`ReviewStep.tsx`'s "Download my data file" button calls
+`lib/template.ts`'s `generateFilledConsolidatedTemplateXlsxBlob(data)` /
+`downloadFilledConsolidatedTemplateXlsx(data)` — the SAME tab-generation functions
+(`hourGridRows`/`seasonalityRows`/`scalarsRows`/`boardingCensusRows`) the blank template uses,
+now fed real values instead of blanks, so the exported file has exactly the shape
+`parseXlsxFile` already parses — no second exporter, no drift risk. **Data only** — same rule
+as the Settings-tab reversal above: no wHPPV target, no boarding ratios, no ENA floor written
+here; on re-upload (`SetupEntryFork`'s 'returning' path) the user still sets those three
+policy fields in the UI (2-3 fields, defaulted). Round-trip correctness is the ENTIRE value of
+this feature, so it's tested directly (`lib/__tests__/exportRoundTrip.test.ts`): build a full
+dataset (arrivals/P75/ESI/medical+BH census/seasonality/scalars/pre-bed-request) → export →
+re-parse via `parseXlsxFile` → assert byte-for-byte equality with the original arrays, plus a
+minimal arrivals-only case proving every absent optional field stays absent (not falsely
+populated by blank-cell parsing), plus a sheet-name assertion that no Settings sheet is ever
+written.

@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "papaparse": "^5.5.4",
+    "pptxgenjs": "^4.0.1",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "xlsx": "^0.18.5",

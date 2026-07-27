@@ -1,14 +1,8 @@
 import { create } from 'zustand';
 import type { EngineInputs, EsiMix, Grid, ShiftDef } from './engine/types';
-import { compute, recomputeAfterEdit, type EngineResult } from './engine';
+import { compute, recomputeAfterEdit, NO_FLEX, type EngineResult, type FlexAxes } from './engine';
 
 export type Screen = 'welcome' | 'setup' | 'dashboard';
-
-export interface CompareVariant {
-  id: string;
-  name: string;
-  shiftMenu: ShiftDef[];
-}
 
 interface StoreState {
   screen: Screen;
@@ -16,6 +10,10 @@ interface StoreState {
 
   // Section 1 inputs
   arrivals: number[]; // 168 cells, all zero until user provides data
+  // 2026-07-26 (Phase 2a): optional busy-hour (p75) arrivals, all-or-nothing, template-only.
+  // null until provided; feeds engine/demandBand.ts's demand-volatility buffer only — never
+  // annualVisits/hourlyRequirement. See .claude/rules/template-parsing.md.
+  arrivalsP75: number[] | null;
   annualVisitsOverride: number | null;
   wHppvTarget: number;
   wHppvTouched: boolean; // false until user edits away from the cohort-benchmark pre-fill
@@ -32,6 +30,27 @@ interface StoreState {
   monthlyMeanBoardingDurationHours: number[] | null; // 12 mean-duration-per-patient values (Jan-Dec) or null; all-or-nothing
   dayOfWeekMeanBoardingDurationHours: number[] | null; // 7 mean-duration-per-patient values (Sun-Sat) or null; all-or-nothing
 
+  // 2026-07-27 (SETUP_AND_MEASURED_BOARDING_SPEC_2026-07-27.md) — the measured boarding
+  // census path, a new PRIMARY input alongside (not replacing) admitRate/boardingDuration
+  // above. Populated by the guided walkthrough's boarding fork (census branch) or by
+  // uploading the Boarding Census tab of the consolidated template. See
+  // .claude/rules/boarding-seasonality.md's measured-path section.
+  boardingCensusMedical: number[] | null;
+  boardingCensusBH: number[] | null;
+  monthlyBoardingCensusMedical: number[] | null;
+  monthlyBoardingCensusBH: number[] | null;
+  bhBoardingRatioTarget: number; // policy setting, default 10 (1:10) — see the Settings card
+  preBedRequestCensus: number[] | null; // §7 validation-only diagnostic input, optional
+
+  // 2026-07-27 — guided setup walkthrough entry fork + tutorial state. `setupMode` is null
+  // until the user picks a path on the entry fork; once inside 'tutorial' there is no
+  // "ask a colleague" escape hatch (a linear guided flow). `boardingPath` is the tutorial's
+  // boarding-fork answer — the user must never see both the census grid and the admit-rate
+  // fields at once, so this is a tri-state selector, not two independent booleans.
+  setupMode: 'tutorial' | 'colleague' | 'returning' | null;
+  tutorialStep: number; // 0-4, one of the five guided-walkthrough items (current staffing isn't one — see TutorialFlow.tsx's header comment)
+  boardingPath: 'census' | 'classic' | 'skip' | null;
+
   // manual grid edits layered on top of the last solve
   gridOverride: Grid | null;
 
@@ -41,11 +60,26 @@ interface StoreState {
   // CoreGridTab.tsx's "Current staffing" section.
   currentStaffingGrid: Grid | null;
 
-  compareVariants: CompareVariant[];
+  // §2.3 shift-menu flexibility preferences — which axes the user is open to the solver
+  // searching for a more efficient alternate menu. Captured at setup (ShiftMenuStep) and
+  // also adjustable on the results page (ShiftMenuFlexibilitySection). Default all-off
+  // (static: the idealized grid uses the user's current menu, never a silent substitute).
+  flexAxes: FlexAxes;
+
+  // 2026-07-26 PR D (SOLVER_REALISM_SPEC_2026-07-26.md, change 7) — headcount semantics, ONE
+  // setup question, not role-level modeling. Both null until the user answers (no ED-specific
+  // default). DISPLAY-ONLY: neither field is threaded into EngineInputs/compute() — they never
+  // change hourlyRequirement, the grid, the ENA floor, or any solved number. They only drive a
+  // plain-language caveat on the results page ("your headcount includes charge/triage, so a
+  // reported '5' is fewer bedside RNs than it looks like") — see CoreGridTab.tsx. Do NOT wire
+  // these into the engine; that would be the role-level modeling the spec explicitly declined.
+  headcountIncludesIndirectCare: boolean | null;
+  indirectCareUpliftPct: number | null; // 0-100, e.g. 15 for "15% of headcount is charge/triage/etc."
 
   setScreen: (s: Screen) => void;
   setSetupStep: (step: number) => void;
   setArrivals: (a: number[]) => void;
+  setArrivalsP75: (a: number[] | null) => void;
   setAnnualVisitsOverride: (v: number | null) => void;
   setWHppvTarget: (v: number, touched?: boolean) => void;
   setShiftMenu: (m: ShiftDef[]) => void;
@@ -55,13 +89,23 @@ interface StoreState {
   setBoardingRatioTarget: (v: number) => void;
   setMonthlyMeanBoardingDurationHours: (v: number[] | null) => void;
   setDayOfWeekMeanBoardingDurationHours: (v: number[] | null) => void;
+  setBoardingCensusMedical: (v: number[] | null) => void;
+  setBoardingCensusBH: (v: number[] | null) => void;
+  setMonthlyBoardingCensusMedical: (v: number[] | null) => void;
+  setMonthlyBoardingCensusBH: (v: number[] | null) => void;
+  setBhBoardingRatioTarget: (v: number) => void;
+  setPreBedRequestCensus: (v: number[] | null) => void;
+  setSetupMode: (m: 'tutorial' | 'colleague' | 'returning' | null) => void;
+  setTutorialStep: (n: number) => void;
+  setBoardingPath: (p: 'census' | 'classic' | 'skip' | null) => void;
   editGridCell: (day: number, shiftId: string, headcount: number) => void;
   resetGridOverride: () => void;
   setCurrentStaffingCell: (day: number, shiftId: string, headcount: number) => void;
+  setCurrentStaffingGrid: (grid: Grid) => void;
   resetCurrentStaffingGrid: () => void;
-  addCompareVariant: (v: CompareVariant) => void;
-  removeCompareVariant: (id: string) => void;
-  updateCompareVariant: (id: string, menu: ShiftDef[]) => void;
+  setFlexAxis: (axis: keyof FlexAxes, value: boolean) => void;
+  setHeadcountIncludesIndirectCare: (v: boolean | null) => void;
+  setIndirectCareUpliftPct: (v: number | null) => void;
 
   buildEngineInputs: () => EngineInputs;
   getResult: () => EngineResult;
@@ -83,6 +127,7 @@ export const useStore = create<StoreState>((set, get) => ({
   screen: 'welcome',
   setupStep: 0,
   arrivals: new Array(168).fill(0),
+  arrivalsP75: null,
   annualVisitsOverride: null,
   wHppvTarget: 1.7,
   wHppvTouched: false,
@@ -96,13 +141,25 @@ export const useStore = create<StoreState>((set, get) => ({
   boardingRatioTarget: 4,
   monthlyMeanBoardingDurationHours: null,
   dayOfWeekMeanBoardingDurationHours: null,
+  boardingCensusMedical: null,
+  boardingCensusBH: null,
+  monthlyBoardingCensusMedical: null,
+  monthlyBoardingCensusBH: null,
+  bhBoardingRatioTarget: 10,
+  preBedRequestCensus: null,
+  setupMode: null,
+  tutorialStep: 0,
+  boardingPath: null,
   gridOverride: null,
   currentStaffingGrid: null,
-  compareVariants: [],
+  flexAxes: { ...NO_FLEX },
+  headcountIncludesIndirectCare: null,
+  indirectCareUpliftPct: null,
 
   setScreen: (s) => set({ screen: s }),
   setSetupStep: (step) => set({ setupStep: Math.max(0, Math.min(3, step)) }),
   setArrivals: (a) => set({ arrivals: a, gridOverride: null }),
+  setArrivalsP75: (a) => set({ arrivalsP75: a }),
   setAnnualVisitsOverride: (v) => set({ annualVisitsOverride: v }),
   setWHppvTarget: (v, touched = true) => set({ wHppvTarget: v, wHppvTouched: touched }),
   setShiftMenu: (m) => set({ shiftMenu: m, gridOverride: null }),
@@ -112,6 +169,15 @@ export const useStore = create<StoreState>((set, get) => ({
   setBoardingRatioTarget: (v) => set({ boardingRatioTarget: v }),
   setMonthlyMeanBoardingDurationHours: (v) => set({ monthlyMeanBoardingDurationHours: v }),
   setDayOfWeekMeanBoardingDurationHours: (v) => set({ dayOfWeekMeanBoardingDurationHours: v }),
+  setBoardingCensusMedical: (v) => set({ boardingCensusMedical: v }),
+  setBoardingCensusBH: (v) => set({ boardingCensusBH: v }),
+  setMonthlyBoardingCensusMedical: (v) => set({ monthlyBoardingCensusMedical: v }),
+  setMonthlyBoardingCensusBH: (v) => set({ monthlyBoardingCensusBH: v }),
+  setBhBoardingRatioTarget: (v) => set({ bhBoardingRatioTarget: v }),
+  setPreBedRequestCensus: (v) => set({ preBedRequestCensus: v }),
+  setSetupMode: (m) => set({ setupMode: m }),
+  setTutorialStep: (n) => set({ tutorialStep: Math.max(0, Math.min(4, n)) }), // 0-4, five guided-walkthrough items (current staffing lives on ShiftMenuStep only, not a tutorial item)
+  setBoardingPath: (p) => set({ boardingPath: p }),
 
   editGridCell: (day, shiftId, headcount) => {
     const state = get();
@@ -127,12 +193,23 @@ export const useStore = create<StoreState>((set, get) => ({
     const next: Grid = { ...base, [day]: { ...base[day], [shiftId]: Math.max(0, headcount) } };
     set({ currentStaffingGrid: next });
   },
+  // Merges cell-by-cell onto the existing grid (uploaded template rows may only cover a
+  // subset of day/shift cells, same partial-upload tolerance as everywhere else) rather
+  // than replacing it wholesale — an upload only touches the cells it actually populated.
+  setCurrentStaffingGrid: (grid) => {
+    const state = get();
+    const base = state.currentStaffingGrid ?? {};
+    const next: Grid = { ...base };
+    for (const [day, shifts] of Object.entries(grid)) {
+      next[Number(day)] = { ...next[Number(day)], ...shifts };
+    }
+    set({ currentStaffingGrid: next });
+  },
   resetCurrentStaffingGrid: () => set({ currentStaffingGrid: null }),
 
-  addCompareVariant: (v) => set((s) => ({ compareVariants: [...s.compareVariants, v] })),
-  removeCompareVariant: (id) => set((s) => ({ compareVariants: s.compareVariants.filter((v) => v.id !== id) })),
-  updateCompareVariant: (id, menu) =>
-    set((s) => ({ compareVariants: s.compareVariants.map((v) => (v.id === id ? { ...v, shiftMenu: menu } : v)) })),
+  setFlexAxis: (axis, value) => set((s) => ({ flexAxes: { ...s.flexAxes, [axis]: value } })),
+  setHeadcountIncludesIndirectCare: (v) => set({ headcountIncludesIndirectCare: v }),
+  setIndirectCareUpliftPct: (v) => set({ indirectCareUpliftPct: v }),
 
   buildEngineInputs: () => {
     const s = get();
@@ -143,11 +220,18 @@ export const useStore = create<StoreState>((set, get) => ({
       shiftMenu: s.shiftMenu,
       boardingRatioTarget: s.boardingRatioTarget,
     };
+    if (s.arrivalsP75) inputs.arrivalsP75 = s.arrivalsP75;
     if (s.esiMix) inputs.esiMix = s.esiMix;
     if (s.admitRate !== null) inputs.admitRate = s.admitRate;
     if (s.boardingDuration !== null) inputs.boardingDuration = s.boardingDuration;
     if (s.monthlyMeanBoardingDurationHours) inputs.monthlyMeanBoardingDurationHours = s.monthlyMeanBoardingDurationHours;
     if (s.dayOfWeekMeanBoardingDurationHours) inputs.dayOfWeekMeanBoardingDurationHours = s.dayOfWeekMeanBoardingDurationHours;
+    if (s.boardingCensusMedical) inputs.boardingCensusMedical = s.boardingCensusMedical;
+    if (s.boardingCensusBH) inputs.boardingCensusBH = s.boardingCensusBH;
+    if (s.monthlyBoardingCensusMedical) inputs.monthlyBoardingCensusMedical = s.monthlyBoardingCensusMedical;
+    if (s.monthlyBoardingCensusBH) inputs.monthlyBoardingCensusBH = s.monthlyBoardingCensusBH;
+    if (s.boardingCensusMedical) inputs.bhBoardingRatioTarget = s.bhBoardingRatioTarget;
+    if (s.preBedRequestCensus) inputs.preBedRequestCensus = s.preBedRequestCensus;
     return inputs;
   },
 

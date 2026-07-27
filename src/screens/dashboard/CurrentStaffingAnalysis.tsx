@@ -1,9 +1,11 @@
 import { useMemo, useState } from 'react';
 import { useStore } from '../../store';
 import type { ShiftDef } from '../../engine/types';
-import { computeBacklog } from '../../engine';
-import { lookupWhppvBand } from '../../lib/edbaLookup';
-import { EvidenceBadge } from '../../components/EvidenceBadge';
+import { DAY_LABELS } from '../../engine/types';
+import { computeBacklog, BACKLOG_CAUGHT_UP_THRESHOLD } from '../../engine';
+import { coverageForDay } from '../../engine/solver';
+import { WhppvHeatmap, type WhppvHeatmapCell } from '../../components/WhppvHeatmap';
+import type { WhppvColorDomain } from '../../lib/whppvColorDomain';
 
 function sortByStartHour(shifts: ShiftDef[]): ShiftDef[] {
   return [...shifts].sort((a, b) => a.startHour - b.startHour);
@@ -21,7 +23,13 @@ function fmtHour(h: number): string {
  * the page proceeds to the idealized recommendation below. Templated headline + stat cards,
  * per the Section 2 design pattern.
  */
-export function CurrentStaffingAnalysis() {
+export function CurrentStaffingAnalysis({
+  colorDomain,
+  backlogMax,
+}: {
+  colorDomain: WhppvColorDomain;
+  backlogMax: number;
+}) {
   const { shiftMenu, arrivals, currentStaffingGrid, getResult, getCurrentStaffingResult } = useStore();
 
   const result = getResult();
@@ -56,9 +64,8 @@ export function CurrentStaffingAnalysis() {
     );
   }
 
-  const band = lookupWhppvBand(result.annualVisits);
   const realized = current.realizedWHppv;
-  const position = realized < band.p25Whppv ? 'below' : realized > band.p75Whppv ? 'above' : 'within';
+  const position = realized < colorDomain.low ? 'below' : realized > colorDomain.high ? 'above' : 'within';
   const positionWord = position === 'within' ? 'within' : position === 'below' ? 'below' : 'above';
 
   // Weekly realized-wHPPV range for the CURRENT grid — same scaling approach as CoreGridTab's
@@ -95,29 +102,88 @@ export function CurrentStaffingAnalysis() {
     inheritorPool.length > 0 ? inheritorPool.reduce((a, b) => (b.inheritedBacklog > a.inheritedBacklog ? b : a)) : null;
   const hasMeaningfulBacklog = backlog.peakBacklog >= 1;
 
+  // 2026-07-26 PR D (SOLVER_REALISM_SPEC_2026-07-26.md, change 5): the backlog headline must
+  // state WHEN — "six hours" is unactionable, "Friday 16:00 through 22:00" is a staffing
+  // decision. computeBacklog already returns longestStreakStart; this is the first consumer
+  // that actually reads it (previously computed and discarded). Reframed in waiting-room
+  // terms — backlog is un-started front-loaded arrival work, the direct antecedent of LWBS
+  // (see SOLVER_REALISM_SPEC_2026-07-26.md's governing premise).
+  const streakStart = backlog.longestStreakStart;
+  const streakStartLabel = streakStart ? `${DAY_LABELS[streakStart.day]} ${fmtHour(streakStart.hour)}` : null;
+  const streakEndLabel =
+    streakStart && streak > 0
+      ? fmtHour((streakStart.hour + streak) % 24)
+      : null;
+  const peakAtLabel = backlog.peakAt ? `${DAY_LABELS[backlog.peakAt.day]} ${fmtHour(backlog.peakAt.hour)}` : null;
+
   let backlogClause: string;
   if (backlog.neverClears) {
     backlogClause = 'and it never fully catches up — demand runs ahead of staffing every hour of the week';
-  } else if (streak >= 2 && hasMeaningfulBacklog) {
+  } else if (streak >= 2 && hasMeaningfulBacklog && streakStartLabel) {
     backlogClause =
-      `and when it falls behind, the hole persists for up to ${streak} hours before clearing` +
-      (clearHour !== null ? ` (typically around ${fmtHour(clearHour)})` : '');
+      `and when it falls behind — starting around ${streakStartLabel}${
+        streakEndLabel ? ` and running roughly through ${streakEndLabel}` : ''
+      } — the queue of un-started arrival work builds for up to ${streak} hours before clearing` +
+      (clearHour !== null ? ` (typically around ${fmtHour(clearHour)})` : '') +
+      (peakAtLabel && backlog.peakBacklog >= 1
+        ? `, peaking around ${backlog.peakBacklog.toFixed(0)} nurse-hours queued by ${peakAtLabel} — about where patients start leaving without being seen`
+        : '');
   } else {
     backlogClause = 'and it keeps pace hour to hour, with no sustained backlog building up';
+  }
+
+  // Per-cell realized wHPPV for the CURRENT-staffing heatmap: same derivation CoreGridTab
+  // uses for the idealized grid (on-duty headcount from coverageForDay ÷ cell arrivals ×
+  // scale, centered on wHppvTarget) — just against currentStaffingGrid instead of the
+  // solved grid. Reuses the backlog + ENA-floor-violation values already computed above/via
+  // getCurrentStaffingResult() rather than recomputing either. Pure display arithmetic, no
+  // engine changes (see CLAUDE.md Section 6's heatmap convention).
+  const floorViolationSet = new Set(current.enaFloorViolationsRemaining.map((v) => `${v.day}-${v.hour}`));
+  const heatmapScale =
+    weeklyArrivals > 0 && current.weeklyScheduledHours > 0 ? realized / (current.weeklyScheduledHours / weeklyArrivals) : null;
+  const heatmapCells: WhppvHeatmapCell[] = [];
+  for (let day = 0; day < 7; day++) {
+    const coverage = coverageForDay(currentStaffingGrid ?? {}, sortedShiftMenu, day);
+    for (let hour = 0; hour < 24; hour++) {
+      const cellArrivals = arrivals[day * 24 + hour] ?? 0;
+      const whppv = heatmapScale !== null && cellArrivals > 0 ? (coverage[hour] / cellArrivals) * heatmapScale : null;
+      const belowFloor = floorViolationSet.has(`${day}-${hour}`);
+      const cellBacklog = backlog.backlog[day * 24 + hour] ?? 0;
+      const inBacklogStreak = cellBacklog >= BACKLOG_CAUGHT_UP_THRESHOLD;
+      const riskReasons: string[] = [];
+      if (belowFloor) riskReasons.push('below the ENA on-duty floor');
+      if (inBacklogStreak) riskReasons.push(`carrying ~${cellBacklog.toFixed(1)} nurse-hrs of backlog (still catching up)`);
+      heatmapCells.push({
+        day,
+        hour,
+        whppv,
+        onDuty: coverage[hour],
+        requirement: result.hourlyRequirement[day * 24 + hour] ?? 0,
+        // PR D (change 4): per-hour band drives the heatmap's own color now — see
+        // components/WhppvHeatmap.tsx. Reuses the SAME reporting curves CoreGridTab passes,
+        // read off this cell's global hour.
+        bandFloor: result.bandFloorHourly[day * 24 + hour] ?? 0,
+        bandCeiling: result.bandCeilingHourly[day * 24 + hour] ?? 0,
+        arrivals: cellArrivals,
+        belowFloor,
+        backlog: cellBacklog,
+        inBacklogStreak,
+        riskReasons,
+      });
+    }
   }
 
   return (
     <section className="card current-analysis">
       <div className="grid-header-row">
         <h2>Your current staffing, analyzed</h2>
-        <EvidenceBadge status="ASSUMPTION" note="The backlog/'falling behind' diagnostic models how unmet demand feeds forward — a derived assumption, not measured data." />
       </div>
 
       {/* Templated headline — quotable as-is (spec §0 communication goal). */}
       <p className="comparison-headline">
         Your current staffing realizes <strong>{realized.toFixed(2)} wHPPV</strong>, {positionWord}{' '}
         {position === 'within' ? 'the' : position === 'below' ? 'below the' : 'above the'}{' '}
-        <strong>{band.p25Whppv.toFixed(2)}–{band.p75Whppv.toFixed(2)}</strong> typical band for an ED your size, {backlogClause}.
+        <strong>{colorDomain.low.toFixed(2)}–{colorDomain.high.toFixed(2)}</strong> typical band for an ED your size, {backlogClause}.
         {effectiveAfterBoarding !== null && (
           <> Boarding pulls the effective figure down to <strong>{effectiveAfterBoarding.toFixed(2)} wHPPV</strong>.</>
         )}
@@ -127,7 +193,7 @@ export function CurrentStaffingAnalysis() {
         <div className="stat">
           <div className="stat-label">Current realized wHPPV</div>
           <div className={`stat-value ${position === 'below' ? 'stat-warning' : ''}`}>{realized.toFixed(2)}</div>
-          <div className="stat-sub">{positionWord} the {band.p25Whppv.toFixed(2)}–{band.p75Whppv.toFixed(2)} band</div>
+          <div className="stat-sub">{positionWord} the {colorDomain.low.toFixed(2)}–{colorDomain.high.toFixed(2)} band</div>
         </div>
         {minWHppv !== null && maxWHppv !== null && (
           <div className="stat">
@@ -144,8 +210,8 @@ export function CurrentStaffingAnalysis() {
           <div className="stat-sub">
             {backlog.neverClears
               ? 'never fully clears'
-              : clearHour !== null
-                ? `usually clears by ${fmtHour(clearHour)}`
+              : streakStartLabel
+                ? `starts ~${streakStartLabel}${clearHour !== null ? `, usually clears by ${fmtHour(clearHour)}` : ''}`
                 : 'before catching back up'}
           </div>
         </div>
@@ -164,6 +230,9 @@ export function CurrentStaffingAnalysis() {
           </div>
         )}
       </div>
+
+      <h3>Where your current schedule runs lean or rich</h3>
+      <WhppvHeatmap cells={heatmapCells} backlogMax={backlogMax} shiftMenu={sortedShiftMenu} />
 
       <button className="btn-link why-toggle" onClick={() => setWhyOpen((v) => !v)}>
         {whyOpen ? 'Hide how backlog builds' : 'Why a short hour costs more than one hour'}

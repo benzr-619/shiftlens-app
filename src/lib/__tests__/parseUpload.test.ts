@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import * as XLSX from 'xlsx';
 import { rowsToParsedUpload, parseXlsxFile } from '../parseUpload';
 import { ARRIVALS_TEMPLATE_COLUMNS, ESI_MIX_TEMPLATE_COLUMNS, SCALARS_TEMPLATE_COLUMNS, SCALARS_TEMPLATE_FIELDS } from '../template';
+import { DISPLAY_DAY_ORDER } from '../dayOrder';
 
 function workbookFile(sheets: Record<string, (string | number)[][]>): File {
   const wb = XLSX.utils.book_new();
@@ -162,6 +163,34 @@ describe('consolidated multi-tab workbook parsing', () => {
     const result = await parseXlsxFile(file);
     expect(result.admitRate).toBe(0.3);
     expect(result.boardingDuration).toBeUndefined();
+  });
+
+  it('§4 regression: a legacy Sun-first template still parses identically to a Mon-first one (day matched by name, not row position)', async () => {
+    const arrivalsValue = (day: number, hour: number) => day * 24 + hour + 1; // distinct per cell
+    const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+    function rowsInOrder(dayOrder: readonly number[]): (string | number)[][] {
+      const rows: (string | number)[][] = [['Day', 'Hour', 'Arrivals']];
+      for (const day of dayOrder) {
+        for (let hour = 0; hour < 24; hour++) {
+          rows.push([dayNames[day], hour, arrivalsValue(day, hour)]);
+        }
+      }
+      return rows;
+    }
+
+    const legacySunFirst = workbookFile({ Arrivals: rowsInOrder([0, 1, 2, 3, 4, 5, 6]) });
+    const currentMonFirst = workbookFile({ Arrivals: rowsInOrder(DISPLAY_DAY_ORDER) });
+
+    const legacyResult = await parseXlsxFile(legacySunFirst);
+    const currentResult = await parseXlsxFile(currentMonFirst);
+
+    expect(legacyResult.errors).toHaveLength(0);
+    expect(currentResult.errors).toHaveLength(0);
+    // Same 168-cell arrivals array (index = day*24+hour, engine's Sunday-indexed convention)
+    // regardless of which order the uploaded sheet's rows happened to be in.
+    expect(legacyResult.arrivals).toEqual(currentResult.arrivals);
+    expect(legacyResult.arrivals?.[3 * 24 + 9]).toBe(arrivalsValue(3, 9));
   });
 
   it('recognizes the actual generated template headers (Average Arrivals/ESI columns, Mean Boarding Duration)', async () => {

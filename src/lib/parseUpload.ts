@@ -5,11 +5,27 @@ import { MONTH_NAMES } from '../engine/types';
 
 export interface ParsedUpload {
   arrivals?: number[]; // 168 cells, index = day*24+hour — present only if a sheet had an Arrivals column
+  // 2026-07-26 (Phase 2a): optional busy-hour (p75) arrivals, all-or-nothing — see
+  // .claude/rules/template-parsing.md and engine/demandBand.ts.
+  arrivalsP75?: number[];
   esiMix?: { esi12: number[]; esi3: number[]; esi45: number[] };
   admitRate?: number;
   boardingDuration?: number;
   monthlyMeanBoardingDurationHours?: number[]; // 12 mean-duration-per-patient values (Jan-Dec), all-or-nothing
   dayOfWeekMeanBoardingDurationHours?: number[]; // 7 mean-duration-per-patient values (Sun-Sat), all-or-nothing
+  // 2026-07-27 (SETUP_AND_MEASURED_BOARDING_SPEC_2026-07-27.md) — the measured boarding path.
+  // Each independently all-or-nothing across its 168 cells, same rule as ESI mix/P75 arrivals.
+  boardingCensusMedical?: number[];
+  boardingCensusBH?: number[];
+  preBedRequestCensus?: number[];
+  monthlyBoardingCensusMedical?: number[]; // 12 values (Jan-Dec), all-or-nothing
+  monthlyBoardingCensusBH?: number[];
+  // 2026-07-27 (follow-up to Part 3) — the "Setup Decisions" tab. Per-dataset workflow
+  // answers, not tool policy — see lib/template.ts's SetupDecisionsData header comment.
+  boardingPath?: 'census' | 'classic' | 'skip';
+  headcountIncludesIndirectCare?: boolean;
+  indirectCareUpliftPct?: number;
+  flexAxes?: { startTimes: boolean; shiftCount: boolean; shiftLengths: boolean };
   warnings: string[];
   errors: string[];
   filledCells: number; // arrivals cells actually populated, out of 168 (0 if no Arrivals column)
@@ -25,6 +41,11 @@ const HEADER_ALIASES: Record<string, string[]> = {
   day: ['day', 'dayofweek', 'weekday'],
   hour: ['hour', 'hourofday', 'hr'],
   arrivals: ['arrivals', 'arrivalcount', 'volume', 'count', 'visits', 'averagearrivals', 'avgarrivals', 'meanarrivals'],
+  // 2026-07-26 (Phase 2a): busy-hour arrivals — a separate column from the required mean above.
+  arrivalsP75: [
+    'p75arrivals', 'arrivalsp75', 'p75avgarrivals', 'p75averagearrivals', 'arrivalp75',
+    'p75arrivalcount', 'busyhourarrivals', 'arrivalsbusyhour',
+  ],
   esi12: [
     'esi12', 'esi12count', 'esihigh', 'esi1and2', 'esi1and2count',
     'averageesi12count', 'avgesi12count', 'averageesi1and2count', 'avgesi1and2count',
@@ -68,6 +89,16 @@ const SEASONALITY_HEADER_ALIASES: Record<string, string[]> = {
     'avgboardingdurationmonth',
     'averageboardingdurationmonth',
   ],
+  // 2026-07-27: monthly census columns win over duration-mean columns when both are present
+  // (measured path takes precedence — see computeBoarding).
+  monthlyBoardingCensusMedical: [
+    'meanmedicalboardingcensusbymonth', 'monthlymeanmedicalboardingcensus', 'meanmedicalcensusbymonth',
+    'medicalboardingcensusbymonth', 'monthlymedicalboardingcensus',
+  ],
+  monthlyBoardingCensusBH: [
+    'meanbhboardingcensusbymonth', 'monthlymeanbhboardingcensus', 'meanbhcensusbymonth',
+    'bhboardingcensusbymonth', 'monthlybhboardingcensus',
+  ],
   seasonDay: ['dayofweek', 'weekday', 'day'],
   dayOfWeekMeanBoardingDurationHours: [
     'meanboardingdurationbydayofweekhrs',
@@ -82,11 +113,54 @@ const SEASONALITY_HEADER_ALIASES: Record<string, string[]> = {
   ],
 };
 
+// 2026-07-27 (SETUP_AND_MEASURED_BOARDING_SPEC_2026-07-27.md §2) — the new Boarding Census
+// tab (168-row measured-path input). Kept as its own table per the existing
+// collision-avoidance convention — do not extend HEADER_ALIASES. NOTE: there is deliberately
+// no Settings tab / policy-value alias table here — a Settings tab was built and then
+// REMOVED (reversal, see .claude/rules/template-parsing.md): the uploaded file carries DATA,
+// policy values (wHPPV target, ratios, ENA floor, LWBS rate) are set in the UI, never parsed
+// from a workbook. Don't reintroduce a settings-values parse path without checking first.
+const BOARDING_CENSUS_HEADER_ALIASES: Record<string, string[]> = {
+  day: ['day', 'dayofweek', 'weekday'],
+  hour: ['hour', 'hourofday', 'hr'],
+  boardingCensusMedical: [
+    'medicalboardingcensus', 'medboardingcensus', 'medicalcensus', 'boardingcensusmedical',
+    'meanmedicalboardingcensus', 'averagemedicalboardingcensus',
+  ],
+  boardingCensusBH: [
+    'bhboardingcensus', 'behavioralhealthboardingcensus', 'bhcensus', 'boardingcensusbh',
+    'meanbhboardingcensus', 'averagebhboardingcensus',
+  ],
+  preBedRequestCensus: [
+    'prebedrequestcensus', 'preboardingcensus', 'nonboardingcensus', 'edoccupancycensus',
+  ],
+};
+
+// 2026-07-27 (follow-up to Part 3) — the "Setup Decisions" tab (per-dataset workflow ANSWERS,
+// not tool policy — see lib/template.ts's SetupDecisionsData header comment). Header is
+// 'Decision', not 'Field'/'Setting', so this can't collide with the Scalars tab's alias table
+// or resurrect the reverted Settings-tab shape.
+const DECISIONS_HEADER_ALIASES: Record<string, string[]> = {
+  decision: ['decision', 'decisionname', 'item', 'label'],
+  value: ['value', 'val', 'amount', 'answer'],
+};
+
+type DecisionField = 'boardingPath' | 'headcountIncludesIndirectCare' | 'indirectCareUpliftPct' | 'flexStartTimes' | 'flexShiftCount' | 'flexShiftLengths';
+
+const DECISION_FIELD_ALIASES: Record<string, DecisionField> = {
+  boardingpath: 'boardingPath',
+  headcountincludesindirectcare: 'headcountIncludesIndirectCare',
+  indirectcareupliftpct: 'indirectCareUpliftPct',
+  flexiblestarttimes: 'flexStartTimes',
+  flexibleshiftcount: 'flexShiftCount',
+  flexibleshiftlengths: 'flexShiftLengths',
+};
+
 function normalizeHeader(h: string): string {
   return h.toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
-function matchColumn(headers: string[], aliasTable: Record<string, string[]>): Record<string, number> {
+export function matchColumn(headers: string[], aliasTable: Record<string, string[]>): Record<string, number> {
   const normalized = headers.map(normalizeHeader);
   const map: Record<string, number> = {};
   for (const [field, aliases] of Object.entries(aliasTable)) {
@@ -108,7 +182,7 @@ MONTH_NAMES.forEach((name, i) => {
   MONTH_ALIASES[name.slice(0, 3).toLowerCase()] = i;
 });
 
-function parseDay(raw: string | number, warnings: string[], rowNum: number): number | null {
+export function parseDay(raw: string | number, warnings: string[], rowNum: number): number | null {
   if (typeof raw === 'number') {
     if (raw >= 0 && raw <= 6) return raw;
     if (raw >= 1 && raw <= 7) return raw - 1;
@@ -142,13 +216,13 @@ function parseHour(raw: string | number, warnings: string[], rowNum: number): nu
   return null;
 }
 
-function parseNum(raw: string | number | undefined): number | null {
+export function parseNum(raw: string | number | undefined): number | null {
   if (raw === undefined || raw === '' || raw === null) return null;
   const n = typeof raw === 'number' ? raw : parseFloat(String(raw));
   return Number.isFinite(n) ? n : null;
 }
 
-function isBlankRow(row: (string | number)[]): boolean {
+export function isBlankRow(row: (string | number)[]): boolean {
   return row.every((c) => c === undefined || String(c).trim() === '');
 }
 
@@ -177,6 +251,9 @@ export function rowsToParsedUpload(headers: string[], rows: (string | number)[][
 
   const arrivals = new Array(168).fill(0);
   const filled = new Array(168).fill(false);
+  const hasArrivalsP75Col = colMap.arrivalsP75 !== undefined;
+  const arrivalsP75 = new Array(168).fill(0);
+  const filledP75 = new Array(168).fill(false);
   const esi12 = new Array(168).fill(0);
   const esi3 = new Array(168).fill(0);
   const esi45 = new Array(168).fill(0);
@@ -194,6 +271,14 @@ export function rowsToParsedUpload(headers: string[], rows: (string | number)[][
       if (arrivalsVal !== null) {
         arrivals[idx] = arrivalsVal;
         filled[idx] = true;
+      }
+    }
+
+    if (hasArrivalsP75Col) {
+      const p75Val = parseNum(row[colMap.arrivalsP75]);
+      if (p75Val !== null) {
+        arrivalsP75[idx] = p75Val;
+        filledP75[idx] = true;
       }
     }
 
@@ -217,6 +302,14 @@ export function rowsToParsedUpload(headers: string[], rows: (string | number)[][
 
   const result: ParsedUpload = { warnings, errors, filledCells };
   if (hasArrivalsCol) result.arrivals = arrivals;
+
+  // All-or-nothing, same rule as ESI mix — a partially-filled optional P75 column is more
+  // likely a data-entry mistake than an intentional sparse input.
+  const filledP75Cells = filledP75.filter(Boolean).length;
+  if (hasArrivalsP75Col && filledP75Cells === 168) result.arrivalsP75 = arrivalsP75;
+  else if (hasArrivalsP75Col && filledP75Cells > 0) {
+    warnings.push(`P75 arrivals only populated for ${filledP75Cells}/168 cells; ignored — fill every row or leave entirely blank.`);
+  }
 
   // Only surface ESI mix if it was populated consistently — a partially-filled optional
   // column is more likely a data-entry mistake than an intentional sparse input.
@@ -257,27 +350,55 @@ function rowsToScalars(headers: string[], rows: (string | number)[][]): { admitR
 function rowsToSeasonality(
   headers: string[],
   rows: (string | number)[][]
-): { monthlyMeanBoardingDurationHours?: number[]; dayOfWeekMeanBoardingDurationHours?: number[]; warnings: string[] } {
+): {
+  monthlyMeanBoardingDurationHours?: number[];
+  dayOfWeekMeanBoardingDurationHours?: number[];
+  monthlyBoardingCensusMedical?: number[];
+  monthlyBoardingCensusBH?: number[];
+  warnings: string[];
+} {
   const warnings: string[] = [];
   const colMap = matchColumn(headers, SEASONALITY_HEADER_ALIASES);
   const hasMonthCols = colMap.month !== undefined && colMap.monthlyMeanBoardingDurationHours !== undefined;
   const hasDowCols = colMap.seasonDay !== undefined && colMap.dayOfWeekMeanBoardingDurationHours !== undefined;
+  const hasMedCensusCol = colMap.month !== undefined && colMap.monthlyBoardingCensusMedical !== undefined;
+  const hasBhCensusCol = colMap.month !== undefined && colMap.monthlyBoardingCensusBH !== undefined;
 
   const monthlyMeans = new Array(12).fill(0);
   const monthlyFound = new Array(12).fill(false);
   const dowMeans = new Array(7).fill(0);
   const dowFound = new Array(7).fill(false);
+  const medCensus = new Array(12).fill(0);
+  const medCensusFound = new Array(12).fill(false);
+  const bhCensus = new Array(12).fill(0);
+  const bhCensusFound = new Array(12).fill(false);
 
   rows.forEach((row, i) => {
     const rowNum = i + 2;
-    if (hasMonthCols) {
+    if (hasMonthCols || hasMedCensusCol || hasBhCensusCol) {
       const monthRaw = row[colMap.month];
       if (monthRaw !== undefined && String(monthRaw).trim() !== '') {
         const m = parseMonth(monthRaw, warnings, rowNum);
-        const v = parseNum(row[colMap.monthlyMeanBoardingDurationHours]);
-        if (m !== null && v !== null) {
-          monthlyMeans[m] = v;
-          monthlyFound[m] = true;
+        if (m !== null && hasMonthCols) {
+          const v = parseNum(row[colMap.monthlyMeanBoardingDurationHours]);
+          if (v !== null) {
+            monthlyMeans[m] = v;
+            monthlyFound[m] = true;
+          }
+        }
+        if (m !== null && hasMedCensusCol) {
+          const v = parseNum(row[colMap.monthlyBoardingCensusMedical]);
+          if (v !== null) {
+            medCensus[m] = v;
+            medCensusFound[m] = true;
+          }
+        }
+        if (m !== null && hasBhCensusCol) {
+          const v = parseNum(row[colMap.monthlyBoardingCensusBH]);
+          if (v !== null) {
+            bhCensus[m] = v;
+            bhCensusFound[m] = true;
+          }
         }
       }
     }
@@ -294,7 +415,12 @@ function rowsToSeasonality(
     }
   });
 
-  const result: { monthlyMeanBoardingDurationHours?: number[]; dayOfWeekMeanBoardingDurationHours?: number[] } = {};
+  const result: {
+    monthlyMeanBoardingDurationHours?: number[];
+    dayOfWeekMeanBoardingDurationHours?: number[];
+    monthlyBoardingCensusMedical?: number[];
+    monthlyBoardingCensusBH?: number[];
+  } = {};
 
   const monthlyCount = monthlyFound.filter(Boolean).length;
   if (monthlyCount === 12) result.monthlyMeanBoardingDurationHours = monthlyMeans;
@@ -304,7 +430,128 @@ function rowsToSeasonality(
   if (dowCount === 7) result.dayOfWeekMeanBoardingDurationHours = dowMeans;
   else if (dowCount > 0) warnings.push(`Mean boarding duration by day of week only filled for ${dowCount}/7 days; ignored — fill every day or leave entirely blank.`);
 
+  const medCensusCount = medCensusFound.filter(Boolean).length;
+  if (medCensusCount === 12) result.monthlyBoardingCensusMedical = medCensus;
+  else if (medCensusCount > 0) warnings.push(`Mean medical boarding census by month only filled for ${medCensusCount}/12 months; ignored — fill every month or leave entirely blank.`);
+
+  const bhCensusCount = bhCensusFound.filter(Boolean).length;
+  if (bhCensusCount === 12) result.monthlyBoardingCensusBH = bhCensus;
+  else if (bhCensusCount > 0) warnings.push(`Mean BH boarding census by month only filled for ${bhCensusCount}/12 months; ignored — fill every month or leave entirely blank.`);
+
   return { ...result, warnings };
+}
+
+/** Boarding Census tab shape (NEW, 2026-07-27) — Day + Hour required, each census column
+ * independently all-or-nothing across its 168 rows, same rule as ESI mix/P75 arrivals. */
+function rowsToBoardingCensus(
+  headers: string[],
+  rows: (string | number)[][]
+): {
+  boardingCensusMedical?: number[];
+  boardingCensusBH?: number[];
+  preBedRequestCensus?: number[];
+  warnings: string[];
+} {
+  const warnings: string[] = [];
+  const colMap = matchColumn(headers, BOARDING_CENSUS_HEADER_ALIASES);
+  const result: { boardingCensusMedical?: number[]; boardingCensusBH?: number[]; preBedRequestCensus?: number[] } = {};
+  if (colMap.day === undefined || colMap.hour === undefined) return { ...result, warnings };
+
+  const cols: Array<{ key: 'boardingCensusMedical' | 'boardingCensusBH' | 'preBedRequestCensus'; label: string }> = [
+    { key: 'boardingCensusMedical', label: 'Medical boarding census' },
+    { key: 'boardingCensusBH', label: 'BH boarding census' },
+    { key: 'preBedRequestCensus', label: 'Pre-bed-request census' },
+  ];
+  const values: Record<string, number[]> = {};
+  const found: Record<string, boolean[]> = {};
+  for (const { key } of cols) {
+    values[key] = new Array(168).fill(0);
+    found[key] = new Array(168).fill(false);
+  }
+
+  rows.forEach((row, i) => {
+    const rowNum = i + 2;
+    const day = parseDay(row[colMap.day], warnings, rowNum);
+    const hour = parseHour(row[colMap.hour], warnings, rowNum);
+    if (day === null || hour === null) return;
+    const idx = day * 24 + hour;
+    for (const { key } of cols) {
+      if (colMap[key] === undefined) continue;
+      const v = parseNum(row[colMap[key]]);
+      if (v !== null) {
+        values[key][idx] = v;
+        found[key][idx] = true;
+      }
+    }
+  });
+
+  for (const { key, label } of cols) {
+    if (colMap[key] === undefined) continue;
+    const count = found[key].filter(Boolean).length;
+    if (count === 168) (result as Record<string, number[]>)[key] = values[key];
+    else if (count > 0) warnings.push(`${label} only populated for ${count}/168 cells; ignored — fill every row or leave entirely blank.`);
+  }
+
+  return { ...result, warnings };
+}
+
+/** Setup Decisions tab shape — Decision/Value pairs, same Field/Value scalar machinery as
+ * Scalars but its own alias table (Decision, not Field/Setting). */
+function rowsToDecisions(
+  headers: string[],
+  rows: (string | number)[][]
+): {
+  boardingPath?: 'census' | 'classic' | 'skip';
+  headcountIncludesIndirectCare?: boolean;
+  indirectCareUpliftPct?: number;
+  flexAxes?: { startTimes: boolean; shiftCount: boolean; shiftLengths: boolean };
+  warnings: string[];
+} {
+  const warnings: string[] = [];
+  const colMap = matchColumn(headers, DECISIONS_HEADER_ALIASES);
+  const result: {
+    boardingPath?: 'census' | 'classic' | 'skip';
+    headcountIncludesIndirectCare?: boolean;
+    indirectCareUpliftPct?: number;
+    flexStartTimes?: boolean;
+    flexShiftCount?: boolean;
+    flexShiftLengths?: boolean;
+  } = {};
+  if (colMap.decision === undefined || colMap.value === undefined) return { warnings };
+
+  rows.forEach((row) => {
+    if (isBlankRow(row)) return;
+    const fieldRaw = row[colMap.decision];
+    if (fieldRaw === undefined || String(fieldRaw).trim() === '') return;
+    const canonical = DECISION_FIELD_ALIASES[normalizeHeader(String(fieldRaw))];
+    if (!canonical) return; // unrecognized decision row — tolerant of extra rows, e.g. notes
+    const raw = row[colMap.value];
+    if (raw === undefined || String(raw).trim() === '') return;
+    const key = normalizeHeader(String(raw));
+
+    if (canonical === 'boardingPath') {
+      if (key === 'census' || key === 'classic' || key === 'skip') result.boardingPath = key;
+      return;
+    }
+    if (canonical === 'indirectCareUpliftPct') {
+      const v = parseNum(raw);
+      if (v !== null) result.indirectCareUpliftPct = v;
+      return;
+    }
+    const boolVal = key === 'yes' || key === 'true' ? true : key === 'no' || key === 'false' ? false : null;
+    if (boolVal === null) return;
+    result[canonical] = boolVal;
+  });
+
+  const { flexStartTimes, flexShiftCount, flexShiftLengths, ...rest } = result;
+  const hasFlex = flexStartTimes !== undefined || flexShiftCount !== undefined || flexShiftLengths !== undefined;
+  return {
+    ...rest,
+    flexAxes: hasFlex
+      ? { startTimes: flexStartTimes ?? false, shiftCount: flexShiftCount ?? false, shiftLengths: flexShiftLengths ?? false }
+      : undefined,
+    warnings,
+  };
 }
 
 function looksLikeArrivalsOrEsiSheet(headers: string[]): boolean {
@@ -320,6 +567,17 @@ function looksLikeScalarsSheet(headers: string[]): boolean {
 function looksLikeSeasonalitySheet(headers: string[]): boolean {
   const colMap = matchColumn(headers, SEASONALITY_HEADER_ALIASES);
   return colMap.month !== undefined || colMap.seasonDay !== undefined;
+}
+
+function looksLikeBoardingCensusSheet(headers: string[]): boolean {
+  const colMap = matchColumn(headers, BOARDING_CENSUS_HEADER_ALIASES);
+  if (colMap.day === undefined || colMap.hour === undefined) return false;
+  return colMap.boardingCensusMedical !== undefined || colMap.boardingCensusBH !== undefined || colMap.preBedRequestCensus !== undefined;
+}
+
+function looksLikeDecisionsSheet(headers: string[]): boolean {
+  const colMap = matchColumn(headers, DECISIONS_HEADER_ALIASES);
+  return colMap.decision !== undefined && colMap.value !== undefined;
 }
 
 export function parseCsvFile(file: File): Promise<ParsedUpload> {
@@ -354,7 +612,18 @@ export async function parseXlsxFile(file: File): Promise<ParsedUpload> {
     const [headerRow, ...dataRows] = nonEmpty;
     const headers = headerRow.map(String);
 
-    if (looksLikeArrivalsOrEsiSheet(headers)) {
+    // Boarding Census is checked BEFORE Arrivals/ESI — it shares a Day+Hour column pair with
+    // that more generic shape, so the more specific detector must win the elif chain or a
+    // Boarding Census tab would misclassify as an empty Arrivals/ESI tab. See
+    // .claude/rules/template-parsing.md.
+    if (looksLikeBoardingCensusSheet(headers)) {
+      const parsed = rowsToBoardingCensus(headers, dataRows);
+      merged.warnings.push(...parsed.warnings.map((w) => `${sheetName}: ${w}`));
+      if (parsed.boardingCensusMedical) merged.boardingCensusMedical = parsed.boardingCensusMedical;
+      if (parsed.boardingCensusBH) merged.boardingCensusBH = parsed.boardingCensusBH;
+      if (parsed.preBedRequestCensus) merged.preBedRequestCensus = parsed.preBedRequestCensus;
+      recognizedAny = true;
+    } else if (looksLikeArrivalsOrEsiSheet(headers)) {
       const parsed = rowsToParsedUpload(headers, dataRows);
       merged.warnings.push(...parsed.warnings.map((w) => `${sheetName}: ${w}`));
       merged.errors.push(...parsed.errors.map((e) => `${sheetName}: ${e}`));
@@ -362,6 +631,7 @@ export async function parseXlsxFile(file: File): Promise<ParsedUpload> {
         merged.arrivals = parsed.arrivals;
         merged.filledCells = parsed.filledCells;
       }
+      if (parsed.arrivalsP75) merged.arrivalsP75 = parsed.arrivalsP75;
       if (parsed.esiMix) merged.esiMix = parsed.esiMix;
       recognizedAny = true;
     } else if (looksLikeScalarsSheet(headers)) {
@@ -375,9 +645,21 @@ export async function parseXlsxFile(file: File): Promise<ParsedUpload> {
       merged.warnings.push(...parsed.warnings.map((w) => `${sheetName}: ${w}`));
       if (parsed.monthlyMeanBoardingDurationHours) merged.monthlyMeanBoardingDurationHours = parsed.monthlyMeanBoardingDurationHours;
       if (parsed.dayOfWeekMeanBoardingDurationHours) merged.dayOfWeekMeanBoardingDurationHours = parsed.dayOfWeekMeanBoardingDurationHours;
+      if (parsed.monthlyBoardingCensusMedical) merged.monthlyBoardingCensusMedical = parsed.monthlyBoardingCensusMedical;
+      if (parsed.monthlyBoardingCensusBH) merged.monthlyBoardingCensusBH = parsed.monthlyBoardingCensusBH;
+      recognizedAny = true;
+    } else if (looksLikeDecisionsSheet(headers)) {
+      const parsed = rowsToDecisions(headers, dataRows);
+      merged.warnings.push(...parsed.warnings.map((w) => `${sheetName}: ${w}`));
+      if (parsed.boardingPath !== undefined) merged.boardingPath = parsed.boardingPath;
+      if (parsed.headcountIncludesIndirectCare !== undefined) merged.headcountIncludesIndirectCare = parsed.headcountIncludesIndirectCare;
+      if (parsed.indirectCareUpliftPct !== undefined) merged.indirectCareUpliftPct = parsed.indirectCareUpliftPct;
+      if (parsed.flexAxes !== undefined) merged.flexAxes = parsed.flexAxes;
       recognizedAny = true;
     }
-    // else: unrecognized tab — tolerated silently (e.g. a stray notes/instructions tab)
+    // else: unrecognized tab — tolerated silently (e.g. a stray notes/instructions tab, or the
+    // "Current Staffing" tab, handled separately by parseStaffingUploadFile — see
+    // SetupEntryFork.tsx's 'returning' path)
   }
 
   if (!recognizedAny) {

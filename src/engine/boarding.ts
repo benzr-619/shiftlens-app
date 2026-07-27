@@ -3,6 +3,7 @@
 // (month?, day-of-week, shift) coverage slots. Kept additive and never blended into the
 // core grid — no solved staffing grid here anymore, just ranked raw demand.
 import {
+  DEFAULTS,
   MONTH_LABELS,
   type BoardingPrioritySlot,
   type BoardingResult,
@@ -11,7 +12,7 @@ import {
   type ShiftDef,
 } from './types';
 import { sum } from './allocate';
-import { shiftHoursOfDay } from './solver';
+import { coveringCellsByGlobalHour } from './solver';
 
 const WEEKS_PER_MONTH = 52 / 12; // approximation: 52 weeks spread evenly across 12 months
 
@@ -82,30 +83,23 @@ function overallMeanBoardingDuration(boardingDuration: number | Cell168, admitEv
   return sum(boardingDuration.map((d, i) => d * admitEvents[i])) / totalEvents;
 }
 
-/** Every hour 0-23 mapped to the shift(s) covering it, splitting evenly across overlapping
- * shifts (transition windows) so a hand-off hour's demand doesn't get double-counted —
- * same convention as the retired `summarizeShortfallByShift` client-side rollup. */
-function hourToShiftShares(shiftMenu: ShiftDef[]): Map<number, Array<{ shiftId: string; share: number }>> {
-  const hoursByShift = shiftMenu.map((s) => ({ id: s.id, hours: new Set(shiftHoursOfDay(s)) }));
-  const map = new Map<number, Array<{ shiftId: string; share: number }>>();
-  for (let h = 0; h < 24; h++) {
-    const covering = hoursByShift.filter((x) => x.hours.has(h));
-    if (covering.length === 0) continue; // no shift covers this hour — its demand has no slot to land in
-    map.set(
-      h,
-      covering.map((c) => ({ shiftId: c.id, share: 1 / covering.length }))
-    );
-  }
-  return map;
-}
-
 /**
  * Breaks the week into (month?, day-of-week, shift) slots and ranks them descending by
- * required annual care hours — the primary boarding output. Reuses `shiftHoursOfDay`
- * (`engine/solver.ts`) to know which hours belong to which shift, rather than
- * reimplementing that mapping; does NOT run `solveShiftFit` — this is raw required demand
- * per slot, not a solved/trimmed staffing recommendation (see
- * .claude/rules/boarding-seasonality.md for why those are different questions).
+ * required annual care hours — the primary boarding output. Reuses
+ * `coveringCellsByGlobalHour` (`engine/solver.ts`) to know which (day, shift) GRID CELL
+ * actually covers each global hour, rather than reimplementing that mapping; does NOT run
+ * `solveShiftFit` — this is raw required demand per slot, not a solved/trimmed staffing
+ * recommendation (see .claude/rules/boarding-seasonality.md for why those are different
+ * questions).
+ *
+ * 2026-07-26 PR A: the (day, shift) SLOT a global hour's demand lands in is now the
+ * ACTUAL COVERING CELL under the global-week shift-hour model — which can be the PREVIOUS
+ * calendar day's shift for an early-morning spillover hour (e.g. Saturday's 02:00 boarding
+ * census now maps to Friday night's shift cell, not a same-day Saturday shift that hasn't
+ * started yet). The day-of-week seasonality factor (`dayFactor`) still applies to the
+ * CENSUS hour's own calendar day — that's a property of when the patients arrived, not of
+ * which shift ends up staffed to cover them — so it's looked up separately by the census
+ * hour's day, unaffected by which cell the demand is attributed to.
  */
 function rankBoardingPrioritySlots(
   cellBoardingRnHours: Cell168,
@@ -114,7 +108,7 @@ function rankBoardingPrioritySlots(
   shiftMenu: ShiftDef[],
   trueAnnualTotal: number
 ): BoardingPrioritySlot[] {
-  const shareByHour = hourToShiftShares(shiftMenu);
+  const coveringCells = coveringCellsByGlobalHour(shiftMenu); // 168 -> [{day, shiftId}]
   const shiftLabelById = new Map(shiftMenu.map((s) => [s.id, s.label || s.id]));
 
   const months: Array<number | null> = monthFactor ? MONTH_LABELS.map((_, m) => m) : [null];
@@ -124,21 +118,24 @@ function rankBoardingPrioritySlots(
 
   for (const month of months) {
     const mFactor = month !== null ? monthFactor![month] : 1;
-    for (let day = 0; day < 7; day++) {
-      const dFactor = dayFactor ? dayFactor[day] : 1;
-      const perShift = new Map<string, number>();
-      for (let h = 0; h < 24; h++) {
-        const shares = shareByHour.get(h);
-        if (!shares) continue;
-        const cellHours = cellBoardingRnHours[day * 24 + h] * dFactor * mFactor;
-        for (const { shiftId, share } of shares) {
-          perShift.set(shiftId, (perShift.get(shiftId) ?? 0) + cellHours * share);
-        }
+    // Keyed by the COVERING cell's "day::shiftId" — not necessarily the census hour's own day.
+    const perCell = new Map<string, number>();
+    for (let g = 0; g < 168; g++) {
+      const cells = coveringCells[g];
+      if (cells.length === 0) continue; // no shift covers this global hour — its demand has no slot to land in
+      const censusDay = Math.floor(g / 24);
+      const dFactor = dayFactor ? dayFactor[censusDay] : 1;
+      const cellHours = cellBoardingRnHours[g] * dFactor * mFactor;
+      const share = 1 / cells.length;
+      for (const { day, shiftId } of cells) {
+        const key = `${day}::${shiftId}`;
+        perCell.set(key, (perCell.get(key) ?? 0) + cellHours * share);
       }
-      for (const [shiftId, hours] of perShift) {
-        if (hours <= 0) continue;
-        raw.push({ month, day, shiftId, requiredCareHours: hours * weeksMultiplier });
-      }
+    }
+    for (const [key, hours] of perCell) {
+      if (hours <= 0) continue;
+      const [dayStr, shiftId] = key.split('::');
+      raw.push({ month, day: Number(dayStr), shiftId, requiredCareHours: hours * weeksMultiplier });
     }
   }
 
@@ -161,6 +158,110 @@ function rankBoardingPrioritySlots(
   });
 }
 
+/**
+ * The measured boarding path's inputs (SETUP_AND_MEASURED_BOARDING_SPEC_2026-07-27.md) — a
+ * new PRIMARY input alongside (not replacing) admitRate/boardingDuration. Passed as its own
+ * bag rather than growing computeBoarding's positional-argument list further.
+ */
+export interface MeasuredBoardingInputs {
+  boardingCensusMedical?: Cell168;
+  boardingCensusBH?: Cell168;
+  monthlyBoardingCensusMedical?: number[];
+  monthlyBoardingCensusBH?: number[];
+  bhBoardingRatioTarget?: number;
+}
+
+/**
+ * §3.4 — per-stream seasonality index, weighted by each stream's own RN-hour contribution
+ * (NOT a plain average of the two indices) — the two streams are empirically uncorrelated at
+ * real departments (medical peaks in different months than BH), so averaging their indices
+ * unweighted would misstate both. Absent monthly medical census -> no month dimension at all
+ * (undefined), same graceful degradation as the derived path. If BH census exists overall but
+ * its monthly array doesn't, BH contributes a FLAT index (1.0 every month) rather than being
+ * dropped from the weighted average — its RN-hour weight still counts.
+ */
+function deriveMeasuredMonthFactors(
+  monthlyBoardingCensusMedical: number[] | undefined,
+  monthlyBoardingCensusBH: number[] | undefined,
+  medicalWeeklyRnHours: number,
+  bhWeeklyRnHours: number
+): number[] | undefined {
+  if (!monthlyBoardingCensusMedical || monthlyBoardingCensusMedical.length !== 12) return undefined;
+  const medMean = sum(monthlyBoardingCensusMedical) / 12;
+  if (medMean <= 0) return undefined;
+  const medIdx = monthlyBoardingCensusMedical.map((v) => v / medMean);
+
+  let bhIdx: number[];
+  if (monthlyBoardingCensusBH && monthlyBoardingCensusBH.length === 12) {
+    const bhMean = sum(monthlyBoardingCensusBH) / 12;
+    bhIdx = bhMean > 0 ? monthlyBoardingCensusBH.map((v) => v / bhMean) : new Array(12).fill(1);
+  } else {
+    bhIdx = new Array(12).fill(1);
+  }
+
+  const totalWeight = medicalWeeklyRnHours + bhWeeklyRnHours;
+  if (totalWeight <= 0) return medIdx;
+  return medIdx.map((mi, m) => (mi * medicalWeeklyRnHours + bhIdx[m] * bhWeeklyRnHours) / totalWeight);
+}
+
+/**
+ * The measured path (2026-07-27, §3.2) — directly measured concurrent boarding census, NO
+ * convolution, no admit events, no duration spreading. Conserved-total holds trivially by
+ * construction: sum(cellBoardingRnHours) === sum(census)/ratio exactly, since there's no
+ * redistribution step at all (unlike the derived path's convolution, which needed a test to
+ * prove conservation through the redistribution — here it's true by definition).
+ */
+function computeMeasuredBoarding(
+  measured: MeasuredBoardingInputs,
+  boardingRatioTarget: number,
+  shiftMenu: ShiftDef[]
+): BoardingResult {
+  const medCensus = measured.boardingCensusMedical!;
+  const bhCensus = measured.boardingCensusBH;
+  const bhRatio = measured.bhBoardingRatioTarget ?? DEFAULTS.bhBoardingRatioTarget;
+
+  const cellBoardingRnHours = medCensus.map(
+    (m, i) => m / boardingRatioTarget + (bhCensus ? bhCensus[i] / bhRatio : 0)
+  );
+
+  const medicalWeeklyRnHours = sum(medCensus) / boardingRatioTarget;
+  const bhWeeklyRnHours = bhCensus ? sum(bhCensus) / bhRatio : null;
+
+  const monthFactor = deriveMeasuredMonthFactors(
+    measured.monthlyBoardingCensusMedical,
+    measured.monthlyBoardingCensusBH,
+    medicalWeeklyRnHours,
+    bhWeeklyRnHours ?? 0
+  );
+
+  // No derived day-of-week duration-mean concept applies here — the measured 168-cell census
+  // already IS the real day-of-week shape, cell by cell. Day-of-week is always a ranking
+  // dimension regardless (same as the derived path — rankBoardingPrioritySlots's own logic).
+  const weeklyTotal = sum(cellBoardingRnHours);
+  const annualBoardingHours = monthFactor ? weeklyTotal * sum(monthFactor) * WEEKS_PER_MONTH : weeklyTotal * 52;
+
+  const annualFte = annualBoardingHours / 2080;
+  const weeklyBoardingHours = annualBoardingHours / 52;
+  const weeklyFte = weeklyBoardingHours / 40;
+
+  const prioritySlots = rankBoardingPrioritySlots(cellBoardingRnHours, undefined, monthFactor, shiftMenu, annualBoardingHours);
+
+  return {
+    cellBoardingRnHours,
+    annualBoardingHours,
+    annualFte,
+    weeklyBoardingHours,
+    weeklyFte,
+    hasMonthlySeasonality: monthFactor !== undefined,
+    hasDayOfWeekSeasonality: true, // the measured census is inherently day-varying, cell by cell
+    monthFactors: monthFactor ?? null,
+    prioritySlots,
+    medicalWeeklyRnHours,
+    bhWeeklyRnHours,
+    censusSource: 'measured',
+  };
+}
+
 export function computeBoarding(
   arrivals: Cell168,
   admitRate: number | Cell168 | undefined,
@@ -168,8 +269,16 @@ export function computeBoarding(
   boardingRatioTarget: number,
   shiftMenu: ShiftDef[],
   dayOfWeekMeanBoardingDurationHours: number[] | undefined,
-  monthlyMeanBoardingDurationHours: number[] | undefined
+  monthlyMeanBoardingDurationHours: number[] | undefined,
+  measured?: MeasuredBoardingInputs
 ): BoardingResult | null {
+  // Precedence (§3.2): a measured census, when present, is used EXCLUSIVELY — admitRate/
+  // boardingDuration are provably ignored (see boarding.test.ts's precedence assertion). No
+  // blending, no partial composition between the two paths.
+  if (measured?.boardingCensusMedical) {
+    return computeMeasuredBoarding(measured, boardingRatioTarget, shiftMenu);
+  }
+
   // Boarding output is withheld entirely if either required input is absent — never estimated from a placeholder.
   if (admitRate === undefined || boardingDuration === undefined) return null;
 
@@ -203,6 +312,9 @@ export function computeBoarding(
     hasDayOfWeekSeasonality: dayFactor !== undefined,
     monthFactors: monthFactor ?? null,
     prioritySlots,
+    medicalWeeklyRnHours: null,
+    bhWeeklyRnHours: null,
+    censusSource: 'derived',
   };
 }
 
@@ -226,8 +338,10 @@ const HOURS_PER_FTE_YEAR = 2080;
  * to the whole year (52 weeks) and month toggles aren't shown. With monthly seasonality each
  * active month contributes its own factor-weighted weeks (a busier month carries more weight),
  * so full-year scope reproduces `annualBoardingHours` exactly. `activeMonths: null` = all
- * months (or "no month dimension"). */
-function scopeWeeks(monthFactors: number[] | null, activeMonths: Set<number> | null): number {
+ * months (or "no month dimension"). Exported so other annualizers (e.g.
+ * `annualStaffingHoursForWeeklyGrid`, §2.6.1) share the exact same scope math as coverage
+ * rather than re-deriving it — don't duplicate this logic elsewhere. */
+export function scopeWeeks(monthFactors: number[] | null, activeMonths: Set<number> | null): number {
   if (!monthFactors) return 52;
   let weeks = 0;
   for (let m = 0; m < 12; m++) {
@@ -243,7 +357,29 @@ function scopeWeeks(monthFactors: number[] | null, activeMonths: Set<number> | n
  * adjusted weekly SHAPE remains. Keyed "day::shiftId". This is the fixed pattern the coverage
  * grid is built on; it does not change when month toggles change.
  */
-export function weeklyBoardingDemandByCell(boarding: BoardingResult): Map<string, number> {
+export function weeklyBoardingDemandByCell(boarding: BoardingResult, shiftMenu?: ShiftDef[]): Map<string, number> {
+  // Measured path (2026-07-27): the 168-cell census grid already IS the representative week —
+  // no month scaling is baked into it (monthFactors only scale ANNUAL totals separately), so
+  // there's no scope to divide back out. Read cellBoardingRnHours directly via the same
+  // covering-cell attribution rankBoardingPrioritySlots uses, skipping the prioritySlots
+  // round-trip the derived path needs (see .claude/rules/boarding-seasonality.md). Falls back
+  // to the derived-path recovery below when no shiftMenu is passed (e.g. existing call sites/
+  // tests that don't have one in scope) — still correct, just the round-trip this simplifies.
+  if (boarding.censusSource === 'measured' && shiftMenu) {
+    const coveringCells = coveringCellsByGlobalHour(shiftMenu);
+    const byCell = new Map<string, number>();
+    for (let g = 0; g < 168; g++) {
+      const cells = coveringCells[g];
+      if (cells.length === 0) continue;
+      const share = boarding.cellBoardingRnHours[g] / cells.length;
+      for (const { day, shiftId } of cells) {
+        const key = `${day}::${shiftId}`;
+        byCell.set(key, (byCell.get(key) ?? 0) + share);
+      }
+    }
+    return byCell;
+  }
+
   const scopeAll = scopeWeeks(boarding.monthFactors, null);
   const byCell = new Map<string, number>();
   for (const slot of boarding.prioritySlots) {
@@ -291,9 +427,51 @@ export function annualBoardingCoveredByWeeklyGrid(
   shiftMenu: ShiftDef[],
   activeMonths: Set<number> | null
 ): number {
-  const demandByCell = weeklyBoardingDemandByCell(boarding);
+  const demandByCell = weeklyBoardingDemandByCell(boarding, shiftMenu);
   const weeklyCovered = weeklyBoardingCoveredByGrid(grid, demandByCell, shiftMenu);
   return weeklyCovered * scopeWeeks(boarding.monthFactors, activeMonths);
+}
+
+/**
+ * §2.6.1 (2026-07-25) — the REAL cost of a weekly grid, as opposed to the demand it covers.
+ * Σ headcount[day][shiftId] × shift.lengthHours across every (day, shift) cell that has any
+ * headcount at all — NOT capped at that cell's own demand (unlike `weeklyBoardingCoveredByGrid`)
+ * and NOT restricted to cells that have a demand slot in the first place. A fixed-length shift
+ * bills for its whole block even in the hours where boarding need is lower than what's
+ * scheduled, so this is always >= the demand-capped coverage number for the same grid — the gap
+ * is the efficiency overhead of shift-block granularity. Pure arithmetic, no solve.
+ */
+export function weeklyStaffingHoursForGrid(grid: Grid, shiftMenu: ShiftDef[]): number {
+  const lenById = new Map(shiftMenu.map((s) => [s.id, s.lengthHours]));
+  let hours = 0;
+  for (const row of Object.values(grid)) {
+    if (!row) continue;
+    for (const [shiftId, headcount] of Object.entries(row)) {
+      if (!headcount || headcount <= 0) continue;
+      hours += headcount * (lenById.get(shiftId) ?? 0);
+    }
+  }
+  return hours;
+}
+
+/**
+ * Annual staffing hours a weekly grid represents when applied across the active months' scope —
+ * the "actual FTE to staff this plan" figure (§2.6.1). Same `scopeWeeks` scaling as
+ * `annualBoardingCoveredByWeeklyGrid` (reused, not duplicated), but on the UNCAPPED
+ * `weeklyStaffingHoursForGrid` rather than demand-capped coverage, so it captures what
+ * fixed-length shift blocks actually cost. For any given grid, `annualStaffingHoursForWeeklyGrid`
+ * >= `annualBoardingCoveredByWeeklyGrid` always — equality holds only in the edge case where
+ * every staffed cell's scheduled hours (`headcount × lengthHours`) exactly equal that cell's own
+ * weekly demand, with no headcount on cells that have no demand at all.
+ */
+export function annualStaffingHoursForWeeklyGrid(
+  grid: Grid,
+  boarding: BoardingResult,
+  shiftMenu: ShiftDef[],
+  activeMonths: Set<number> | null
+): number {
+  const weeklyStaffing = weeklyStaffingHoursForGrid(grid, shiftMenu);
+  return weeklyStaffing * scopeWeeks(boarding.monthFactors, activeMonths);
 }
 
 /**
@@ -312,7 +490,7 @@ export function recommendWeeklyBoardingGrid(
   targetWhppv: number,
   wHppvConsumedByBoarding: number
 ): Grid {
-  const demandByCell = weeklyBoardingDemandByCell(boarding);
+  const demandByCell = weeklyBoardingDemandByCell(boarding, shiftMenu);
   const lenById = new Map(shiftMenu.map((s) => [s.id, s.lengthHours]));
   const scopeAll = scopeWeeks(boarding.monthFactors, null);
   const denom = boarding.annualBoardingHours;

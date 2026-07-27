@@ -1,14 +1,17 @@
 import { useMemo, useState } from 'react';
 import { useStore } from '../../store';
-import { DAY_LABELS, MONTH_LABELS } from '../../engine/types';
+import { MONTH_LABELS } from '../../engine/types';
 import type { Grid, ShiftDef } from '../../engine/types';
+import { DISPLAY_DAY_ORDER, DISPLAY_DAY_LABELS } from '../../lib/dayOrder';
 import {
   annualBoardingCoveredByWeeklyGrid,
+  annualStaffingHoursForWeeklyGrid,
   boardingCoverageFte,
   effectiveEdWhppvAtCoverage,
   recommendWeeklyBoardingGrid,
 } from '../../engine/boarding';
 import { lookupWhppvBand } from '../../lib/edbaLookup';
+import { NumberCell } from '../../components/NumberCell';
 
 const ALL_MONTHS = new Set(Array.from({ length: 12 }, (_, i) => i));
 
@@ -104,6 +107,14 @@ export function BoardingCoverageSection() {
   const effectiveWhppv = effectiveEdWhppvAtCoverage(wHppvTarget, wHppvConsumedByBoarding, coveredFraction);
   const baselineEffective = wHppvTarget - wHppvConsumedByBoarding; // effective wHPPV at zero boarding coverage
 
+  // §2.6.1: the real cost of the grid, vs. the demand it satisfies. Fixed-length shift blocks
+  // can't be trimmed to hourly demand, so scheduled (staffing) hours are >= demand-capped
+  // (coverage) hours for the same grid — the gap is "efficiency overhead." See
+  // .claude/rules/boarding-seasonality.md's last section.
+  const annualStaffing = annualStaffingHoursForWeeklyGrid(displayedGrid, boarding, sortedShiftMenu, scopeMonths);
+  const fteStaffing = boardingCoverageFte(annualStaffing);
+  const efficiencyOverheadFte = Math.max(0, fteStaffing - fteCovered);
+
   const activeMonthCount = boarding.hasMonthlySeasonality ? activeMonths.size : 12;
   const showScopeClause = boarding.hasMonthlySeasonality && activeMonthCount < 12;
   const peakMonth = boarding.monthFactors ? boarding.monthFactors.indexOf(Math.max(...boarding.monthFactors)) : null;
@@ -138,6 +149,24 @@ export function BoardingCoverageSection() {
         </div>
       )}
 
+      {/* §6.1 (2026-07-27 guided-setup-walkthrough prompt) — required wherever BH boarding is
+          reported, not optional framing. A 1:10 ratio correctly shows BH boarders draw less
+          licensed RN time — reporting that number alone invites exactly the wrong conclusion. */}
+      {boarding.bhWeeklyRnHours !== null && (
+        <>
+          <p className="wHPPV-caveat">
+            Medical/surg boarding: <strong>{(boarding.medicalWeeklyRnHours ?? 0).toFixed(1)} RN-hours/week</strong>.
+            Behavioral-health boarding: <strong>{boarding.bhWeeklyRnHours.toFixed(1)} RN-hours/week</strong>.
+          </p>
+          <div className="banner banner-info">
+            These figures describe <strong>RN care only</strong>. Behavioral-health boarding places a
+            disproportionate burden on techs, sitters, and security, and the operational cost of maintaining
+            patient and staff safety for these patients is <strong>understated</strong> by any RN-staffing view
+            — including this one.
+          </div>
+        </>
+      )}
+
       <div className="wHPPV-stats compact">
         <div className="stat">
           <div className="stat-label">% of annual boarding hours covered</div>
@@ -151,11 +180,23 @@ export function BoardingCoverageSection() {
           </div>
         </div>
         <div className="stat">
-          <div className="stat-label">FTE in this plan</div>
+          <div className="stat-label">Boarding hours covered (FTE-equivalent)</div>
           <div className="stat-value">{fteCovered.toFixed(1)}</div>
-          <div className="stat-sub">full year-round coverage would be {boarding.annualFte.toFixed(1)} FTE</div>
+          <div className="stat-sub">Boarding demand today: {boarding.annualFte.toFixed(1)} FTE if fully covered</div>
+        </div>
+        <div className="stat">
+          <div className="stat-label">Actual FTE to staff this plan</div>
+          <div className="stat-value stat-warning">{fteStaffing.toFixed(1)}</div>
+          <div className="stat-sub">+{efficiencyOverheadFte.toFixed(1)} FTE efficiency overhead vs. coverage</div>
         </div>
       </div>
+
+      <p className="wHPPV-caveat">
+        <strong>Staffing FTE usually runs higher than coverage FTE.</strong> A fixed-length shift (8s, 10s, 12s)
+        can't be trimmed to match hourly boarding demand exactly — you're paying for the whole block even in
+        hours where the boarding need is lower than what's scheduled. This overhead grows with longer or
+        overlapping shifts (like a swing shift), since those are the least demand-shaped.
+      </p>
 
       {boarding.hasMonthlySeasonality && (
         <div className="boarding-scope">
@@ -207,19 +248,17 @@ export function BoardingCoverageSection() {
             </tr>
           </thead>
           <tbody>
-            {DAY_LABELS.map((label, day) => (
+            {DISPLAY_DAY_ORDER.map((day, idx) => (
               <tr key={day}>
-                <td className="day-cell">{label}</td>
+                <td className="day-cell">{DISPLAY_DAY_LABELS[idx]}</td>
                 {sortedShiftMenu.map((s) => {
                   const key = cellKey(day, s.id);
                   const isOverridden = cellOverrides[key] !== undefined;
                   return (
                     <td key={s.id} className={isOverridden ? 'coverage-cell-overridden' : undefined}>
-                      <input
-                        type="number"
-                        min={0}
+                      <NumberCell
                         value={displayedGrid[day][s.id]}
-                        onChange={(e) => editCell(day, s.id, Number(e.target.value))}
+                        onCommit={(next) => editCell(day, s.id, next)}
                       />
                     </td>
                   );
@@ -235,13 +274,30 @@ export function BoardingCoverageSection() {
       </button>
       {whyOpen && (
         <div className="why-explainer">
-          <p>
-            There's no direct hourly boarding-census measurement, so we derive one: your arrivals × admit rate
-            gives an hourly count of new admissions, and each admission is assumed to board for your entered
-            boarding duration — spreading that patient's hold time across the hours that follow. If you gave us
-            mean boarding duration by month or day of week, we turn those into a seasonality index and scale the
-            base pattern by it.
-          </p>
+          {/* PR K (RESULTS_COMPREHENSION_SPEC_2026-07-26.md §10.4) — REWRITTEN from apology to
+              shopping list. Ben: "if there is better data / a better way to do this, I should
+              look into getting it rather than relying on derivation." Each paragraph now states
+              what was COMPUTED, then names the BETTER data that would replace the derivation and
+              roughly where it lives — instead of dwelling on what's derived.
+              2026-07-27: on the MEASURED path, item 1 of that shopping list is now satisfied —
+              rewritten again to say so, per the guided-setup-walkthrough follow-up prompt §6.3. */}
+          {boarding.censusSource === 'measured' ? (
+            <p>
+              <strong>Satisfied:</strong> this uses your directly measured hourly boarding census — patients
+              physically in the ED with a bed request placed and no inpatient bed assigned, counted at each hour
+              — not a derivation from arrivals and admit rate. No convolution, no admit-timing assumption.
+            </p>
+          ) : (
+            <p>
+              <strong>Computed:</strong> an hourly boarding-census curve, from your arrivals × admit rate (new
+              admissions per hour) spread across your entered boarding duration, seasonally adjusted if you provided
+              monthly/day-of-week means.{' '}
+              <strong>Better data, if you can get it:</strong> a directly measured hourly boarding census — most bed-
+              management or ADT systems can report actual boarders-in-ED counts by hour (patients with a bed request
+              placed and no inpatient bed assigned), which would replace this derivation entirely. Ask your
+              bed-management/throughput team whether that report already exists.
+            </p>
+          )}
           <p>
             That hourly boarding load is attributed to the shift that covers each hour, then collapsed into{' '}
             <strong>one representative week</strong> of coverage need per (day, shift). The grid above starts
@@ -254,17 +310,38 @@ export function BoardingCoverageSection() {
             the toggles just choose how many months you apply it to, and the coverage %, FTE, and effective-wHPPV
             stats scale accordingly. The denominator is always your full annual boarding demand, so applying the
             plan to fewer months — or a shift menu with a gap hour no shift covers — honestly shows coverage
-            capping below 100%, not a rounding error.
+            capping below 100%, not a rounding error.{' '}
+            {boarding.censusSource === 'measured' ? (
+              <>
+                <strong>Satisfied:</strong> this month factor is weighted by your measured medical and BH census
+                streams directly, not a duration proxy.
+              </>
+            ) : (
+              <>
+                <strong>Better data, if you can get it:</strong> actual monthly boarding HOURS (not just mean duration)
+                from your finance or throughput reporting would let this scale by real seasonal volume, not duration
+                alone.
+              </>
+            )}
           </p>
           <p>
-            <strong>Effective ED wHPPV at this coverage is an assumption, not a validated formula</strong> — it
-            assumes covering X% of annual boarding hours recovers exactly X% of the wHPPV boarding consumes,
-            linearly. In reality, since the highest-value coverage is funded first, real recovery is more likely
-            front-loaded — treat this number as a rough guide, not a precise prediction.
+            <strong>Coverage FTE and staffing FTE answer different questions.</strong> Coverage FTE is demand-hours
+            satisfied — each cell's contribution is capped at what that cell actually needs. Staffing FTE is what
+            you actually schedule — headcount × shift length, uncapped. Since shifts come in fixed blocks, a cell
+            almost never needs an exact multiple of the shift length, so staffing FTE is virtually always higher;
+            they'd only match if every staffed cell's scheduled hours landed exactly on its demand.
           </p>
           <p>
-            A dollar cost layer (RN salary × benefit factor × boarding hours) is designed but not yet built — it
-            needs two additional inputs not yet collected.
+            <strong>Computed:</strong> "effective ED wHPPV at this coverage" assumes covering X% of annual boarding
+            hours recovers exactly X% of the wHPPV boarding consumes, linearly — a placeholder, not a validated
+            formula (real recovery, since the highest-value coverage is funded first, is more likely front-loaded).{' '}
+            <strong>Better data, if you can get it:</strong> a before/after comparison from a real coverage change
+            (a month where boarding staffing measurably increased or decreased) would let this be calibrated
+            against your own department instead of assumed.
+          </p>
+          <p>
+            No dollar figure is computed anywhere on this page, by design — see the finance-partner worksheet
+            (funding-ask section, above) for the sanctioned way to turn any of this into a cost conversation.
           </p>
         </div>
       )}

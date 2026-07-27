@@ -1,4 +1,5 @@
-import { DAY_LABELS } from '../engine/types';
+import { DISPLAY_DAY_ORDER, DISPLAY_DAY_LABELS } from '../lib/dayOrder';
+import { NumberCell } from './NumberCell';
 
 /** Editable hour x day-of-week grid — the touch-up tool layered on top of a template upload. */
 export function ArrivalsGrid({ arrivals, onChange }: { arrivals: number[]; onChange: (next: number[]) => void }) {
@@ -16,7 +17,7 @@ export function ArrivalsGrid({ arrivals, onChange }: { arrivals: number[]; onCha
         <thead>
           <tr>
             <th className="hour-col">Hour</th>
-            {DAY_LABELS.map((d) => (
+            {DISPLAY_DAY_LABELS.map((d) => (
               <th key={d}>{d}</th>
             ))}
           </tr>
@@ -25,18 +26,12 @@ export function ArrivalsGrid({ arrivals, onChange }: { arrivals: number[]; onCha
           {Array.from({ length: 24 }, (_, hour) => (
             <tr key={hour}>
               <td className="hour-col">{hour.toString().padStart(2, '0')}:00</td>
-              {DAY_LABELS.map((_, day) => {
+              {DISPLAY_DAY_ORDER.map((day) => {
                 const v = arrivals[day * 24 + hour];
                 const intensity = v / max;
                 return (
                   <td key={day} style={{ backgroundColor: `rgba(99,102,241,${0.08 + intensity * 0.5})` }}>
-                    <input
-                      type="number"
-                      min={0}
-                      value={v || ''}
-                      placeholder="0"
-                      onChange={(e) => setCell(day, hour, Number(e.target.value))}
-                    />
+                    <NumberCell value={v} onCommit={(next) => setCell(day, hour, next)} />
                   </td>
                 );
               })}

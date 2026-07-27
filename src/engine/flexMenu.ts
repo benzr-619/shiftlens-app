@@ -9,6 +9,7 @@
 
 import type { ShiftDef } from './types';
 import { solveShiftFit, type SolveResult } from './solver';
+import { summarizeBacklogSeverity } from './backlog';
 
 export interface FlexAxes {
   startTimes: boolean; // allow different shift start times
@@ -21,13 +22,37 @@ export const NO_FLEX: FlexAxes = { startTimes: false, shiftCount: false, shiftLe
 export interface MenuCandidate {
   menu: ShiftDef[];
   solve: SolveResult;
-  totalShortfall: number; // Σ deficit across the week (lower is better coverage)
+  /** PR C (SOLVER_REALISM_SPEC_2026-07-26.md, change 5): the ranking key — the SAME convex
+   * severity objective `candidateCutCost` minimizes, scored against this candidate's own
+   * solved grid. Lower is better. */
+  totalSeverity: number;
+  totalShortfall: number; // Σ deficit across the week — DISPLAY COLUMN ONLY, no longer the rank key
   weeklyScheduledHours: number;
 }
 
 const CANDIDATE_COUNTS = [2, 3, 4];
 const CANDIDATE_LENGTHS = [8, 10, 12];
 const CANDIDATE_OFFSETS = [0, 7, 8, 11, 19]; // a few common shift-start anchors
+
+// 2026-07-26 PR D (SOLVER_REALISM_SPEC_2026-07-26.md, change 6): `buildTiling` only ever
+// produces REGULAR tilings (same length, evenly spaced) — it can never propose the single most
+// common correct answer to a unimodal arrival curve, a short mid/swing shift LAYERED OVER the
+// user's existing menu (e.g. an 11:00-17:00 shift added on top of 07:00/19:00 12h shifts to
+// cover the midday peak). `OVERLAY_LENGTHS`/`OVERLAY_OFFSETS` bound this second, genuinely
+// different candidate family — a "current menu + one shift" search, not a replacement tiling.
+const OVERLAY_LENGTHS = [4, 6, 8];
+const OVERLAY_OFFSETS = [9, 11, 13, 15]; // late-morning/midday/afternoon swing anchors
+
+/** `currentMenu` unchanged, plus ONE additional overlay shift — the swing-shift candidate
+ * family (PR D change 6). Deliberately NOT required to tile 24h on its own (unlike
+ * `buildTiling`'s regular family) — it only needs to ADD coverage somewhere, since the
+ * underlying menu already tiles the day. */
+function buildOverlayMenu(currentMenu: ShiftDef[], length: number, startHour: number): ShiftDef[] {
+  return [
+    ...currentMenu.map((s) => ({ ...s })),
+    { id: 'flex-overlay', label: `${startHour.toString().padStart(2, '0')}:00 swing (${length}h)`, startHour, lengthHours: length },
+  ];
+}
 
 /** Most common shift length in a menu (ties → the earliest shift's length). Used to hold the
  * length axis fixed at the user's current structure when that axis isn't enabled. */
@@ -66,23 +91,39 @@ function menuKey(menu: ShiftDef[]): string {
 
 /**
  * Enumerate candidate alternate menus along the enabled flexibility axes, solve each through
- * `solveShiftFit` at the same budget, and return them ranked by least total shortfall (then
- * fewest scheduled hours). BOUNDED: at most CANDIDATE_COUNTS × CANDIDATE_LENGTHS ×
- * CANDIDATE_OFFSETS regular tilings (≤ 45), deduped, and only those that fully tile 24h.
+ * `solveShiftFit` at the same budget, and return them ranked by least total SEVERITY (PR C,
+ * SOLVER_REALISM_SPEC_2026-07-26.md change 5 — the SAME convex objective the solver itself
+ * minimizes, not total shortfall, which can't distinguish a shallow-everywhere candidate from
+ * a catastrophic-one-night candidate with the same total). `totalShortfall` is still computed
+ * and returned as a DISPLAY COLUMN, just no longer the rank key. BOUNDED: at most
+ * CANDIDATE_COUNTS × CANDIDATE_LENGTHS × CANDIDATE_OFFSETS regular tilings (≤ 45), deduped, and
+ * only those that fully tile 24h.
+ *
+ * `protectedFloorHourly` (PR C change 4) — the UNCLAMPED solver-facing floor
+ * (`EngineResult.protectedFloorHourly`), NOT `bandFloorHourly` (the clamped reporting curve).
  *
  * An axis that's OFF is held at the current menu's structure (its count / dominant length /
  * earliest start), so the search only explores the dimensions the user opted into. Returns the
  * candidates in rank order; the caller compares the best against the current menu's own solve
  * and only surfaces it as an improvement when it genuinely beats current — never auto-adopts.
+ *
+ * 2026-07-26 PR D (change 6): ALSO tries the bounded "current menu + one overlay shift" swing
+ * family (`OVERLAY_LENGTHS` × `OVERLAY_OFFSETS`, ≤ 12 candidates) alongside whichever regular
+ * tilings the enabled axes produce — this is what lets a mid/swing shift ever be reachable. Not
+ * gated behind any ONE specific axis (a swing shift is a distinct idea from "resize/re-anchor
+ * the existing tiling"), but gated on `anyAxis` (at least one axis enabled) same as the tiling
+ * family — with NOTHING enabled the search still returns exactly the one regularized candidate
+ * (the existing "static = no search at all" contract, unchanged). Still bounded and still
+ * deduped against the same `seen` set.
  */
 export function searchFlexibleMenus(
   hourlyRequirement: number[],
+  protectedFloorHourly: number[],
+  demandVolatilityHourly: number[],
   currentMenu: ShiftDef[],
   axes: FlexAxes,
   weeklyBudgetHours: number,
   hoursBudgetTolerance: number,
-  transitionWeight: number,
-  transitionWindowHours: number,
   enaFloor: number
 ): MenuCandidate[] {
   if (currentMenu.length === 0) return [];
@@ -90,40 +131,62 @@ export function searchFlexibleMenus(
   const curLength = dominantLength(currentMenu);
   const curOffset = Math.min(...currentMenu.map((s) => s.startHour));
 
-  const counts = axes.shiftCount ? CANDIDATE_COUNTS : [curCount];
   const lengths = axes.shiftLengths ? CANDIDATE_LENGTHS : [curLength];
   const offsets = axes.startTimes ? CANDIDATE_OFFSETS : [curOffset];
 
+  // Count and length are physically coupled — a length L can only tile 24h with count >= 24/L.
+  // So the count set is derived PER length: if the shift-count axis is on we try 2/3/4 (keeping
+  // only those that tile at this length); otherwise, when exploring lengths we use that length's
+  // natural minimal tiling count (8h→3, 10h→3, 12h→2); with neither axis on we hold the current
+  // count. This keeps each axis independently meaningful (enabling length flex alone still
+  // surfaces 8s/10s, which a fixed 2-shift count could never tile).
   const seen = new Set<string>();
   const candidates: MenuCandidate[] = [];
-  for (const count of counts) {
-    if (count < 1) continue;
-    const spacing = 24 / count;
-    for (const length of lengths) {
-      if (length < spacing) continue; // would leave uncovered gap hours
-      for (const offset of offsets) {
-        const menu = buildTiling(count, length, offset);
-        const key = menuKey(menu);
-        if (seen.has(key)) continue;
-        seen.add(key);
-        const solve = solveShiftFit(
-          hourlyRequirement,
-          menu,
-          weeklyBudgetHours,
-          hoursBudgetTolerance,
-          transitionWeight,
-          transitionWindowHours,
-          enaFloor
-        );
-        candidates.push({
-          menu,
-          solve,
-          totalShortfall: solve.shortfall.reduce((a, s) => a + s.deficit, 0),
-          weeklyScheduledHours: solve.weeklyScheduledHours,
-        });
-      }
+
+  const trySolve = (menu: ShiftDef[]) => {
+    const key = menuKey(menu);
+    if (seen.has(key)) return;
+    seen.add(key);
+    const solve = solveShiftFit(
+      hourlyRequirement,
+      protectedFloorHourly,
+      demandVolatilityHourly,
+      menu,
+      weeklyBudgetHours,
+      hoursBudgetTolerance,
+      enaFloor
+    );
+    const { totalSeverity } = summarizeBacklogSeverity(solve.grid, hourlyRequirement, menu);
+    candidates.push({
+      menu,
+      solve,
+      totalSeverity,
+      totalShortfall: solve.shortfall.reduce((a, s) => a + s.deficit, 0),
+      weeklyScheduledHours: solve.weeklyScheduledHours,
+    });
+  };
+
+  for (const length of lengths) {
+    let countsForLength: number[];
+    if (axes.shiftCount) countsForLength = CANDIDATE_COUNTS.filter((c) => length >= 24 / c);
+    else if (axes.shiftLengths) countsForLength = [Math.max(2, Math.ceil(24 / length))];
+    else countsForLength = [curCount];
+
+    for (const count of countsForLength) {
+      if (count < 1 || length < 24 / count) continue; // would leave uncovered gap hours
+      for (const offset of offsets) trySolve(buildTiling(count, length, offset));
     }
   }
-  candidates.sort((a, b) => a.totalShortfall - b.totalShortfall || a.weeklyScheduledHours - b.weeklyScheduledHours);
+
+  // PR D change 6: swing-shift overlay family — see the header note above. Gated on `anyAxis`
+  // so an all-off FlexAxes still returns exactly the one regularized candidate, unchanged.
+  const anyAxis = axes.startTimes || axes.shiftCount || axes.shiftLengths;
+  if (anyAxis) {
+    for (const length of OVERLAY_LENGTHS) {
+      for (const offset of OVERLAY_OFFSETS) trySolve(buildOverlayMenu(currentMenu, length, offset));
+    }
+  }
+
+  candidates.sort((a, b) => a.totalSeverity - b.totalSeverity || a.weeklyScheduledHours - b.weeklyScheduledHours);
   return candidates;
 }
