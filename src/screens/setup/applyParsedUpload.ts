@@ -30,10 +30,16 @@ export function applyParsedUpload(parsed: ParsedUpload, store: Store) {
   // "Setup Decisions" tab (2026-07-27 follow-up to Part 3) — per-dataset workflow answers.
   if (parsed.boardingPath !== undefined) store.setBoardingPath(parsed.boardingPath);
   if (parsed.headcountIncludesIndirectCare !== undefined) store.setHeadcountIncludesIndirectCare(parsed.headcountIncludesIndirectCare);
-  if (parsed.indirectCareUpliftPct !== undefined) store.setIndirectCareUpliftPct(parsed.indirectCareUpliftPct);
   if (parsed.flexAxes) {
     store.setFlexAxis('startTimes', parsed.flexAxes.startTimes);
     store.setFlexAxis('shiftCount', parsed.flexAxes.shiftCount);
     store.setFlexAxis('shiftLengths', parsed.flexAxes.shiftLengths);
   }
+  // 2026-07-28, Ben's direct ask — the two boarding nursing ratios round-trip through the
+  // Setup Decisions tab now, alongside the other per-dataset workflow answers above.
+  if (parsed.boardingRatioTarget !== undefined) store.setBoardingRatioTarget(parsed.boardingRatioTarget);
+  if (parsed.bhBoardingRatioTarget !== undefined) store.setBhBoardingRatioTarget(parsed.bhBoardingRatioTarget);
+  // 2026-07-30 — "hours per FTE," same round-trip exception as the two ratios above.
+  if (parsed.fteInputMode !== undefined) store.setFteInputMode(parsed.fteInputMode);
+  if (parsed.fteInputValue !== undefined) store.setFteInputValue(parsed.fteInputValue);
 }

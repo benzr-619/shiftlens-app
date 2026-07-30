@@ -12,16 +12,9 @@
 // hence the iterative relaxation below rather than a one-pass formula.
 
 import type { Cell168, Grid, ShiftDef, ShortfallEntry } from './types';
-import { DEFAULTS } from './types';
 import { coverageForDay, solveFullCoverageWeek, trimWeekToBudget, enforceDepartmentFloor } from './solver';
 import { computeBacklog } from './backlog';
-import { caughtUpThresholdForHour, type BacklogRecurrenceParams } from './backlogModel';
-
-const DEFAULT_BACKLOG_PARAMS: BacklogRecurrenceParams = {
-  abandonRate: DEFAULTS.backlogAbandonRate,
-  recoveryEfficiency: DEFAULTS.backlogRecoveryEfficiency,
-  maxDrainFraction: DEFAULTS.backlogMaxDrainFraction,
-};
+import { caughtUpThresholdForHour } from './backlogModel';
 
 // 6-10 passes per the spec's own starting point ("cheap at 168-hour scale"); a named,
 // tunable constant, not load-bearing math.
@@ -74,16 +67,21 @@ export interface BacklogFeedbackResult {
  * that's a bigger, separate decision requiring its own sign-off — not something this loop
  * decides on its own.
  */
+// 2026-07-28 (ninth shape): `arrivals168`/`floorWhppv` replace the retired
+// `bandCeilingHourly168` — see backlogModel.ts's header for the visits-based formula. This
+// loop is always driven by an ARRIVALS-only budget in every real call site (`compute()`,
+// `computeScenarioB`) — `arrivals168` is the department's real visit counts throughout.
 export function solveShiftFitWithBacklogFeedback(
   hourlyRequirement168: number[],
   protectedFloorHourly168: number[],
   demandVolatilityHourly168: number[],
+  arrivals168: number[],
+  floorWhppv: number,
   shifts: ShiftDef[],
   weeklyBudgetHours: number,
   hoursBudgetTolerance: number,
   enaFloor: number,
-  maxPasses: number = DEFAULT_MAX_PASSES,
-  params: BacklogRecurrenceParams = DEFAULT_BACKLOG_PARAMS
+  maxPasses: number = DEFAULT_MAX_PASSES
 ): BacklogFeedbackResult {
   const capHours = weeklyBudgetHours * (1 + hoursBudgetTolerance);
 
@@ -105,12 +103,13 @@ export function solveShiftFitWithBacklogFeedback(
       hourlyRequirement168,
       passFloor,
       demandVolatilityHourly168,
+      arrivals168,
+      floorWhppv,
       shifts,
       fullCoverageGrid,
-      capHours,
-      params
+      capHours
     );
-    const backlog = computeBacklog(grid, hourlyRequirement168, shifts, params);
+    const backlog = computeBacklog(grid, arrivals168, hourlyRequirement168, shifts, floorWhppv);
     const totalBacklogHours = backlog.backlog.reduce((a, b) => a + b, 0);
     totalBacklogHoursByPass.push(totalBacklogHours);
 

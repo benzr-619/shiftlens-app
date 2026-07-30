@@ -25,14 +25,16 @@ export function ReviewStep({ onEdit }: { onEdit: (step: number) => void }) {
     currentStaffingGrid,
     boardingPath,
     headcountIncludesIndirectCare,
-    indirectCareUpliftPct,
     flexAxes,
+    fteInputMode,
+    fteInputValue,
   } = useStore();
 
   const hasArrivalsData = arrivals.some((v) => v > 0);
   const derivedAnnual = deriveAnnualVisits(arrivals);
   const effectiveAnnual = annualVisitsOverride ?? derivedAnnual;
   const band = lookupWhppvBand(effectiveAnnual);
+  const hoursPerFteAnnual = fteInputMode === 'weekly' ? fteInputValue * 52 : fteInputValue;
 
   return (
     <section className="card review-step">
@@ -130,6 +132,14 @@ export function ReviewStep({ onEdit }: { onEdit: (step: number) => void }) {
       </div>
 
       <div className="review-row">
+        <div className="review-label">Hours per FTE</div>
+        <div className="review-value">
+          {fteInputValue} hrs/{fteInputMode === 'weekly' ? 'week' : 'year'} ({hoursPerFteAnnual.toLocaleString()} hrs/year)
+        </div>
+        <button className="btn-link" onClick={() => onEdit(2)}>Edit</button>
+      </div>
+
+      <div className="review-row">
         <div className="review-label">Boarding seasonality</div>
         <div className="review-value">
           {monthlyBoardingCensusMedical || monthlyBoardingCensusBH
@@ -155,7 +165,7 @@ export function ReviewStep({ onEdit }: { onEdit: (step: number) => void }) {
           {headcountIncludesIndirectCare === null
             ? 'Not answered yet'
             : headcountIncludesIndirectCare
-              ? `Includes charge/triage/indirect care${indirectCareUpliftPct !== null ? ` (~${indirectCareUpliftPct}% uplift)` : ''}`
+              ? 'Includes charge/triage/indirect care'
               : 'Direct-care headcount only'}
         </div>
         <button className="btn-link" onClick={() => onEdit(2)}>Edit</button>
@@ -174,9 +184,10 @@ export function ReviewStep({ onEdit }: { onEdit: (step: number) => void }) {
       {/* Part 3 (guided-setup/export follow-up prompt, 2026-07-27; extended same day) — the
           app's only form of persistence. Includes arrivals/ESI/boarding/census, the current-
           staffing grid, and per-dataset setup decisions (boarding path, headcount semantics,
-          flex axes). Tool-wide POLICY (wHPPV target, both boarding ratios, ENA floor) stays
-          UI-only, set again on re-upload, never written here — see .claude/rules/
-          template-parsing.md. */}
+          flex axes, and — 2026-07-28, Ben's direct ask — the two boarding nursing ratios, plus
+          — 2026-07-30 — "hours per FTE"). Tool-wide POLICY that's NOT one of those fields
+          (wHPPV target, ENA floor) stays UI-only, set again on re-upload, never written here —
+          see .claude/rules/template-parsing.md. */}
       <div className="review-export">
         <button
           className="btn-secondary"
@@ -198,8 +209,11 @@ export function ReviewStep({ onEdit }: { onEdit: (step: number) => void }) {
               currentStaffingGrid,
               boardingPath,
               headcountIncludesIndirectCare,
-              indirectCareUpliftPct,
               flexAxes,
+              boardingRatioTarget,
+              bhBoardingRatioTarget,
+              fteInputMode,
+              fteInputValue,
             })
           }
         >

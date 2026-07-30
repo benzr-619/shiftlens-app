@@ -214,7 +214,8 @@ function deriveMeasuredMonthFactors(
 function computeMeasuredBoarding(
   measured: MeasuredBoardingInputs,
   boardingRatioTarget: number,
-  shiftMenu: ShiftDef[]
+  shiftMenu: ShiftDef[],
+  hoursPerFteAnnual: number
 ): BoardingResult {
   const medCensus = measured.boardingCensusMedical!;
   const bhCensus = measured.boardingCensusBH;
@@ -240,7 +241,7 @@ function computeMeasuredBoarding(
   const weeklyTotal = sum(cellBoardingRnHours);
   const annualBoardingHours = monthFactor ? weeklyTotal * sum(monthFactor) * WEEKS_PER_MONTH : weeklyTotal * 52;
 
-  const annualFte = annualBoardingHours / 2080;
+  const annualFte = annualBoardingHours / hoursPerFteAnnual;
   const weeklyBoardingHours = annualBoardingHours / 52;
   const weeklyFte = weeklyBoardingHours / 40;
 
@@ -270,13 +271,14 @@ export function computeBoarding(
   shiftMenu: ShiftDef[],
   dayOfWeekMeanBoardingDurationHours: number[] | undefined,
   monthlyMeanBoardingDurationHours: number[] | undefined,
-  measured?: MeasuredBoardingInputs
+  measured?: MeasuredBoardingInputs,
+  hoursPerFteAnnual: number = DEFAULTS.hoursPerFteAnnual
 ): BoardingResult | null {
   // Precedence (§3.2): a measured census, when present, is used EXCLUSIVELY — admitRate/
   // boardingDuration are provably ignored (see boarding.test.ts's precedence assertion). No
   // blending, no partial composition between the two paths.
   if (measured?.boardingCensusMedical) {
-    return computeMeasuredBoarding(measured, boardingRatioTarget, shiftMenu);
+    return computeMeasuredBoarding(measured, boardingRatioTarget, shiftMenu, hoursPerFteAnnual);
   }
 
   // Boarding output is withheld entirely if either required input is absent — never estimated from a placeholder.
@@ -296,7 +298,7 @@ export function computeBoarding(
   const weeklyDayAdjusted = sum(cellBoardingRnHours.map((v, i) => v * (dayFactor ? dayFactor[Math.floor(i / 24)] : 1)));
   const annualBoardingHours = monthFactor ? weeklyDayAdjusted * sum(monthFactor) * WEEKS_PER_MONTH : weeklyDayAdjusted * 52;
 
-  const annualFte = annualBoardingHours / 2080;
+  const annualFte = annualBoardingHours / hoursPerFteAnnual;
   const weeklyBoardingHours = annualBoardingHours / 52;
   const weeklyFte = weeklyBoardingHours / 40;
 
@@ -317,8 +319,6 @@ export function computeBoarding(
     censusSource: 'derived',
   };
 }
-
-const HOURS_PER_FTE_YEAR = 2080;
 
 /**
  * §2.6 single representative-week coverage model (2026-07-24, fourth reversal of the boarding
@@ -521,8 +521,8 @@ export function recommendWeeklyBoardingGrid(
 }
 
 /** Annual FTE a given number of annual boarding-coverage hours represents. */
-export function boardingCoverageFte(annualCoveredHours: number): number {
-  return annualCoveredHours / HOURS_PER_FTE_YEAR;
+export function boardingCoverageFte(annualCoveredHours: number, hoursPerFteAnnual: number = DEFAULTS.hoursPerFteAnnual): number {
+  return annualCoveredHours / hoursPerFteAnnual;
 }
 
 /**

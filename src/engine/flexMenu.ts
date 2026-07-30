@@ -102,6 +102,10 @@ function menuKey(menu: ShiftDef[]): string {
  * `protectedFloorHourly` (PR C change 4) — the UNCLAMPED solver-facing floor
  * (`EngineResult.protectedFloorHourly`), NOT `bandFloorHourly` (the clamped reporting curve).
  *
+ * 2026-07-28 (ninth shape): `arrivals168`/`floorWhppv` replace the retired
+ * `bandCeilingHourly168` — see backlogModel.ts's header. This search always operates on the
+ * arrivals-only budget, so `arrivals168` is the department's real visit counts.
+ *
  * An axis that's OFF is held at the current menu's structure (its count / dominant length /
  * earliest start), so the search only explores the dimensions the user opted into. Returns the
  * candidates in rank order; the caller compares the best against the current menu's own solve
@@ -120,6 +124,8 @@ export function searchFlexibleMenus(
   hourlyRequirement: number[],
   protectedFloorHourly: number[],
   demandVolatilityHourly: number[],
+  arrivals168: number[],
+  floorWhppv: number,
   currentMenu: ShiftDef[],
   axes: FlexAxes,
   weeklyBudgetHours: number,
@@ -151,12 +157,14 @@ export function searchFlexibleMenus(
       hourlyRequirement,
       protectedFloorHourly,
       demandVolatilityHourly,
+      arrivals168,
+      floorWhppv,
       menu,
       weeklyBudgetHours,
       hoursBudgetTolerance,
       enaFloor
     );
-    const { totalSeverity } = summarizeBacklogSeverity(solve.grid, hourlyRequirement, menu);
+    const { totalSeverity } = summarizeBacklogSeverity(solve.grid, arrivals168, hourlyRequirement, menu, floorWhppv);
     candidates.push({
       menu,
       solve,

@@ -57,6 +57,7 @@ export function Panel4() {
   const result = getResult();
   const sortedShiftMenu = sortByStartHour(shiftMenu);
   const inputs = buildEngineInputs();
+  const hoursPerFteAnnual = inputs.hoursPerFteAnnual ?? DEFAULTS.hoursPerFteAnnual;
   const [flexOpen, setFlexOpen] = useState(false);
 
   const currentGrid = currentStaffingGrid ?? {};
@@ -72,14 +73,14 @@ export function Panel4() {
   const worstPoint = result.marginalCurve.length > 0 ? result.marginalCurve[result.marginalCurve.length - 1] : null;
   const kneePointData =
     result.marginalKneePoint !== null ? result.marginalCurve.find((p) => p.cumulativeHoursAdded === result.marginalKneePoint) ?? null : null;
-  const kneeFte = result.marginalKneePoint !== null ? (result.marginalKneePoint * 52) / 2080 : null;
+  const kneeFte = result.marginalKneePoint !== null ? (result.marginalKneePoint * 52) / hoursPerFteAnnual : null;
   const pctUnmetRemoved =
     kneePointData && worstPoint && worstPoint.totalSeverity > 0
       ? Math.max(0, Math.min(100, ((worstPoint.totalSeverity - kneePointData.totalSeverity) / worstPoint.totalSeverity) * 100))
       : null;
   const approxHoursRemoved = pctUnmetRemoved !== null ? (result.totalBacklogHours * pctUnmetRemoved) / 100 : null;
   const typicalShiftLength = sortedShiftMenu[0]?.lengthHours ?? 12;
-  const kneeShiftCount = kneeFte !== null ? Math.max(1, Math.round((kneeFte * 2080) / (52 * typicalShiftLength))) : null;
+  const kneeShiftCount = kneeFte !== null ? Math.max(1, Math.round((kneeFte * hoursPerFteAnnual) / (52 * typicalShiftLength))) : null;
 
   // R6 (display-level sum only — EngineResult.grid stays arrivals-only, never mutated/stored).
   const boarding = result.boarding;
@@ -142,6 +143,8 @@ export function Panel4() {
           result.hourlyRequirement,
           result.protectedFloorHourly,
           result.demandVolatilityHourly,
+          arrivals,
+          result.floorWhppv,
           sortedShiftMenu,
           flexAxes,
           result.weeklyBudgetHours,
@@ -155,7 +158,7 @@ export function Panel4() {
     <section className="panel panel-4" id="ch-recommended">
       <div className="panel-columns">
         <div className="panel-words">
-          <h2>Recommended staffing</h2>
+          <h2>ShiftLens Idealized Staffing</h2>
 
           <p className="comparison-headline">
             The recommendation runs <strong>{extraShiftsHours >= 0 ? '+' : ''}{extraShiftsHours.toFixed(0)} hours/week</strong>{' '}
@@ -209,10 +212,14 @@ export function Panel4() {
                 <tr key={s.id}>
                   <td className="hour-col">{s.label || s.id}</td>
                   {DISPLAY_DAY_ORDER.map((day) => {
-                    const diff = (result.grid[day]?.[s.id] ?? 0) - (currentGrid[day]?.[s.id] ?? 0);
+                    const newValue = result.grid[day]?.[s.id] ?? 0;
+                    const diff = newValue - (currentGrid[day]?.[s.id] ?? 0);
                     return (
-                      <td key={day} className={diff > 0 ? 'diff-positive' : diff < 0 ? 'diff-negative' : 'diff-even'}>
-                        {diff > 0 ? `+${diff}` : diff}
+                      <td key={day}>
+                        <span className="diff-cell">
+                          <span className="diff-main">{newValue}</span>
+                          <span className="diff-delta">({diff > 0 ? `+${diff}` : diff})</span>
+                        </span>
                       </td>
                     );
                   })}
@@ -220,7 +227,15 @@ export function Panel4() {
               ))}
             </tbody>
           </table>
-          <p className="grid-hint">Positive = the recommendation adds nurses there vs. today; negative = it removes some.</p>
+          <details className="why-toggle-wrap">
+            <summary className="btn-link why-toggle">Why do day-to-day numbers look uneven?</summary>
+            <div className="why-explainer">
+              <p>
+                The model is trying to match staffing to demand each day, not aiming for a steady pattern across the
+                week. To smooth it out, you can test alternatives further down in "Test it yourself."
+              </p>
+            </div>
+          </details>
         </div>
         <div className="panel-frame">
           <VisualFrame views={views} shiftMenu={sortedShiftMenu} />

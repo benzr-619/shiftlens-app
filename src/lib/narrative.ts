@@ -26,8 +26,8 @@
 // call its narrative.ts function instead of hand-editing its inline JSX string — that is what
 // closes the duplication for good, section by section, rather than in one large risky pass.
 
-import type { EngineResult, EngineInputs } from '../engine/types';
-import type { HiddenBoardingBlock } from '../engine/hiddenBoarding';
+import { DEFAULTS, type EngineResult, type EngineInputs } from '../engine/types';
+import type { ShiftDiagnosticGroup } from '../engine/hiddenBoarding';
 import type { ScenarioBResult } from '../engine';
 import type { SynthesisResult } from '../engine/synthesis';
 
@@ -45,10 +45,15 @@ export function scheduleMeansOvercoverageSentence(weeklyScheduledHours: number, 
   return `The recommended schedule runs ${weeklyScheduledHours.toFixed(0)} hours/week, which is ${overUnder} target-implied hours (${weeklyBudgetHours.toFixed(0)} target-implied hrs/week).`;
 }
 
-export function deliveryPremiumSentence(weeklyScheduledHours: number, weeklyBudgetHours: number, shiftLengths: number[]): string | null {
+export function deliveryPremiumSentence(
+  weeklyScheduledHours: number,
+  weeklyBudgetHours: number,
+  shiftLengths: number[],
+  hoursPerFteAnnual: number = DEFAULTS.hoursPerFteAnnual
+): string | null {
   const premiumHours = weeklyScheduledHours - weeklyBudgetHours;
   if (premiumHours <= 0.5) return null;
-  const premiumFte = (premiumHours * 52) / 2080;
+  const premiumFte = (premiumHours * 52) / hoursPerFteAnnual;
   return `Whole nurses and ${shiftLengths.join('/')}-hour shift blocks cost ${premiumHours.toFixed(0)} hours a week (${premiumFte.toFixed(1)} FTE) more than the target's arithmetic implies. That's granularity, not waste — a different shift menu is the one lever that reduces it.`;
 }
 
@@ -105,45 +110,49 @@ export function scenarioBHeadlineSentence(scenarioB: ScenarioBResult, currentSev
   return `Keeping your same ${scenarioB.currentTotalWeeklyHours.toFixed(0)} hrs/week but placing them where arrivals actually need them would cut modeled queued-arrivals-work by roughly ${severityReductionPct.toFixed(0)}% — from ${currentSeverity.toFixed(0)} down to ${scenarioB.totalSeverity.toFixed(0)} on the same severity scale the schedule is optimized against, at zero additional hours.`;
 }
 
-// --- Hidden-boarding diagnostic (HiddenBoardingSection.tsx) ---
+// --- Per-shift arrivals/boarding diagnostic (PANEL1_COPY_REVISION_SPEC_2026-07-28.md §4) ---
+// Supersedes the old fixed day/night (07-19/19-07) sentence pair — one sentence per MERGED
+// shift group now, since the diagnostic is rebuilt per actual shift in the shift menu rather
+// than a fixed calendar split. See engine/hiddenBoarding.ts's header for the full model.
 
-const NEGLIGIBLE_HOURS = 8;
-
-export function hiddenBoardingNightSentence(night: HiddenBoardingBlock, boardingDataPresent: boolean): string {
-  if (!boardingDataPresent) {
-    if (night.vsArrivalsAlone > NEGLIGIBLE_HOURS) {
-      return `Your nights are staffed ${night.vsArrivalsAlone.toFixed(0)} hours a week beyond what arrivals alone justify — add your boarding data to see whether that's boarding absorption or something else.`;
-    }
-    if (night.vsArrivalsAlone < -NEGLIGIBLE_HOURS) {
-      return `Your nights run ${Math.abs(night.vsArrivalsAlone).toFixed(0)} hours a week short of what arrivals alone justify.`;
-    }
-    return `Your night staffing roughly matches what arrivals alone justify.`;
-  }
-  const boardingNeed = night.boardingNeedHours ?? 0;
-  if (night.vsArrivalsAlone > NEGLIGIBLE_HOURS) {
-    const enough = night.vsArrivalsAlone >= boardingNeed;
-    return `Your nights carry ${night.vsArrivalsAlone.toFixed(0)} hours a week beyond what arrivals justify. That isn't overstaffing — it's boarding, absorbed into a schedule that was never sized for it, and ${
-      enough ? `it covers most of what boarding needs there (${boardingNeed.toFixed(0)} hours at night)` : `it isn't even enough (boarding needs ${boardingNeed.toFixed(0)} hours at night)`
-    }.`;
-  }
-  if (night.vsArrivalsAlone < -NEGLIGIBLE_HOURS) {
-    return `Your nights run ${Math.abs(night.vsArrivalsAlone).toFixed(0)} hours a week short of what arrivals alone justify — and that's before counting boarding, which needs ${boardingNeed.toFixed(0)} more hours there.`;
-  }
-  return `Your night staffing matches what arrivals justify, and boarding at night is ${
-    boardingNeed < NEGLIGIBLE_HOURS ? 'modest' : `real (${boardingNeed.toFixed(0)} hours a week)`
-  } — nights are not where your problem is.`;
+function joinShiftNames(labels: string[]): string {
+  if (labels.length === 1) return labels[0];
+  if (labels.length === 2) return `${labels[0]} and ${labels[1]}`;
+  return `${labels.slice(0, -1).join(', ')}, and ${labels[labels.length - 1]}`;
 }
 
-export function hiddenBoardingDaySentence(day: HiddenBoardingBlock, boardingDataPresent: boolean): string {
-  if (day.vsArrivalsAlone < -NEGLIGIBLE_HOURS) {
-    return `Your days run ${Math.abs(day.vsArrivalsAlone).toFixed(0)} hours a week short of what arrivals alone justify.`;
+export function shiftDiagnosticSentence(group: ShiftDiagnosticGroup): string {
+  const plural = group.labels.length > 1;
+  const names = joinShiftNames(group.labels);
+  const isAre = plural ? 'are' : 'is';
+  const shiftWord = plural ? 'shifts' : 'shift';
+  const verdict =
+    group.arrivalsStatus === 'understaffed' ? 'understaffed' : group.arrivalsStatus === 'overstaffed' ? 'overstaffed' : 'staffed about right';
+
+  if (group.boardingCovered === null) {
+    return `On average, ${names} ${shiftWord} ${isAre} ${verdict} for arrivals.`;
   }
-  if (day.vsArrivalsAlone > NEGLIGIBLE_HOURS) {
-    return `Your days are staffed ${day.vsArrivalsAlone.toFixed(0)} hours a week beyond what arrivals alone justify${
-      boardingDataPresent && (day.boardingNeedHours ?? 0) > NEGLIGIBLE_HOURS ? ' — likely covering some daytime boarding, too' : ''
-    }.`;
+
+  const covered = group.boardingCovered;
+  // "and" when the boarding-coverage fact matches what you'd expect from the arrivals verdict
+  // (overstaffed-and-covers, or not-overstaffed-and-doesn't-cover); "but" when it's the
+  // surprising combination (overstaffed yet still doesn't cover, or covers despite being
+  // short/appropriate on arrivals).
+  const conjunction = covered === (group.arrivalsStatus === 'overstaffed') ? 'and' : 'but';
+  const doesDoesnt = covered ? (plural ? 'do' : 'does') : plural ? "don't" : "doesn't";
+  const itsTheir = plural ? 'their' : 'its';
+
+  let sentence = `On average, ${names} ${shiftWord} ${isAre} ${verdict} for arrivals, ${conjunction} ${doesDoesnt} have enough nursing hours left over to also cover ${itsTheir} boarding load.`;
+
+  if (group.arrivalsStatus === 'overstaffed') {
+    if (covered) {
+      sentence = `${sentence.replace(/\.$/, '')}, and those extra hours are enough to cover it.`;
+    } else {
+      const itThey = plural ? 'they carry' : 'it carries';
+      sentence += ` The extra ${group.surplus.toFixed(0)} hours ${itThey} don't fully close the ${(group.boardingNeedHours ?? 0).toFixed(0)} hours of boarding demand there.`;
+    }
   }
-  return `Your day staffing roughly matches what arrivals alone justify.`;
+  return sentence;
 }
 
 // --- Synthesis chapter (SynthesisSection.tsx) ---
@@ -208,6 +217,7 @@ export function deliveryPremiumFromResult(result: EngineResult, inputs: EngineIn
   return deliveryPremiumSentence(
     result.weeklyScheduledHours,
     result.weeklyBudgetHours,
-    inputs.shiftMenu.map((s) => s.lengthHours)
+    inputs.shiftMenu.map((s) => s.lengthHours),
+    inputs.hoursPerFteAnnual ?? DEFAULTS.hoursPerFteAnnual
   );
 }

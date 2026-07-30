@@ -202,14 +202,18 @@ describe('synthetic department sweep (§12.5)', () => {
       assertNonNegativeGrid(currentStaffingGrid, 'currentStaffingGrid');
 
       // Orderings: full-coverage hours >= any trimmed solve — EXCEPT when the department ENA
-      // floor (min on-duty headcount, engine-solver.md §5.6) itself exceeds demand everywhere.
+      // floor (min on-duty headcount, engine-solver.md §5.6) exceeds demand at ANY hour.
       // `fullCoverage` (solveFullCoverageWeek) targets `hourlyRequirement` only, ignoring the
       // floor; `enforceDepartmentFloor` runs AFTER the trim and can push scheduled hours back
       // ABOVE `fullCoverage` at genuinely low volume — the exact "low-volume ED where the ENA
-      // floor binds" profile F is meant to exercise, not a bug in this ordering check.
+      // floor binds" profile F is meant to exercise, not a bug in this ordering check. Widened
+      // from `.every` to `.some` (2026-07-28, found by the sweep itself): a MIXED-volume
+      // department where the floor only dominates SOME hours (not the whole week) can still
+      // legitimately push weeklyScheduledHours above fullCoverage — the original `.every` guard
+      // only caught the all-hours-low-volume case (profile F itself), not this partial one.
       const enaFloor = inputs.enaFloor ?? 2;
-      const floorDominatesEverywhere = result.hourlyRequirement.every((r) => r <= enaFloor);
-      if (!floorDominatesEverywhere) {
+      const floorDominatesSomewhere = result.hourlyRequirement.some((r) => r <= enaFloor);
+      if (!floorDominatesSomewhere) {
         expect(
           result.fullCoverage.weeklyHours,
           `fullCoverage should be >= weeklyScheduledHours for ${label}`

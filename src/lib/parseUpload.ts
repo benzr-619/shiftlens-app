@@ -24,8 +24,17 @@ export interface ParsedUpload {
   // answers, not tool policy — see lib/template.ts's SetupDecisionsData header comment.
   boardingPath?: 'census' | 'classic' | 'skip';
   headcountIncludesIndirectCare?: boolean;
-  indirectCareUpliftPct?: number;
   flexAxes?: { startTimes: boolean; shiftCount: boolean; shiftLengths: boolean };
+  // 2026-07-28, Ben's direct ask — the two boarding nursing ratios, carried in the Setup
+  // Decisions tab alongside the other per-dataset workflow answers above. See
+  // lib/template.ts's SetupDecisionsData header comment for the scope of this exception.
+  boardingRatioTarget?: number;
+  bhBoardingRatioTarget?: number;
+  // 2026-07-30 — the "hours per FTE" policy setting, same scoped exception as the two
+  // boarding ratios above (see lib/template.ts's DECISIONS_TEMPLATE_FIELDS comment). Both
+  // fields round-trip together — fteInputValue alone isn't enough to redisplay the field.
+  fteInputMode?: 'weekly' | 'annual';
+  fteInputValue?: number;
   warnings: string[];
   errors: string[];
   filledCells: number; // arrivals cells actually populated, out of 168 (0 if no Arrivals column)
@@ -118,7 +127,7 @@ const SEASONALITY_HEADER_ALIASES: Record<string, string[]> = {
 // collision-avoidance convention — do not extend HEADER_ALIASES. NOTE: there is deliberately
 // no Settings tab / policy-value alias table here — a Settings tab was built and then
 // REMOVED (reversal, see .claude/rules/template-parsing.md): the uploaded file carries DATA,
-// policy values (wHPPV target, ratios, ENA floor, LWBS rate) are set in the UI, never parsed
+// policy values (wHPPV target, ratios, ENA floor) are set in the UI, never parsed
 // from a workbook. Don't reintroduce a settings-values parse path without checking first.
 const BOARDING_CENSUS_HEADER_ALIASES: Record<string, string[]> = {
   day: ['day', 'dayofweek', 'weekday'],
@@ -145,15 +154,30 @@ const DECISIONS_HEADER_ALIASES: Record<string, string[]> = {
   value: ['value', 'val', 'amount', 'answer'],
 };
 
-type DecisionField = 'boardingPath' | 'headcountIncludesIndirectCare' | 'indirectCareUpliftPct' | 'flexStartTimes' | 'flexShiftCount' | 'flexShiftLengths';
+type DecisionField =
+  | 'boardingPath'
+  | 'headcountIncludesIndirectCare'
+  | 'flexStartTimes'
+  | 'flexShiftCount'
+  | 'flexShiftLengths'
+  | 'boardingRatioTarget'
+  | 'bhBoardingRatioTarget'
+  | 'fteInputMode'
+  | 'fteInputValue';
 
 const DECISION_FIELD_ALIASES: Record<string, DecisionField> = {
   boardingpath: 'boardingPath',
   headcountincludesindirectcare: 'headcountIncludesIndirectCare',
-  indirectcareupliftpct: 'indirectCareUpliftPct',
   flexiblestarttimes: 'flexStartTimes',
   flexibleshiftcount: 'flexShiftCount',
   flexibleshiftlengths: 'flexShiftLengths',
+  // 2026-07-28, Ben's direct ask — see this file's DecisionField/rowsToDecisions comments.
+  // Normalized forms of the template.ts DECISIONS_TEMPLATE_FIELDS labels (punctuation stripped).
+  boardingratiornmedicalboarders: 'boardingRatioTarget',
+  bhboardingratiornbhboarders: 'bhBoardingRatioTarget',
+  // 2026-07-30 — the "hours per FTE" policy setting, same scoped exception as above.
+  hoursperftemode: 'fteInputMode',
+  hoursperftevalue: 'fteInputValue',
 };
 
 function normalizeHeader(h: string): string {
@@ -503,8 +527,11 @@ function rowsToDecisions(
 ): {
   boardingPath?: 'census' | 'classic' | 'skip';
   headcountIncludesIndirectCare?: boolean;
-  indirectCareUpliftPct?: number;
   flexAxes?: { startTimes: boolean; shiftCount: boolean; shiftLengths: boolean };
+  boardingRatioTarget?: number;
+  bhBoardingRatioTarget?: number;
+  fteInputMode?: 'weekly' | 'annual';
+  fteInputValue?: number;
   warnings: string[];
 } {
   const warnings: string[] = [];
@@ -512,10 +539,13 @@ function rowsToDecisions(
   const result: {
     boardingPath?: 'census' | 'classic' | 'skip';
     headcountIncludesIndirectCare?: boolean;
-    indirectCareUpliftPct?: number;
     flexStartTimes?: boolean;
     flexShiftCount?: boolean;
     flexShiftLengths?: boolean;
+    boardingRatioTarget?: number;
+    bhBoardingRatioTarget?: number;
+    fteInputMode?: 'weekly' | 'annual';
+    fteInputValue?: number;
   } = {};
   if (colMap.decision === undefined || colMap.value === undefined) return { warnings };
 
@@ -533,9 +563,13 @@ function rowsToDecisions(
       if (key === 'census' || key === 'classic' || key === 'skip') result.boardingPath = key;
       return;
     }
-    if (canonical === 'indirectCareUpliftPct') {
+    if (canonical === 'fteInputMode') {
+      if (key === 'weekly' || key === 'annual') result.fteInputMode = key;
+      return;
+    }
+    if (canonical === 'boardingRatioTarget' || canonical === 'bhBoardingRatioTarget' || canonical === 'fteInputValue') {
       const v = parseNum(raw);
-      if (v !== null) result.indirectCareUpliftPct = v;
+      if (v !== null) result[canonical] = v;
       return;
     }
     const boolVal = key === 'yes' || key === 'true' ? true : key === 'no' || key === 'false' ? false : null;
@@ -653,8 +687,11 @@ export async function parseXlsxFile(file: File): Promise<ParsedUpload> {
       merged.warnings.push(...parsed.warnings.map((w) => `${sheetName}: ${w}`));
       if (parsed.boardingPath !== undefined) merged.boardingPath = parsed.boardingPath;
       if (parsed.headcountIncludesIndirectCare !== undefined) merged.headcountIncludesIndirectCare = parsed.headcountIncludesIndirectCare;
-      if (parsed.indirectCareUpliftPct !== undefined) merged.indirectCareUpliftPct = parsed.indirectCareUpliftPct;
       if (parsed.flexAxes !== undefined) merged.flexAxes = parsed.flexAxes;
+      if (parsed.boardingRatioTarget !== undefined) merged.boardingRatioTarget = parsed.boardingRatioTarget;
+      if (parsed.bhBoardingRatioTarget !== undefined) merged.bhBoardingRatioTarget = parsed.bhBoardingRatioTarget;
+      if (parsed.fteInputMode !== undefined) merged.fteInputMode = parsed.fteInputMode;
+      if (parsed.fteInputValue !== undefined) merged.fteInputValue = parsed.fteInputValue;
       recognizedAny = true;
     }
     // else: unrecognized tab — tolerated silently (e.g. a stray notes/instructions tab, or the

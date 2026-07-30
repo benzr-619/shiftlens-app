@@ -87,15 +87,11 @@ export interface EngineInputs {
   acuityWeights?: AcuityWeights; // default 1.75/1.00/0.50
   smoothingWeights?: SmoothingWeights; // default 0.6/0.2, must sum center+2*neighbor=1
   enaFloor?: number; // default 2, department-level minimum on-duty headcount
-
-  // 2026-07-26 PR E (RESULTS_COMPREHENSION_SPEC_2026-07-26.md §4d) — the department's OWN
-  // Left-Without-Being-Seen rate (0-1), an OPTIONAL setup field deriving `backlogAbandonRate`
-  // directly, rather than leaving it at the DEFAULTS cohort-assumption value. Absent -> the
-  // existing default (0.03) is used, labeled in the UI as a cohort assumption, not this
-  // department's own number (never invent a fallback; respect the no-seeded-ED-data
-  // constraint). This is the one parameter of the backlog recurrence's three that's plausibly
-  // measurable from a real ED's own data — see engine/backlog.ts's FRAMING note.
-  lwbsRate?: number;
+  // UI-only policy setting (store.ts's fteInputMode/fteInputValue), never part of the
+  // uploaded data template — same "workbook carries data, policy lives in the UI" rule as
+  // boardingRatioTarget/enaFloor. The canonical annual figure every FTE-denominated
+  // computation reads: `inputs.hoursPerFteAnnual ?? DEFAULTS.hoursPerFteAnnual`.
+  hoursPerFteAnnual?: number; // default 2080 (40 hrs/week × 52)
 }
 
 export interface ShortfallEntry {
@@ -203,6 +199,20 @@ export interface EngineResult {
   protectedFloorHourly: Cell168;
   demandVolatilityHourly: Cell168;
 
+  // 2026-07-28 (ninth shape of the backlog-recurrence history, BACKLOG_MODEL_VISITS_BASED_
+  // SPEC_2026-07-28.md — see .claude/rules/engine-solver.md's dated section) — the single
+  // FLAT department-level peer-cohort p25 wHPPV (`lookupWhppvBand(annualVisits).p25Whppv`,
+  // computed once here). This is the "floor pace" the visits-based backlog recurrence assumes
+  // nurses can compress down to, but never past — the ceiling on how fast anyone can
+  // defensibly go. Deliberately a single scalar, not an hourly curve (confirmed with Ben —
+  // `bandFloorHourly` isn't actually measured hour by hour either; a simpler, more legible
+  // number is the right tradeoff for a model capturing relative SHAPE, not precise wait
+  // times). `bandCeilingHourly` above no longer has any role in the backlog recurrence itself
+  // (the old "stretch to a peer ceiling" concept was backwards — see backlogModel.ts's
+  // header) — it stays for band-color reporting/heatmap coloring/arrivals-vs-band
+  // classification, which are unrelated to backlog modeling.
+  floorWhppv: number;
+
   // 2026-07-26 PR C (change 5): the solver's actual objective, exposed — otherwise the grid
   // is unexplainable by construction. `totalBacklogHours`/`peakSeverity` are computed from the
   // FINAL solved grid's own backlog curve (`engine/backlog.ts`'s `summarizeBacklogSeverity`),
@@ -211,13 +221,6 @@ export interface EngineResult {
   totalBacklogHours: number;
   totalSeverity: number;
   peakSeverity: number;
-
-  // 2026-07-26 PR E (RESULTS_COMPREHENSION_SPEC_2026-07-26.md §4e): nurse-hours of queued
-  // care the backlog recurrence's own passive-attrition term estimates left the system via
-  // abandonment (LWBS), for the FINAL solved grid, per scenario (weekly, not annualized). An
-  // ESTIMATE of WORK abandoned, NOT a patient count — NEVER convert to a dollar figure (spec
-  // §12/§13 — the finance-partner worksheet, PR G, is the sanctioned alternative).
-  estimatedAbandonedHours: number;
 
   // 2026-07-26 (Phase 2b, engine/backlogFeedback.ts's iterative relaxation loop — see
   // .claude/rules/engine-solver.md's "Budget-capped trim" section, fourth reversal-in-spirit
@@ -232,10 +235,15 @@ export interface EngineResult {
   // `solveFullCoverageDay`/Week's never-short-at-any-hour grid used to be computed and thrown
   // away (an intermediate upper bound feeding the trim, never surfaced). `fullCoverage` exposes
   // it directly: what covering every hour, no shortfall anywhere, would actually cost.
-  // `fteDelta = (fullCoverage.weeklyHours - capHours) * 52 / 2080` — can be <= 0 when a
+  // `fteDelta = (fullCoverage.weeklyHours - capHours) * 52 / hoursPerFteAnnual` — can be <= 0 when a
   // generous wHPPV target already funds full coverage (a real, not-hypothetical edge case in a
   // low-volume ED); UI must handle that explicitly rather than rendering a negative ask.
-  fullCoverage: { weeklyHours: number; impliedWhppv: number; fteDelta: number };
+  // 2026-07-30: `grid` added — Panel 3 gained an "Arrivals" toggle alongside its existing
+  // "Arrivals + Boarding" one, and needs this arrivals-only full-coverage grid to build that
+  // toggle's own table/heatmap, the same way `fullCoverageCombined.grid` already does for the
+  // combined toggle. Was previously computed and discarded inside compute() as a pure
+  // intermediate feeding `marginalCurve` — now also surfaced directly.
+  fullCoverage: { weeklyHours: number; impliedWhppv: number; fteDelta: number; grid: Grid };
   // PR B (RESULTS_PAGE_V2_SPEC_2026-07-27.md §5.3) — Panel 3's ceiling: full coverage over
   // the COMBINED arrivals+boarding demand curve (hourlyRequirement + boarding's
   // cellBoardingRnHours when boarding is present, degenerately equal to `fullCoverage` when
@@ -285,22 +293,14 @@ export const DEFAULTS = {
   // CONVENTION, not peer-benchmarked, unlike boardingRatioTarget's own evidence tag).
   bhBoardingRatioTarget: 10,
   enaFloor: 2,
-  // §2.4 backlog/"falling behind" diagnostic (ASSUMPTION). 2026-07-26 PR B
-  // (SOLVER_REALISM_SPEC_2026-07-26.md) REVERSED the single-decay model (`backlogHourlyDecay`,
-  // retired — see .claude/rules/engine-solver.md's "Budget-capped trim" section) with three
-  // named processes instead of one blended constant. See `engine/backlogModel.ts`'s header for
-  // the full recurrence and rationale.
-  //   backlogAbandonRate: work that LEAVES the system per hour — this is LWBS. Unlike the
-  //     other two, this is measurable in a real ED's own data (the old 0.85 decay implied
-  //     15%/hr simply vanishing — far too forgiving as an LWBS proxy).
-  backlogAbandonRate: 0.03,
-  //   backlogRecoveryEfficiency: a spare nurse-hour retires LESS than an hour of queued work —
-  //     catch-up loses batching, adds re-triage and reassessment.
-  backlogRecoveryEfficiency: 0.6,
-  //   backlogMaxDrainFraction: hard ceiling on queue drainage per hour regardless of spare
-  //     staff — beds, providers and imaging gate it. THIS is the term that fixes the
-  //     peak-cutting bias the old unconstrained-symmetric-recovery model had.
-  backlogMaxDrainFraction: 0.3,
+  hoursPerFteAnnual: 2080,
+  // §2.4 backlog/"falling behind" diagnostic (ASSUMPTION). 2026-07-28 REVERSAL (eighth shape,
+  // see .claude/rules/engine-solver.md's "Budget-capped trim" section): the PR B/E
+  // abandonment model (`backlogAbandonRate`/`backlogRecoveryEfficiency`/
+  // `backlogMaxDrainFraction`) is retired entirely — no DEFAULTS entries remain for it. The
+  // recurrence is now a capacity-elasticity model (backlog pays down only via genuinely idle
+  // scheduled hours or bounded catch-up capacity, no passive attrition/LWBS assumption baked
+  // in) — see `engine/backlogModel.ts`'s header for the full formula.
 };
 
 export const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];

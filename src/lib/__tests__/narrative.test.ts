@@ -5,13 +5,12 @@ import {
   whppvRangeSentence,
   comparisonHeadlineSentence,
   scenarioBHeadlineSentence,
-  hiddenBoardingNightSentence,
-  hiddenBoardingDaySentence,
+  shiftDiagnosticSentence,
   synthesisHeadlineSentence,
   fundingAskAlreadyFundedSentence,
   fundingAskKneeLeadSentence,
 } from '../narrative';
-import type { HiddenBoardingBlock } from '../../engine/hiddenBoarding';
+import type { ShiftDiagnosticGroup } from '../../engine/hiddenBoarding';
 import type { ScenarioBResult } from '../../engine';
 import type { SynthesisResult } from '../../engine/synthesis';
 
@@ -30,6 +29,15 @@ describe('narrative.ts — pure headline functions', () => {
     expect(s).not.toBeNull();
     expect(s).toContain('147 hours a week');
     expect(s!.toLowerCase()).not.toContain('budget');
+  });
+
+  it('deliveryPremiumSentence: a non-default hoursPerFteAnnual scales the reported FTE figure consistently', () => {
+    const defaultSentence = deliveryPremiumSentence(1656, 1509, [12, 12]); // 147 hrs/wk premium, default 2080 hrs/yr -> 3.7 FTE
+    const hoursPerFteAnnual36x52 = 36 * 52; // 1872
+    const customSentence = deliveryPremiumSentence(1656, 1509, [12, 12], hoursPerFteAnnual36x52);
+    expect(defaultSentence).toContain('3.7 FTE');
+    // 147 * 52 / 1872 = 4.08... -> 4.1 FTE, strictly more than the default's 3.7 FTE.
+    expect(customSentence).toContain('4.1 FTE');
   });
 
   it('whppvRangeSentence: names both hours', () => {
@@ -73,21 +81,50 @@ describe('narrative.ts — pure headline functions', () => {
     expect(general).toContain('cut modeled queued-arrivals-work by roughly');
   });
 
-  it('hiddenBoarding night/day sentences: mirrors exist for both directions plus negligible (§12.1)', () => {
-    const nightHigh: HiddenBoardingBlock = { label: 'Night', arrivalsNeedHours: 567, boardingNeedHours: 283, totalNeedHours: 850, staffedHours: 752, vsArrivalsAlone: 185 };
-    const nightLow: HiddenBoardingBlock = { label: 'Night', arrivalsNeedHours: 567, boardingNeedHours: 283, totalNeedHours: 850, staffedHours: 400, vsArrivalsAlone: -167 };
-    const nightNegligible: HiddenBoardingBlock = { label: 'Night', arrivalsNeedHours: 567, boardingNeedHours: 3, totalNeedHours: 570, staffedHours: 570, vsArrivalsAlone: 0 };
+  it('shiftDiagnosticSentence: per-shift groups render singular/plural, boarding-absent, and both overstaffed branches (PANEL1_COPY_REVISION_SPEC_2026-07-28.md §4)', () => {
+    const understaffedSingle: ShiftDiagnosticGroup = {
+      shiftIds: ['night'],
+      labels: ['Night'],
+      arrivalsStatus: 'understaffed',
+      staffedHours: 400,
+      requiredHours: 567,
+      surplus: 0,
+      boardingNeedHours: 283,
+      boardingCovered: false,
+    };
+    const s1 = shiftDiagnosticSentence(understaffedSingle);
+    expect(s1).toContain('On average, Night shift is understaffed for arrivals');
+    expect(s1).toContain("doesn't have enough nursing hours left over to also cover its boarding load");
 
-    expect(hiddenBoardingNightSentence(nightHigh, true)).toContain('beyond what arrivals justify');
-    expect(hiddenBoardingNightSentence(nightLow, true)).toContain('short of what arrivals alone justify');
-    expect(hiddenBoardingNightSentence(nightNegligible, true)).toContain('not where your problem is');
-    // Boarding-absent mirrors degrade gracefully, never assert a boarding-specific claim.
-    expect(hiddenBoardingNightSentence(nightHigh, false)).toContain('add your boarding data');
+    const understaffedNoBoarding: ShiftDiagnosticGroup = { ...understaffedSingle, boardingNeedHours: null, boardingCovered: null };
+    const s2 = shiftDiagnosticSentence(understaffedNoBoarding);
+    expect(s2).toBe('On average, Night shift is understaffed for arrivals.');
 
-    const dayShort: HiddenBoardingBlock = { label: 'Day', arrivalsNeedHours: 1025, boardingNeedHours: 258, totalNeedHours: 1283, staffedHours: 796, vsArrivalsAlone: -229 };
-    const dayOver: HiddenBoardingBlock = { label: 'Day', arrivalsNeedHours: 1025, boardingNeedHours: 258, totalNeedHours: 1283, staffedHours: 1100, vsArrivalsAlone: 75 };
-    expect(hiddenBoardingDaySentence(dayShort, true)).toContain('short of what arrivals alone justify');
-    expect(hiddenBoardingDaySentence(dayOver, true)).toContain('beyond what arrivals alone justify');
+    const overstaffedPluralNotCovered: ShiftDiagnosticGroup = {
+      shiftIds: ['day', 'evening'],
+      labels: ['Day', 'Evening'],
+      arrivalsStatus: 'overstaffed',
+      staffedHours: 900,
+      requiredHours: 700,
+      surplus: 200,
+      boardingNeedHours: 350,
+      boardingCovered: false,
+    };
+    const s3 = shiftDiagnosticSentence(overstaffedPluralNotCovered);
+    expect(s3).toContain('On average, Day and Evening shifts are overstaffed for arrivals');
+    expect(s3).toContain("but don't have enough nursing hours left over to also cover their boarding load");
+    expect(s3).toContain("The extra 200 hours they carry don't fully close the 350 hours of boarding demand there.");
+
+    const overstaffedCovered: ShiftDiagnosticGroup = { ...overstaffedPluralNotCovered, boardingNeedHours: 50, boardingCovered: true };
+    const s4 = shiftDiagnosticSentence(overstaffedCovered);
+    expect(s4).toContain('and do have enough nursing hours left over to also cover their boarding load, and those extra hours are enough to cover it.');
+
+    const threeShifts: ShiftDiagnosticGroup = {
+      ...understaffedSingle,
+      shiftIds: ['a', 'b', 'c'],
+      labels: ['Day', 'Evening', 'Night'],
+    };
+    expect(shiftDiagnosticSentence(threeShifts)).toContain('On average, Day, Evening, and Night shifts are understaffed');
   });
 
   it('synthesisHeadlineSentence: positive, negative, and near-zero gap all produce distinct endings (§12.3)', () => {

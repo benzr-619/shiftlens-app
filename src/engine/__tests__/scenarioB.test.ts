@@ -58,7 +58,7 @@ describe('PR F — Scenario B ("the same hours, better placed")', () => {
     const b = computeScenarioB(result, inputs, badGrid);
     expect(b).not.toBeNull();
 
-    const actualSeverity = summarizeBacklogSeverity(badGrid, result.hourlyRequirement, inputs.shiftMenu).totalSeverity;
+    const actualSeverity = summarizeBacklogSeverity(badGrid, inputs.arrivals, result.hourlyRequirement, inputs.shiftMenu, result.floorWhppv).totalSeverity;
     expect(b!.totalSeverity).toBeLessThan(actualSeverity);
   });
 
@@ -73,7 +73,14 @@ describe('PR F — Scenario B ("the same hours, better placed")', () => {
     expect(b!.isFullCoverage).toBe(true);
   });
 
-  it('edge case: current hours below what the ENA floor requires -> the floor pass reports a real overage, never "budget-neutral"', () => {
+  // 2026-07-29 REWRITTEN (not just loosened) — Ben's direct ask was for Scenario B to hold
+  // total hours EXACTLY flat, which required switching from the old trim-based parameter swap
+  // (which could push hours above the current total via the ENA-floor safety pass) to an exact
+  // reallocation (`reallocateHoursExact`) that only ever TRADES shift-units, never adds them.
+  // The floor safety net is a genuine, disclosed casualty of that guarantee — see
+  // `ScenarioBResult.overageFromFloor`'s doc in `engine/index.ts`. This test used to assert the
+  // OPPOSITE of what it asserts now; that's the deliberate reversal, not a loosened assertion.
+  it('edge case: current hours below what the ENA floor requires -> hours still hold exactly flat (the floor safety net does not apply to this reallocation)', () => {
     const inputs: EngineInputs = { ...baseInputs(), enaFloor: 5 };
     const result = compute(inputs);
     // Current staffing well below the ENA floor (5) at every hour.
@@ -81,8 +88,8 @@ describe('PR F — Scenario B ("the same hours, better placed")', () => {
     for (let day = 0; day < 7; day++) grid[day] = { day: 1, night: 1 };
     const b = computeScenarioB(result, inputs, grid);
     expect(b).not.toBeNull();
-    expect(b!.overageFromFloor).toBeGreaterThan(0);
-    expect(b!.weeklyScheduledHours).toBeGreaterThan(b!.currentTotalWeeklyHours);
+    expect(b!.overageFromFloor).toBe(0);
+    expect(b!.weeklyScheduledHours).toBe(b!.currentTotalWeeklyHours);
   });
 
   it('already near-optimal: reallocating an already-well-shaped current grid does not find a dramatically better arrangement', () => {
@@ -91,7 +98,7 @@ describe('PR F — Scenario B ("the same hours, better placed")', () => {
     // Current staffing IS the idealized grid itself — already optimal for its own total hours.
     const b = computeScenarioB(result, inputs, result.grid);
     expect(b).not.toBeNull();
-    const actualSeverity = summarizeBacklogSeverity(result.grid, result.hourlyRequirement, inputs.shiftMenu).totalSeverity;
+    const actualSeverity = summarizeBacklogSeverity(result.grid, inputs.arrivals, result.hourlyRequirement, inputs.shiftMenu, result.floorWhppv).totalSeverity;
     // NOTE: Scenario B's own trim is an 8-pass relaxation heuristic (engine/backlogFeedback.ts)
     // re-run against a slightly different effective budget (the current grid's ACTUAL hours,
     // which can differ from the target-implied figure the original solve targeted — the

@@ -16,10 +16,10 @@
 // the COMBINED arrivals+boarding demand curve instead of arrivals alone, at the CURRENT total
 // hours. Extracted to its own exported function (was inlined in `computeSynthesis` in PR G) so
 // PR K doesn't re-derive a third copy of this solve.
-import type { EngineInputs, EngineResult, Cell168, Grid, ShiftDef } from './types';
-import { DEFAULTS } from './types';
+import { DEFAULTS, type EngineInputs, type EngineResult, type Cell168, type Grid, type ShiftDef } from './types';
 import { fullWeekCapacity } from './solver';
-import { solveShiftFitWithBacklogFeedback } from './backlogFeedback';
+import { reallocateHoursExact } from './exactReallocation';
+import { NO_COMPRESSION_FLOOR_WHPPV } from './backlogModel';
 
 const DAY_START_HOUR = 7;
 const DAY_END_HOUR = 19;
@@ -63,9 +63,21 @@ export interface CombinedReallocationResult {
 }
 
 /**
- * Reallocates the SAME current total hours against the COMBINED (arrivals+boarding) demand —
- * the parameter-swap technique spec §5 (Scenario B) established, applied to a different demand
- * curve. Returns `null` with no current staffing (nothing to reallocate).
+ * Reallocates the SAME current total hours against the COMBINED (arrivals+boarding) demand.
+ *
+ * 2026-07-29 REVERSAL (Ben's direct ask — see `.claude/rules/engine-solver.md`'s "Exact-hours
+ * reallocation" section, and `computeScenarioB`'s matching header in `engine/index.ts`): this
+ * used to be the same parameter-swap TRIM technique Scenario B used — it only ever cuts down
+ * from a full-coverage upper bound, so it didn't reliably land the reallocated total exactly on
+ * `currentStaffedWeeklyHours`. Now uses `reallocateHoursExact` (a REALLOCATION — only ever
+ * trades a shift-unit for another, never adds or removes) so total hours are conserved EXACTLY.
+ * The NO-COMPRESSION degenerate case still applies (boarding-blended demand has no honest
+ * "visits" concept — see backlogModel.ts's header) — `reallocateHoursExact` is called with the
+ * combined curve itself as `arrivals168` and `NO_COMPRESSION_FLOOR_WHPPV` as `floorWhppv`, same
+ * judgment call as before, just fed to the new function instead of the old one. The ENA floor
+ * no longer runs for this reallocation either (same reasoning as Scenario B — it could only add
+ * hours, which would break exact conservation). Returns `null` with no current staffing
+ * (nothing to reallocate).
  */
 export function computeCombinedReallocation(
   result: EngineResult,
@@ -80,26 +92,14 @@ export function computeCombinedReallocation(
 
   const currentCapacity = fullWeekCapacity(currentStaffingGrid, inputs.shiftMenu);
 
-  const enaFloor = inputs.enaFloor ?? DEFAULTS.enaFloor;
-  const hoursBudgetTolerance = inputs.hoursBudgetTolerance ?? DEFAULTS.hoursBudgetTolerance;
-  const backlogParams = {
-    abandonRate: inputs.lwbsRate ?? DEFAULTS.backlogAbandonRate,
-    recoveryEfficiency: DEFAULTS.backlogRecoveryEfficiency,
-    maxDrainFraction: DEFAULTS.backlogMaxDrainFraction,
-  };
-  // No separate protected-floor concept exists for this synthetic combined curve — the
-  // combined demand itself is the floor a reallocation should respect.
-  const { grid, weeklyScheduledHours } = solveShiftFitWithBacklogFeedback(
-    combinedRequirement,
-    combinedRequirement,
-    new Array(168).fill(0),
+  const { grid } = reallocateHoursExact(
+    currentStaffingGrid,
     inputs.shiftMenu,
-    currentStaffedWeeklyHours,
-    hoursBudgetTolerance,
-    enaFloor,
-    undefined,
-    backlogParams
+    combinedRequirement,
+    combinedRequirement,
+    NO_COMPRESSION_FLOOR_WHPPV
   );
+  const weeklyScheduledHours = currentStaffedWeeklyHours;
   const reallocatedCapacity = fullWeekCapacity(grid, inputs.shiftMenu);
 
   return {
@@ -142,7 +142,8 @@ export function computeSynthesis(result: EngineResult, inputs: EngineInputs, cur
   const boardingWeeklyHours = result.boarding?.weeklyBoardingHours ?? null;
   const totalDemandWeeklyHours = arrivalsWeeklyHours + (boardingWeeklyHours ?? 0);
   const gapHours = totalDemandWeeklyHours - currentStaffedWeeklyHours;
-  const gapFte = (gapHours * 52) / 2080;
+  const hoursPerFteAnnual = inputs.hoursPerFteAnnual ?? DEFAULTS.hoursPerFteAnnual;
+  const gapFte = (gapHours * 52) / hoursPerFteAnnual;
 
   const boardingCurve: Cell168 | null = result.boarding?.cellBoardingRnHours ?? null;
   const combinedRequirement: Cell168 = result.hourlyRequirement.map((r, g) => (r ?? 0) + (boardingCurve ? boardingCurve[g] ?? 0 : 0));

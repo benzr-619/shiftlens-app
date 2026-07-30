@@ -1,6 +1,7 @@
 import { DISPLAY_DAY_ORDER, DISPLAY_DAY_LABELS } from '../lib/dayOrder';
 import { DAY_LABELS } from '../engine/types';
 import type { ShiftDef } from '../engine/types';
+import { ratioVisual, type CellVisual } from '../lib/heatmapColor';
 
 export interface WhppvHeatmapCell {
   day: number;
@@ -17,35 +18,12 @@ export interface WhppvHeatmapCell {
   arrivals: number;
   belowFloor: boolean; // under the ENA on-duty floor — a safety check, red outline + "!"
   riskReasons: string[];
-}
-
-// --- Color scale constants (display heuristics — safe to tune, not load-bearing math) ---
-// Nonlinear on BOTH sides: nearly flat just outside the neutral band, accelerating with
-// distance (t^GAMMA, GAMMA>1). The asymmetry is in how far each side has to travel to reach
-// full saturation, not the curve shape itself:
-//  - Lean side saturates fast: half the lower band edge already reads fully alarming.
-//  - Rich side ramps slowly and clamps early (~2x the point target) — beyond that it's just
-//    "plenty of staff overnight," no further shades needed.
-const COLOR_EASE_GAMMA = 1.8;
-const LEAN_FULL_SATURATE_RATIO = 0.5; // ratio at HALF the lower band edge -> fully saturated lean
-const RICH_CLAMP_MULTIPLE = 2; // ratio at 2x the point target (1.0) -> fully saturated rich
-const MIN_ALPHA = 0.12;
-const MAX_ALPHA = 0.75;
-const LEANER_RGB = '194,59,59'; // red — understaffing is the safety/quality signal, stays dominant
-// R2 (RESULTS_PAGE_V2_SPEC_2026-07-27.md §2) — REVERSES the 2026-07-25 deliberate muting
-// (was '110,132,150', a gray-blue chosen specifically to be visually subordinate to red).
-// Confirmed with Ben against a real rendered page: an 8-nurses-against-a-4-requirement hour
-// at 04:00 rendered in pale gray was arguably the single most actionable fact on the page —
-// muting it made a genuinely useful "you're overstaffed here, move these hours" finding
-// invisible. Saturated blue reads as clearly as the lean/red side now; the two sides are
-// still asymmetric in RAMP (see LEAN_FULL_SATURATE_RATIO/RICH_CLAMP_MULTIPLE above), just no
-// longer asymmetric in how saturated the color itself is allowed to get.
-const RICHER_RGB = '37,99,235'; // saturated blue
-const TEXT_FLIP_ALPHA_THRESHOLD = 0.45; // above this fill alpha, cell text flips to white for contrast
-
-interface CellVisual {
-  background: string;
-  textColor: string | undefined; // undefined = inherit theme text color
+  // PANEL1_COPY_REVISION_SPEC_2026-07-28.md §7 — per-shift breakdown for hours covered by
+  // more than one shift (e.g. "7+4" instead of a summed "11"), ordered by each shift's own
+  // startHour. `undefined`/length <= 1 means "single-shift hour" — render the plain `onDuty`
+  // number unchanged. Always the FULL breakdown (never just the split-worthy ones) so the
+  // tooltip can show it regardless of what the cell text renders.
+  perShift?: Array<{ label: string; headcount: number }>;
 }
 
 /**
@@ -57,34 +35,26 @@ interface CellVisual {
  */
 function cellVisual(onDuty: number, requirement: number, bandFloor: number, bandCeiling: number): CellVisual {
   const denom = Math.max(requirement, 1);
-  const ratio = onDuty / denom;
-  const low = bandFloor / denom;
-  const high = bandCeiling / denom;
-  if (low <= 0) return { background: 'var(--bg-card-muted)', textColor: undefined };
-  if (ratio >= low && ratio <= high) return { background: 'transparent', textColor: undefined };
-
-  const lean = ratio < low;
-  let t: number;
-  if (lean) {
-    const saturateDist = Math.log(1 / LEAN_FULL_SATURATE_RATIO); // log(2)
-    t = ratio <= 0 ? 1 : Math.min(1, Math.log(low / ratio) / saturateDist);
-  } else {
-    const richClampEdge = Math.max(RICH_CLAMP_MULTIPLE, high * 1.01);
-    const saturateDist = Math.log(richClampEdge / high);
-    t = Math.min(1, Math.log(ratio / high) / saturateDist);
-  }
-  const alpha = MIN_ALPHA + (MAX_ALPHA - MIN_ALPHA) * Math.pow(t, COLOR_EASE_GAMMA);
-  const rgb = lean ? LEANER_RGB : RICHER_RGB;
-  return {
-    background: `rgba(${rgb},${alpha.toFixed(2)})`,
-    textColor: alpha >= TEXT_FLIP_ALPHA_THRESHOLD ? '#fff' : undefined,
-  };
+  return ratioVisual(onDuty / denom, bandFloor / denom, bandCeiling / denom);
 }
 
 function cellTitle(cell: WhppvHeatmapCell): string {
   const whppvPart = cell.whppv === null ? 'no arrivals recorded' : `${cell.whppv.toFixed(2)} realized wHPPV`;
-  const base = `${DAY_LABELS[cell.day]} ${cell.hour.toString().padStart(2, '0')}:00 — ${cell.onDuty}/${cell.requirement} on duty vs. required, ${whppvPart}, ${cell.arrivals} arrivals`;
+  let base = `${DAY_LABELS[cell.day]} ${cell.hour.toString().padStart(2, '0')}:00 — ${cell.onDuty}/${cell.requirement} on duty vs. required, ${whppvPart}, ${cell.arrivals} arrivals`;
+  // §7 — put the total plus a labeled per-shift breakdown in the tooltip so nothing is lost
+  // even when the cell text itself just shows the split ("7+4"), not each shift's label.
+  if (cell.perShift && cell.perShift.length > 1) {
+    const breakdown = cell.perShift.map((s) => `${s.label}: ${s.headcount}`).join(', ');
+    base += `\n${cell.onDuty} total (${breakdown})`;
+  }
   return cell.riskReasons.length > 0 ? `${base}\n⚠ ${cell.riskReasons.join('; ')}` : base;
+}
+
+/** §7 — "7+4" instead of a summed "11" for hours more than one shift covers. Plain onDuty
+ * number, unchanged, for single-shift hours. */
+function cellText(cell: WhppvHeatmapCell): string {
+  if (cell.perShift && cell.perShift.length > 1) return cell.perShift.map((s) => s.headcount).join('+');
+  return String(cell.onDuty);
 }
 
 /** Distinct shift start hours -> the shift label(s) starting there, for the §5 shift-boundary
@@ -122,6 +92,14 @@ function shiftBoundariesByHour(shiftMenu: ShiftDef[]): Map<number, string[]> {
  * checking first; the ENA on-duty floor overlay (red outline + "!") is UNCHANGED and still the
  * only per-cell risk flag left, since it's a safety minimum, not a backlog signal (unrelated
  * to R3 — see the resolved call in `.claude/rules/results-redesign.md`).
+ *
+ * PANEL1_COPY_REVISION_SPEC_2026-07-28.md §7/§8 — per-shift split cell text ("7+4" instead of
+ * a summed "11") for hours more than one shift covers, ordered by startHour, with the total +
+ * full breakdown always in the tooltip; and a legend rewrite (plain prose instead of the old
+ * three-swatch leaner/typical/richer row, the ENA-floor line only rendered when at least one
+ * displayed cell is actually flagged). See `cellText`/`cellTitle` above and
+ * `.claude/rules/results-redesign.md`'s dated section for the judgment call on which toggle
+ * views get a real per-shift breakdown vs. a plain number.
  */
 export function WhppvHeatmap({ cells, shiftMenu }: { cells: WhppvHeatmapCell[]; shiftMenu: ShiftDef[] }) {
   const byDayHour = new Map(cells.map((c) => [`${c.day}-${c.hour}`, c]));
@@ -160,7 +138,7 @@ export function WhppvHeatmap({ cells, shiftMenu }: { cells: WhppvHeatmapCell[]; 
                     >
                       <div className="heat-cell-inner">
                         <span className="heat-cell-value" style={{ color: visual.textColor }}>
-                          {cell.onDuty}
+                          {cellText(cell)}
                         </span>
                         {cell.belowFloor && <span className="heat-risk-badge">!</span>}
                       </div>
@@ -173,25 +151,23 @@ export function WhppvHeatmap({ cells, shiftMenu }: { cells: WhppvHeatmapCell[]; 
         </tbody>
       </table>
       <div className="whppv-heatmap-legend">
-        <div className="heat-legend-band">
-          <span className="heat-legend-swatch heat-legend-swatch-lean" />
-          <span>Leaner than typical</span>
-          <span className="heat-legend-swatch heat-legend-swatch-neutral" />
-          <span>Within typical range</span>
-          <span className="heat-legend-swatch heat-legend-swatch-rich" />
-          <span>Richer than typical</span>
+        <div className="heat-legend-line">
+          Each cell shows the number of nurses on duty, split by shift when more than one covers that hour.
         </div>
-        <div className="heat-legend-band-text">
-          Each cell shows the number of nurses on duty. Color is against each hour's OWN typical range (peer
-          25th-75th percentile) — a cell reads "leaner" or "richer" relative to what that specific hour usually
-          needs, not a single week-wide number.
+        <div className="heat-legend-line">
+          <span className="heat-legend-swatch-inline heat-legend-swatch-lean" />
+          Red = short-staffed for how busy this hour runs.
+          <span className="heat-legend-swatch-inline heat-legend-swatch-rich" />
+          Blue = over-staffed.
         </div>
-        <div className="heat-legend-risk">
-          <span className="heat-legend-risk-swatch">
-            <span className="heat-risk-badge">!</span>
-          </span>
-          <span>Under the ENA on-duty floor</span>
-        </div>
+        {cells.some((c) => c.belowFloor) && (
+          <div className="heat-legend-risk">
+            <span className="heat-legend-risk-swatch">
+              <span className="heat-risk-badge">!</span>
+            </span>
+            <span>Under the ENA on-duty floor</span>
+          </div>
+        )}
       </div>
     </div>
   );

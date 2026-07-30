@@ -110,7 +110,7 @@ export function EvidenceSurfaceSection() {
               <tr>
                 <td>Your data</td>
                 <td>
-                  Arrivals, ESI mix, shift menu, current staffing, LWBS rate (if provided)
+                  Arrivals, ESI mix, shift menu, current staffing
                   {censusSource === 'measured'
                     ? ', your measured boarding census (medical/surg and BH if tracked separately)'
                     : ', admit rate, boarding duration'}
@@ -123,9 +123,9 @@ export function EvidenceSurfaceSection() {
               <tr>
                 <td>Modeled assumption</td>
                 <td>
-                  The backlog recurrence (abandon rate/recovery efficiency/max drain fraction),
-                  {censusSource === 'measured' ? '' : ' the boarding census convolution,'} effective-wHPPV-at-coverage's
-                  linear recovery assumption, and (when LWBS rate isn't provided) the abandon-rate default
+                  The backlog recurrence's catch-up capacity (bounded at what the busiest peer quartile would staff),
+                  {censusSource === 'measured' ? '' : ' the boarding census convolution,'} and effective-wHPPV-at-coverage's
+                  linear recovery assumption
                 </td>
               </tr>
               {censusSource === 'measured' && (

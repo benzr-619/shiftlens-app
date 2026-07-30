@@ -76,14 +76,23 @@ interface StoreState {
   sandboxHoldGrid: Grid | null;
 
   // 2026-07-26 PR D (SOLVER_REALISM_SPEC_2026-07-26.md, change 7) — headcount semantics, ONE
-  // setup question, not role-level modeling. Both null until the user answers (no ED-specific
-  // default). DISPLAY-ONLY: neither field is threaded into EngineInputs/compute() — they never
-  // change hourlyRequirement, the grid, the ENA floor, or any solved number. They only drive a
-  // plain-language caveat on the results page ("your headcount includes charge/triage, so a
-  // reported '5' is fewer bedside RNs than it looks like") — see CoreGridTab.tsx. Do NOT wire
-  // these into the engine; that would be the role-level modeling the spec explicitly declined.
+  // setup question, not role-level modeling. Null until the user answers (no ED-specific
+  // default). Still never threaded into EngineInputs/compute() — it never changes
+  // hourlyRequirement, the grid, the ENA floor, or any solved number. On "no" it now drives a
+  // one-time GRID-CORRECTION action on ShiftMenuStep.tsx (add a typed indirect-care count to
+  // every currentStaffingGrid cell) rather than a display-only uplift % field — see that
+  // file's "Headcount semantics" card. Do NOT wire this boolean into the engine; that would be
+  // the role-level modeling the spec explicitly declined.
   headcountIncludesIndirectCare: boolean | null;
-  indirectCareUpliftPct: number | null; // 0-100, e.g. 15 for "15% of headcount is charge/triage/etc."
+
+  // Configurable "hours per FTE" policy setting — UI-only, never part of the uploaded data
+  // template (same "workbook carries data, policy lives in the UI" rule as
+  // boardingRatioTarget/enaFloor). Both the raw entered value and the mode it was entered in
+  // are stored so the field redisplays correctly; `buildEngineInputs()` derives the
+  // canonical `hoursPerFteAnnual = fteInputMode === 'weekly' ? fteInputValue * 52 :
+  // fteInputValue` for the engine.
+  fteInputMode: 'weekly' | 'annual';
+  fteInputValue: number;
 
   setScreen: (s: Screen) => void;
   setSetupStep: (step: number) => void;
@@ -116,7 +125,8 @@ interface StoreState {
   setSandboxEdGrid: (g: Grid | null) => void;
   setSandboxHoldGrid: (g: Grid | null) => void;
   setHeadcountIncludesIndirectCare: (v: boolean | null) => void;
-  setIndirectCareUpliftPct: (v: number | null) => void;
+  setFteInputMode: (m: 'weekly' | 'annual') => void;
+  setFteInputValue: (v: number) => void;
 
   buildEngineInputs: () => EngineInputs;
   getResult: () => EngineResult;
@@ -167,7 +177,8 @@ export const useStore = create<StoreState>((set, get) => ({
   sandboxEdGrid: null,
   sandboxHoldGrid: null,
   headcountIncludesIndirectCare: null,
-  indirectCareUpliftPct: null,
+  fteInputMode: 'weekly',
+  fteInputValue: 40,
 
   setScreen: (s) => set({ screen: s }),
   setSetupStep: (step) => set({ setupStep: Math.max(0, Math.min(3, step)) }),
@@ -224,7 +235,8 @@ export const useStore = create<StoreState>((set, get) => ({
   setSandboxEdGrid: (g) => set({ sandboxEdGrid: g }),
   setSandboxHoldGrid: (g) => set({ sandboxHoldGrid: g }),
   setHeadcountIncludesIndirectCare: (v) => set({ headcountIncludesIndirectCare: v }),
-  setIndirectCareUpliftPct: (v) => set({ indirectCareUpliftPct: v }),
+  setFteInputMode: (m) => set({ fteInputMode: m }),
+  setFteInputValue: (v) => set({ fteInputValue: v }),
 
   buildEngineInputs: () => {
     const s = get();
@@ -234,6 +246,7 @@ export const useStore = create<StoreState>((set, get) => ({
       wHppvTarget: s.wHppvTarget,
       shiftMenu: s.shiftMenu,
       boardingRatioTarget: s.boardingRatioTarget,
+      hoursPerFteAnnual: s.fteInputMode === 'weekly' ? s.fteInputValue * 52 : s.fteInputValue,
     };
     if (s.arrivalsP75) inputs.arrivalsP75 = s.arrivalsP75;
     if (s.esiMix) inputs.esiMix = s.esiMix;

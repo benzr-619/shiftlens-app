@@ -50,6 +50,22 @@ describe('PR G — synthesis (§7): four numbers and a subtraction, no verdict',
     expect(synthesis!.gapClosedByReallocationHours).toBeLessThanOrEqual(synthesis!.gapHours);
   });
 
+  it('a non-default hoursPerFteAnnual (36 hrs/week, a 3x12 department) scales gapFte consistently, never gapHours itself', () => {
+    const defaultInputs = baseInputs({ admitRate: 0.2, boardingDuration: 5 });
+    const hoursPerFteAnnual36x52 = 36 * 52; // 1872
+    const customInputs = baseInputs({ admitRate: 0.2, boardingDuration: 5, hoursPerFteAnnual: hoursPerFteAnnual36x52 });
+    const grid: Grid = {};
+    for (let day = 0; day < 7; day++) grid[day] = { day: 2, night: 2 };
+
+    const defaultSynthesis = computeSynthesis(compute(defaultInputs), defaultInputs, grid)!;
+    const customSynthesis = computeSynthesis(compute(customInputs), customInputs, grid)!;
+
+    expect(customSynthesis.gapHours).toBeCloseTo(defaultSynthesis.gapHours, 9);
+    const expectedCustomGapFte = (defaultSynthesis.gapFte * 2080) / hoursPerFteAnnual36x52;
+    expect(customSynthesis.gapFte).toBeCloseTo(expectedCustomGapFte, 6);
+    expect(customSynthesis.gapFte).toBeGreaterThan(defaultSynthesis.gapFte);
+  });
+
   it('ending 2 — "you have enough, they\'re in the wrong places": current hours meet total demand but badly shaped -> gapHours <= 0', () => {
     const inputs = baseInputs();
     const result = compute(inputs);

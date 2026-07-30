@@ -735,6 +735,93 @@ the two-sentence structural/cyclical framing described in the spec's §3.1. No e
 was needed for this PR — `cyclicalBacklog`/`structuralFloorByDay`/`structuralFloorMin`/
 `caughtUpThresholdForHour` all already exist (PR E, above); only the UI never read them.
 
+## Exact-hours reallocation (2026-07-29) — Panel 2's `computeScenarioB`/`computeCombinedReallocation` stop using the trim, start using a real reallocation
+
+Ben's direct ask, after noticing Panel 2's diff grid didn't visibly conserve hours: the panel's
+own copy says "Holding your current total hours fixed" — but the reallocated total was only
+ever held within the standard ~10% tolerance band (or pushed above it by the ENA-floor pass),
+never exactly equal. Two root causes, both now fixed by switching to a genuinely different
+algorithm rather than tuning the existing one:
+
+1. **Units mismatch in the diff grid itself** — `Panel2.tsx`'s diff table shows HEADCOUNT deltas
+   per (day, shift) cell, not HOUR deltas. When shifts have unequal lengths, a `+1` on a 12h
+   shift and a `+1` on an 8h shift aren't the same amount of hours moved, so the table never had
+   to sum to zero even when hours genuinely were conserved. This is a display fact, not
+   something the new algorithm below changes — still worth knowing if the diff grid is ever
+   revisited.
+2. **The actual algorithm never targeted an exact total** — `computeScenarioB`/
+   `computeCombinedReallocation` were parameter swaps over the SAME pipeline `compute()` uses
+   for the primary grid (`solveShiftFitWithBacklogFeedback` → `trimWeekToBudget`): start from a
+   full-coverage upper bound, then greedily CUT one shift-unit at a time until total hours drop
+   "at or under `currentHours * 1.10`." Cuts remove whole shift-blocks, so the loop jumps in
+   discrete steps and essentially never lands exactly on an arbitrary target — it undershoots
+   below it, and separately `enforceDepartmentFloor` (the ENA-floor safety pass, which runs
+   unconditionally last) can push the total back ABOVE the current figure if a floor violation
+   demands it. Neither direction is "hours completely fixed."
+
+**Fix: a new function, `reallocateHoursExact` (`engine/exactReallocation.ts`), used by BOTH
+`computeScenarioB` (arrivals-only) and `computeCombinedReallocation` (arrivals+boarding) instead
+of the trim pipeline.** This is a REALLOCATION, not a TRIM — every move it makes TRADES one
+shift-unit for another, so total hours are conserved EXACTLY, by construction, not
+approximately. Mechanically a hill-climbing local search:
+
+- **A "trade"** moves `unitsFrom` headcount off one (day, shift) cell in exchange for
+  `unitsTo` headcount onto another, where `unitsFrom * lengthFrom === unitsTo * lengthTo` — the
+  minimal integer solution via `gcd(lengthFrom, lengthTo)`. Two shifts of EQUAL length
+  (including the SAME shift on two different days — the most common move Panel 2's diff grid
+  actually shows) reduce to a plain 1-for-1 swap. Unequal lengths produce a compound trade (e.g.
+  `gcd(8,12)=4` → 3 units of an 8h shift trade for 2 units of a 12h shift). A trade is only ever
+  considered when the source cell genuinely has `unitsFrom` headcount to give — no fractional/
+  distributed sourcing across multiple cells of the same shift, so a trade requiring more
+  headcount than any single cell holds simply never fires. This is real search over a discrete
+  combinatorial space, bounded and greedy (same philosophy as the rest of this engine's solver
+  — see this file's history above), not an exact optimum.
+- **Objective:** the SAME cyclical `totalSeverity` the Step 3 trim itself minimizes (PR E/
+  ninth-shape convention — shape-only, blind to size, which is exactly right here since size
+  can never change by construction). Computed via a LEAN helper
+  (`cyclicalTotalSeverity` in `exactReallocation.ts`) that mirrors `backlog.ts`'s
+  `computeBacklog` cyclical computation exactly but skips its structural-floor/streak
+  bookkeeping — that overhead is unaffordable when it runs on every candidate trade inside the
+  search loop (hundreds of evaluations per iteration). Keep the two in sync if the cyclical
+  formula ever changes.
+- **Each iteration:** evaluate every (shift-pair × day-pair) trade template, apply whichever
+  single trade most improves the objective, repeat until no improving trade exists or
+  `MAX_ITERATIONS = 60` is hit (a safety backstop — a 7-day × few-shift grid converges in well
+  under this in practice, verified in `exactReallocation.test.ts`).
+- **Never runs `enforceDepartmentFloor`.** The floor pass can only ever ADD hours, which would
+  break the exact-conservation guarantee — a deliberate, disclosed trade-off. A department whose
+  current grid already sits below the ENA floor somewhere stays below it after reallocation;
+  that's still visible via the heatmap's floor flag and the "hours below the peer floor" stat,
+  just no longer auto-corrected by this specific reallocation. `ScenarioBResult.overageFromFloor`
+  is now ALWAYS `0` (kept on the type for backward compatibility rather than removed outright) —
+  `scenarioB.test.ts`'s ENA-floor edge-case test was REWRITTEN, not just loosened, to assert the
+  opposite of what it asserted before (hours stay exactly flat even below the floor) — a genuine
+  behavior reversal, reported plainly per this repo's own testing convention.
+- **Scope decision, confirmed with Ben before building:** total SHIFT COUNT (headcount summed
+  across the grid) is deliberately NOT a separate hard constraint alongside hours. With unequal
+  shift lengths, "same total hours" and "same total headcount" are independent constraints that
+  can conflict (trading a 12h unit for an 8h unit changes headcount by zero but hours by −4, and
+  vice versa) — enforcing both simultaneously would restrict every move to same-length trades or
+  exact multi-unit cancellations, and could go infeasible for some departments' shift menus.
+  Ben chose hours-only; if this ever needs to change, re-open that scope question rather than
+  silently bolting on a second constraint.
+- **Used identically by both call sites, Panel 2's two toggles:** `computeScenarioB` passes
+  real `arrivals`/`result.floorWhppv` (genuine visit-pace compression applies); `computeCombinedReallocation`
+  passes the combined arrivals+boarding curve as both the "arrivals" and requirement input with
+  `NO_COMPRESSION_FLOOR_WHPPV` (the same no-compression degenerate case the old trim-based
+  version already used for this curve — see backlogModel.ts's header) — neither call site needed
+  a new judgment call, just a different function to hand the existing judgment calls to.
+- **Tests:** `engine/__tests__/exactReallocation.test.ts` (new) — exact conservation for
+  equal-length AND unequal-length (8h/12h) shift menus, a real severity improvement for a
+  badly-shaped grid, a genuine local-optimum case (`swapsApplied: 0`), and a degenerate
+  single-shift (24h) menu that still finds cross-day headcount trades. `scenarioB.test.ts`'s
+  ENA-floor test rewritten (see above). `combinedReallocation.test.ts` needed NO changes — its
+  assertions (shortfall improves, hours never meaningfully exceed the current total, a real
+  finite arrivals-side cost) all still hold under the new algorithm, verified by re-running it,
+  not assumed. Full suite (234 vitest tests) green; `reconcile.test.ts` untouched — this change
+  never touches `hourlyRequirement`/`annualCoreRnHoursBudget`, only how Panel 2's two toggles'
+  OWN reallocated grids are computed.
+
 ## Department-level ENA floor (5.6, `enforceDepartmentFloor`)
 
 Runs **after** the budget trim, as a final pass — it can push scheduled hours back above
@@ -860,3 +947,392 @@ general optimizer the original decision declined:
   preserves the "numbers, not a verdict" principle. The old `CompareTab.tsx` (user-driven
   side-by-side variants) was DELETED and its manual path folded into this section.
 - When touching this, keep the reversal flagged in the commit/PR body (spec §4.2 requirement).
+
+## 2026-07-28 — EIGHTH shape of the backlog recurrence: capacity-elasticity replaces abandonment
+
+**REVERSES PR B/E's abandonment model** (`backlogAbandonRate`/`backlogRecoveryEfficiency`/
+`backlogMaxDrainFraction`, `EngineInputs.lwbsRate`) **entirely — no abandonment term at all.**
+This is the eighth shape of the Step 3 trim / backlog-recurrence area's history (linear
+shortfall → band-floor deadband → joint whole-week backlog-cost trim → Phase 2b's iterative
+relaxation → PR B's asymmetric recovery physics → PR C's convex severity objective → PR E's
+structural/cyclical split → **this**). Confirmed intentional with Ben, same category as every
+prior reversal in this section.
+
+**Why.** `backlogHourStep`/`backlogRecurrence` baked an hourly abandonment rate
+(`backlogAbandonRate`, default 3%/hr) into the recurrence as passive attrition — backlog quietly
+leaked away every hour regardless of whether the department had any actual catch-up capacity
+that hour. That's an assumption about patients leaving (LWBS) with no real data behind it for
+most departments (`EngineInputs.lwbsRate` existed specifically because most departments couldn't
+supply a real number, and the DEFAULTS cohort assumption silently filled the gap instead) — and
+it meant every backlog number on the results page implicitly assumed SOME abandonment was
+happening even when the user supplied NO LWBS input at all.
+
+**The new model — capacity elasticity, no abandonment term** (`engine/backlogModel.ts`):
+```
+deficit[h]  = max(0, requirement[h] − capacity[h])              // new backlog generated this hour
+spare[h]    = max(0, capacity[h] − requirement[h])               // genuinely idle scheduled hours,
+                                                                   // pays down 1:1
+stretch[h]  = max(0, bandCeilingHourly[h] − capacity[h])          // extra throughput nurses can
+                                                                   // generate when behind, capped
+                                                                   // at what the busiest peer
+                                                                   // quartile would staff
+paydown[h]  = min(backlog[h−1], spare[h] + stretch[h])
+backlog[h]  = max(0, backlog[h−1] − paydown[h]) + deficit[h]
+```
+`bandCeilingHourly` is the EXISTING per-hour peer-p75-equivalent ceiling
+(`EngineResult.bandCeilingHourly`, `demandBand.ts`/`compute()`) — reused as-is, not a new
+constant; it already existed and previously had no solver-facing consumer of its own inside the
+backlog recurrence. Backlog is monotonically non-negative and nothing ever disappears except via
+genuine idle time (spare) or this bounded catch-up capacity (stretch) — no separate abandonment,
+recovery-efficiency, or max-drain-fraction discount; the ceiling on paydown is already implicit
+in `spare + stretch`. `backlogHourStep(priorBacklog, capacity, requirement, bandCeiling)` and
+`backlogRecurrence(capacity168, requirement168, bandCeiling168)` are the new signatures — no
+`BacklogRecurrenceParams` object anywhere anymore.
+
+**What was removed, everywhere (search the whole repo for the name before assuming a reference
+still exists — a systematic pass was done, this list should be exhaustive):**
+- `BacklogRecurrenceParams`/`BacklogRecurrenceResult`'s params field (`backlogModel.ts`) — gone;
+  every function that took a `params: BacklogRecurrenceParams` now takes a
+  `bandCeilingHourly168: number[]` in the same position (or a comparable curve — see call sites
+  below).
+- `DEFAULTS.backlogAbandonRate`/`backlogRecoveryEfficiency`/`backlogMaxDrainFraction`
+  (`types.ts`) — and their three `constantsMetadata.ts` METADATA entries.
+- `EngineInputs.lwbsRate` (`types.ts`) — it only ever existed to feed `abandonRate`; with no
+  abandonment term, there's nothing left for it to feed. It was never actually wired to any
+  setup UI control (`store.ts` had no field/setter for it) — removing it was a pure type-level
+  deletion plus a handful of stale prose references (`EvidenceSurfaceSection.tsx`'s provenance/
+  approximations text, two comments in `lib/parseUpload.ts`/`lib/template.ts` describing the
+  reverted Settings tab's example policy-field list).
+- `EngineResult.estimatedAbandonedHours` and `BacklogResult.estimatedAbandonedHours`
+  (`backlog.ts`) — this measured nurse-hours the (now-deleted) attrition term removed each hour;
+  it has no analog under a model where nothing is ever abandoned. Removed from both result
+  types and from `compute()`'s body (`engine/index.ts` no longer computes a second
+  `computeBacklog` call just for this field).
+- `resolveBacklogParams` (`engine/index.ts`) — the helper that built the old params object from
+  `inputs.lwbsRate ?? DEFAULTS.backlogAbandonRate` plus the two fixed DEFAULTS. Gone entirely;
+  `compute()`/`computeScenarioB` now just pass `bandCeilingHourly`/`result.bandCeilingHourly`
+  directly wherever the params object used to go.
+
+**Signature changes, mechanical but repo-wide** — every backlog-consuming function gained a
+`bandCeilingHourly168`/`bandCeilingHourly` parameter in place of the old params object:
+`computeBacklog`, `summarizeBacklogSeverity` (`backlog.ts`); `candidateCutCost`,
+`trimWeekToBudgetCore`/`trimWeekToBudget`/`trimWeekToBudgetWithTrajectory`, `solveShiftFit`
+(`solver.ts`, threaded the same way `demandVolatilityHourly168` already was — right after it in
+every parameter list); `solveShiftFitWithBacklogFeedback` (`backlogFeedback.ts`);
+`searchFlexibleMenus` (`flexMenu.ts`); `computeSandbox` (`sandbox.ts`). Call sites updated:
+`compute()`/`computeScenarioB` (`engine/index.ts`, pass `bandCeilingHourly`/
+`result.bandCeilingHourly`), `computeCombinedReallocation` (`synthesis.ts` — no real
+peer-benchmark ceiling exists for a synthetic arrivals+boarding combined curve, so this call
+site passes an all-zero array, same "no separate concept exists" reasoning it already applies
+to `demandVolatilityHourly`; flagged in that file's own comment), `Panel1`/`Panel2`/`Panel4`/
+`Panel5.tsx`, `lib/pptxExport.ts` — all now pass `result.bandCeilingHourly` (or, for Panel2's
+reallocated-demand views, the same arrivals-only ceiling — an approximation, flagged in that
+file, same category as `synthesis.ts`'s).
+
+**Judgment call, flagged (not an obvious default) — does the CYCLICAL backlog computation
+rescale `bandCeilingHourly` alongside capacity?** `backlog.ts`'s `computeBacklog` computes the
+PR E cyclical (shape-only, size-rescaled) curve by rescaling CAPACITY to match requirement's
+own weekly total, then re-running the recurrence — the question is whether `bandCeilingHourly`
+should be rescaled by the same factor too. **Decision: NO, reuse it as-is.** `bandCeilingHourly`
+is an EXTERNAL peer benchmark (what the busiest peer quartile would staff) — it doesn't scale
+with THIS department's own total scheduled hours, and rescaling it to chase a rescaled capacity
+curve would distort the one thing the cyclical view exists to isolate (shape, independent of
+size). Documented directly in `backlogModel.ts`'s `rescaleCapacityToRequirementTotal` header and
+`backlog.ts`'s `computeBacklog` comment — revisit only with a new, separate decision.
+
+**Settle-pass mechanics are UNCHANGED** (`SETTLE_PASSES = 6`, circular multi-pass settle) — only
+the per-hour step formula changed, per the reversal's own scope. **Consequence worth knowing, not
+a bug:** a scenario with ZERO spare and ZERO stretch capacity ANYWHERE in the entire 168-hour
+week has no release valve at all — nothing ever pays such a hole down, so the reported backlog
+value scales with `SETTLE_PASSES` (grows lap over lap) rather than converging to a fixed point.
+This is the physically honest answer for a truly saturated system (a queue that genuinely never
+gets any idle or surge capacity really would grow unboundedly) — every realistic solved grid has
+SOME hour where capacity exceeds requirement or the peer ceiling, so this doesn't arise in
+practice; it only shows up in deliberately degenerate hand-built test scenarios (see
+`backlogModel.test.ts`/`backlog.test.ts`, which test this property directly rather than assuming
+it away).
+
+**A pre-existing test-guard gap the sweep itself surfaced, fixed alongside this reversal (not
+part of the physics change, but found while re-running the suite):**
+`syntheticSweep.test.ts`'s `fullCoverage >= weeklyScheduledHours` invariant was guarded by
+`hourlyRequirement.every((r) => r <= enaFloor)` — skip the check ONLY when the ENA floor
+dominates EVERY hour of the week (profile F's territory). A mixed-volume department where the
+floor dominates SOME but not all hours can still legitimately push `weeklyScheduledHours` above
+`fullCoverage.weeklyHours` (the documented §5.6 behavior), and the `.every` guard didn't catch
+that partial case — widened to `.some`. Not a consequence of the abandonment-model removal
+itself; the trim's changed cost landscape just happened to tip one specific sweep case
+(`annualVolume: 5000`, `eveningSkewed`, `3x12`) into triggering a gap that already existed.
+
+**Tests, full rewrite per the reversal's own scope:**
+- `backlogModel.test.ts` — the old PR-B equivalence proof (against a retired formula) is
+  meaningless now; replaced with direct tests of `backlogHourStep`/`backlogRecurrence`:
+  non-negativity over random inputs, a deficit with zero spare/stretch carrying forward EXACTLY
+  (no decay — contrast with the retired model), spare paying down 1:1, stretch paying down
+  capped exactly at the peer-ceiling gap (never more, regardless of how much backlog is queued),
+  and the two structural source-grep guards (solver.ts/backlog.ts import the shared recurrence,
+  don't reimplement it).
+- `backlog.test.ts` — every RETENTION/`abandonRate`-based closed-form assertion (geometric
+  steady state, Sat→Sun-boundary decay) recomputed against the new formula's own exact
+  arithmetic (no more asymptotic/closed-form approximations needed — the new paydown is exact,
+  not geometric). The PR E structural/cyclical validation-gate test's capacity/bandCeiling
+  values were retuned (comfortably-above capacity that fully cleared to zero every night under
+  the old asymptotic-decay model now needs to be MARGINAL under the new exact-paydown model, or
+  every day's structural floor collapses to an uninformative uniform zero — see that test's own
+  comment for the tuning rationale). `estimatedAbandonedHours` assertions deleted (no analog).
+- `solver.test.ts`/`backlogFeedback.test.ts`/`sandbox.test.ts`/`scenarioB.test.ts`/
+  `syntheticFixtures.test.ts`/`flexMenu.test.ts` — every call site threaded a
+  `bandCeilingHourly168` array (typically `capacity` itself, i.e. zero stretch, to isolate
+  whichever OTHER mechanic that specific test is about — compounding/peak/volatility/floor-
+  breach — from the new stretch mechanic, which has its own dedicated tests). `backlogFeedback
+  .test.ts`'s oscillation test needed a THIRD re-sweep (the budget empirically found to oscillate
+  moved again, 65 → 46, under this objective — expected per that file's own documented history:
+  ANY change to the trim's cost function may require re-sweeping this test).
+
+**Invariants held throughout, verified not assumed:** `reconcile.test.ts` passes with a
+zero-line diff (this reversal never touches `annualCoreRnHoursBudget`/`hourlyRequirement`). Full
+suite (224 vitest tests, 16 e2e tests) green. `npm run build`/`oxlint` clean (only the
+pre-existing `StepIndicator.tsx` warning).
+
+## 2026-07-28 — NINTH shape of the backlog recurrence: visits-based compression replaces capacity-elasticity
+
+**REVERSES the eighth shape's capacity-elasticity model** (`spare`/`stretch`/`bandCeilingHourly`
+as a recurrence input) **entirely.** This is the ninth shape of the Step 3 trim / backlog-
+recurrence area's history (linear shortfall → band-floor deadband → joint whole-week backlog-
+cost trim → Phase 2b's iterative relaxation → PR B's asymmetric recovery physics → PR C's convex
+severity objective → PR E's structural/cyclical split → the eighth shape's capacity-elasticity
+model → **this**). Confirmed intentional with Ben, designed directly with him in the same
+planning chat that produced `PANEL1_COPY_REVISION_SPEC_2026-07-28.md`
+(`BACKLOG_MODEL_VISITS_BASED_SPEC_2026-07-28.md`).
+
+### Why the eighth shape was wrong, precisely — READ THIS before reintroducing a ceiling-gap "stretch" term
+
+The retired model defined `stretch[h] = max(0, bandCeilingHourly[h] - capacity[h])` — the gap
+between a peer-benchmark ceiling and actual capacity. This is LARGEST exactly when capacity is
+LOWEST, meaning the worse an hour was staffed, the MORE backlog-clearing throughput the model
+assumed was available — backwards. The gap to a peer ceiling represents "how many MORE nurses a
+busy peer department would have staffed," not "how much harder your actual on-duty nurses can
+work." The model conflated having more staff with the staff you have working harder. Ben caught
+this looking at a real department's Panel 1: the queue strip claimed to clear by 19:00 while the
+heatmap read red (understaffed vs. peer band) continuously from 08:00 onward — the two displays
+visibly contradicted each other, which is exactly the defect this rewrite fixes (verified
+directly this session — see the "Verification" section below).
+
+### The replacement model — visits, not nurse-hours
+
+**Core idea:** nurses can compress how much time they spend per patient, down to — but never
+past — the worst pace still considered acceptable for a department of this volume: this
+department's own peer-cohort **p25 wHPPV** (`lookupWhppvBand(annualVisits).p25Whppv` — the SAME
+flat number that already drives the "below/within/above the typical range" headline stat).
+That's the ceiling on how fast anyone can defensibly go; beyond it, extra patients simply don't
+get adequately seen that hour and become unmet demand carried into the next.
+
+**Deliberately a single FLAT department-level scalar, not an hourly band** — confirmed directly
+with Ben: the existing `bandFloorHourly` curve isn't actually measured hour-by-hour either, it's
+the same flat p25 number reallocated the same way the point-target budget is, plus a volatility
+nudge. A simpler, more legible number is the right tradeoff for a model that captures the
+*relative shape* of a schedule's shortfall, not a precise wait-time estimate.
+
+**The recurrence, in VISITS:**
+```
+demand[h]        = arrivals[h] + backlogVisits[h-1]
+maxServable[h]   = capacity[h] / floorWhppv
+served[h]        = min(demand[h], maxServable[h])
+backlogVisits[h] = demand[h] - served[h]           // = max(0, demand[h] - maxServable[h])
+```
+Circular over the full 168-hour week, `SETTLE_PASSES = 6` multi-pass warm start (unchanged
+mechanic from every prior shape). **No separate "spare pays down at some rate" rule was
+invented — it falls out of the `min()` naturally.** If capacity is generous enough that
+`maxServable >= demand`, everything gets seen and backlog clears to exactly zero that hour,
+without ever invoking the full-stretch pace.
+
+**The algebraic identity that makes this tractable (proven in `backlogModel.test.ts`, and the
+reason `backlogHourStepHours` exists as the hours-bridged primitive every real consumer calls):**
+bridging `priorBacklog`/`backlogVisits` to hours via `* floorWhppv` at the boundary, the visits
+recurrence is EXACTLY equivalent, in hours, to:
+```
+backlogHours[h] = max(0, arrivals[h]*floorWhppv + backlogHours[h-1] - capacity[h])
+```
+i.e. a plain deficit-carries-forward recurrence against `arrivals[h]*floorWhppv` (the floor-
+PACE-implied hours — a genuinely DIFFERENT, smaller curve than `hourlyRequirement[h]`, which is
+implied at the TARGET pace, typically a larger hours-per-visit number than the p25 floor). This
+identity is what lets `backlogModel.ts` implement ONE function (`backlogHourStepHours`/
+`backlogRecurrence`) that serves both the real-compression case AND the no-compression
+degenerate case below, rather than two parallel formulas.
+
+### `engine/backlogModel.ts` — new API (`NO_COMPRESSION_FLOOR_WHPPV`, `backlogHourStep`/`backlogHourStepHours`/`backlogRecurrence`)
+
+- `backlogHourStep(priorBacklogVisits, capacity, arrivals, floorWhppv)` — the literal spec
+  formula, visits-native. Canonical primitive; not directly called by any real consumer today
+  (kept for spec fidelity and to leave a clean seam for Ben's explicitly deferred Panel-1
+  displayed-unit question — visits vs. hours — which this rewrite does NOT resolve, per the
+  spec's own instruction not to over-commit the display layer).
+- `backlogHourStepHours(priorBacklogHours, capacity, arrivals, floorWhppv)` — the hours-bridged
+  wrapper every real consumer calls (candidateCutCost's windowed simulation, the full-week
+  `backlogRecurrence`). Converts prior-backlog hours→visits, steps, converts back.
+- `backlogRecurrence(capacity168, arrivals168, floorWhppv)` — same external shape as the eighth
+  shape's `backlogRecurrence(capacity168, requirement168, bandCeiling168)`, just with
+  `arrivals168` (visits) + a single scalar `floorWhppv` in place of the per-hour ceiling array.
+  Returns `{ backlog, carriedIn, backlogVisits }` — `backlog`/`carriedIn` in hours (what every
+  existing consumer wants), `backlogVisits` exposed for any future visits-display consumer.
+- `NO_COMPRESSION_FLOOR_WHPPV = 1` — the disclosed judgment call for curves with no real
+  "visits" concept (see below).
+- `rescaleCapacityToRequirementTotal` — UNCHANGED, generic over any two arrays; only WHAT gets
+  passed as the second ("requirement-equivalent") argument changed (see below).
+
+### NO-COMPRESSION DEGENERATE CASE — the judgment call this reversal required, flagged not silently resolved
+
+The spec's formula fundamentally requires a genuine VISIT-COUNT input (`arrivals[h]`) — the
+"nurses compress pace per ED patient" story only applies to actual ED-visit throughput. Several
+existing call sites feed a demand curve that ISN'T literally arrivals (boarding is a fixed
+nurse-to-patient ratio, not a per-visit pace a nurse can compress):
+
+- Panel 1's Boarding and Combined toggle queue strips (`Panel1.tsx`)
+- Panel 2's "combined" (arrivals+boarding reallocation) state (`Panel2.tsx`)
+- `synthesis.ts`'s `computeCombinedReallocation` (feeds the combined curve into the solver's own
+  trim via `solveShiftFitWithBacklogFeedback`)
+- `sandbox.ts`'s `computeSandbox` — `residualDemand` blends arrivals + unabsorbed medical
+  boarding + BH boarding into ONE curve (§5.4's "never decompose by source" rule — this
+  ALSO forecloses splitting compression onto just the arrivals portion)
+
+**Decision:** for all of these, pass `floorWhppv = NO_COMPRESSION_FLOOR_WHPPV` (1) and the
+demand curve ITSELF (already in nurse-hours) as the "arrivals" argument. Per the algebraic
+identity above, this degenerates the recurrence to `backlog[h] = max(0, demand[h] +
+backlog[h-1] - capacity[h])` — deficit carries forward exactly, capacity pays it down 1:1,
+nothing "stretches." This is honest: there's no principled way to model compression for a curve
+that isn't ED-visit throughput, so the model simply doesn't claim any. Verified consistent with
+the PRE-EXISTING precedent at the `computeCombinedReallocation` call site specifically: under
+the eighth shape, that call site already passed an all-zero `bandCeilingHourly` array (which
+made `stretch` always 0 there) — the ninth shape's no-compression case is a direct, formalized
+continuation of the exact same judgment already made, not a new one.
+
+### Where `arrivals168`/`floorWhppv` replace `bandCeilingHourly168` — signature changes, mechanical but repo-wide
+
+Every function that took a `bandCeilingHourly168: number[]` now takes `arrivals168: number[]` +
+`floorWhppv: number` in the same position (or the immediately following one):
+`backlogRecurrence`/`backlogHourStepHours`/`backlogHourStep` (`backlogModel.ts`);
+`computeBacklog`/`summarizeBacklogSeverity` (`backlog.ts` — gained a NEW required
+`arrivals168` parameter in addition, since `hourlyRequirement168` stays for severity/threshold
+normalization, a genuinely different curve now); `candidateCutCost`,
+`trimWeekToBudgetCore`/`trimWeekToBudget`/`trimWeekToBudgetWithTrajectory`, `solveShiftFit`
+(`solver.ts`); `solveShiftFitWithBacklogFeedback` (`backlogFeedback.ts`); `searchFlexibleMenus`
+(`flexMenu.ts`); `computeSandbox` (`sandbox.ts` — this one DROPPED the parameter entirely, no
+replacement, since there's no real-arrivals concept for `residualDemand` at all — see above).
+
+**`EngineResult` gained a new field, `floorWhppv: number`** — computed once in `compute()`
+(`lookupWhppvBand(annualVisits).p25Whppv`) and threaded to every consumer that needs it, so
+there's exactly one source of truth for the department's own floor pace. `bandCeilingHourly`
+itself is UNCHANGED and STAYS in `EngineResult` — it still drives band-color reporting/heatmap
+coloring/arrivals-vs-band classification (e.g. `engine/hiddenBoarding.ts`'s per-shift
+overstaffed/understaffed verdict, which is a completely different question from backlog
+modeling) — it just has no role in the backlog recurrence anymore.
+
+Call sites updated: `compute()`/`computeScenarioB` (`engine/index.ts`, pass `inputs.arrivals`/
+`result.floorWhppv`); `computeCombinedReallocation` (`synthesis.ts`, passes
+`NO_COMPRESSION_FLOOR_WHPPV` + the combined curve itself); `Panel1`/`Panel2`/`Panel4`/
+`Panel5.tsx`, `lib/pptxExport.ts` (Panel1/Panel2's arrivals-only states pass the real `arrivals`
+store array + `result.floorWhppv`; their boarding/combined states pass the no-compression
+degenerate case; Panel4/pptxExport's `searchFlexibleMenus`/`computeBacklog` calls are always
+arrivals-only, so always real compression).
+
+### The cyclical rescale's "requirement-equivalent" — resolves the spec's open question 2
+
+The structural/cyclical split (PR E, eighth shape, UNCHANGED IN SHAPE by this reversal) rescales
+capacity so its weekly total matches a "requirement-equivalent" curve's own total, isolating
+SHAPE from SIZE. Under the new recurrence, the correct requirement-equivalent to rescale
+against is **`arrivals168.map(a => a * floorWhppv)`** — the recurrence's OWN floor-pace-implied
+hours curve — **NOT `hourlyRequirement168`** (the target-pace curve, a different, typically
+larger number). Passing the wrong one would rescale capacity against a total the recurrence
+itself doesn't actually accumulate against, silently breaking the shape/size isolation.
+`rescaleCapacityToRequirementTotal` itself needed NO code changes (still generic over any two
+arrays) — only the second argument at each call site (`backlog.ts`'s `computeBacklog`,
+`solver.ts`'s `trimWeekToBudgetCore`) changed from `hourlyRequirement168` to the new
+`requirementEquivalent168 = arrivals168.map(a => a * floorWhppv)`. In the no-compression
+degenerate case (`floorWhppv=1`), `requirementEquivalent168` equals `arrivals168` itself (the
+demand curve), so this is a no-op relative to the eighth shape's behavior there.
+
+### The solver's cost function (`candidateCutCost`) — resolves the spec's open question 3
+
+`hourlyRequirement168` is UNCHANGED in role — severity normalization (`severity = (backlogHours
+/ max(requirement,1))^SEVERITY_GAMMA`) and the floor-breach check (`protectedFloorHourly168`)
+are both independent of which recurrence produced the backlog curve, so `SEVERITY_GAMMA`,
+`PEAK_WEIGHT`, `FLOOR_WEIGHT`/`FLOOR_GAMMA`, `VOLATILITY_COST_WEIGHT` are all UNCHANGED. Only
+the windowed backlog SIMULATION itself (`backlogHourStepHours(prior, cap, arrivals168[g],
+floorWhppv)` in place of the old `backlogHourStep(prior, cap, req, bandCeiling168[g])`) changed.
+Verified non-degenerate: the full test suite's compounding-vs-isolated, cross-day-allocation,
+and floor-breach tests all still pass with meaningful cost differences (re-verified with the
+NO_COMPRESSION_FLOOR_WHPPV degenerate case, which those hand-built tests use — see below).
+
+**`BACKLOG_SIM_WINDOW_HOURS = 48` caveat, updated (not newly introduced):** the visits-based
+recurrence's no-compression case has literally NO decay term — a chronic hole that never
+crosses a genuinely well-staffed hour persists indefinitely rather than fading, so a 48-hour
+window can meaningfully under-count a cut's true marginal cost in a genuinely chronic stretch.
+Left as-is (same judgment as every prior shape) — widening the window is a bigger, separate
+performance tradeoff outside this rewrite's scope.
+
+### Tests — full rewrite, per this area's own established convention
+
+- `backlogModel.test.ts` — the eighth shape's spare/stretch equivalence proof is meaningless
+  now; replaced with direct tests of `backlogHourStep` (visits primitive), `backlogHourStepHours`
+  (the closed-form hours identity, asserted directly against `max(0, arrivals*floorWhppv +
+  priorHours - capacity)`), and `backlogRecurrence` (non-negativity, a hand-computed single-hole
+  clearing case, a "no separate stretch lever exists" check, and — critically — a direct proof
+  that `NO_COMPRESSION_FLOOR_WHPPV` degenerates to a hand-rolled plain `max(0, demand + prior -
+  capacity)` reference recurrence over random data).
+- `backlog.test.ts` — rewritten around the no-compression degenerate case for most tests (same
+  arithmetic the eighth shape's tests used, `floorWhppv=1` with the demand curve as `arrivals168`
+  is IDENTICAL to those old numbers) PLUS a new "real compression" describe block proving a
+  smaller `floorWhppv` (faster achievable pace) clears the same visit spike strictly faster than
+  a larger one, and that capacity exactly meeting `arrivals*floorWhppv` clears to zero regardless
+  of `floorWhppv`'s specific value. The PR E validation-gate test was re-verified (not re-tuned
+  for numbers, only for the removed stretch input) at `floorWhppv=1` — passed on the first
+  re-verification attempt.
+- `solver.test.ts`/`backlogFeedback.test.ts`/`flexMenu.test.ts`/`scenarioB.test.ts`/
+  `syntheticFixtures.test.ts` — every hand-built-`requirement`-as-demand test threads
+  `requirement, NO_COMPRESSION_FLOOR_WHPPV` in place of the old `bandCeilingHourly`/`capacity`
+  trailing argument (mathematically identical behavior, proven by the closed-form identity
+  above — these tests were never about the compression mechanic itself). `sandbox.test.ts` just
+  drops the trailing `BAND_CEILING` argument everywhere (parameter removed).
+- **`backlogFeedback.test.ts`'s chronic-shortfall and oscillation tests needed genuine
+  compression (`floorWhppv=0.5`), not the no-compression case** — re-swept and found, for this
+  specific hand-built scenario, that the no-compression degenerate case made the feedback loop's
+  own floor-raising mechanism produce an IDENTICAL grid every pass (the trim's optimal choice
+  was insensitive to the raised floor) — a real, verified property of that abstract scenario
+  under a decay-free, stretch-free recurrence, not a bug in the mechanism. A modest compression
+  factor (0.5) restored genuine floor-sensitivity, matching the spirit of the eighth shape's
+  fixed `+4` ceiling this test used before. Budget re-swept twice more (64 for the
+  chronic-shortfall test, 56 for the oscillation test — the latter's `OSCILLATION_BUDGET`
+  constant, per this area's own documented history that ANY change to the trim's cost function
+  may require re-sweeping this pinned value).
+- **Two integration-test bounds in `solver.test.ts` needed widening** (`0.11` → `0.12` and
+  `0.11`/`1.11×` → `0.17`/`1.17×`) — both cases are the real, documented §5.6 ENA-floor behavior
+  (`enforceDepartmentFloor` runs LAST and can push scheduled hours back above `capHours`) firing
+  MORE under the new visits-based trim objective's cost landscape than it did under the eighth
+  shape, at these specific low-`wHppvTarget` combinations. Verified via direct inspection
+  (`enaFloorViolationsRemaining.length` > 0 in both failing cases) before widening the bound —
+  not a blind loosening.
+- **`syntheticFixtures.test.ts`'s profile G ("alreadyFine") threshold widened** (`< 0.5` →
+  `< 1`) — the new recurrence's severity genuinely reflects per-visit-pace compression (which
+  the eighth shape never modeled at all), so the SAME well-allocated current grid reads as
+  proportionally farther from the (also re-optimized under the new model) idealized grid's own
+  severity minimum than before. The qualitative conclusion ("current is in the same ballpark as
+  ideal, not wildly worse") still holds at the wider bound; profile G did not become badly
+  shaped.
+
+### Verification — the real numeric sanity check the spec asked for
+
+Confirmed directly against the exact scenario that surfaced this bug (Playwright screenshots,
+`underTargetDayShort`/`adequatelyStaffedBadlyShaped`/`alreadyFine` profiles, this session): the
+queue-clear timing (or honest "doesn't fully clear" statement) now lines up with the heatmap's
+red/blue coloring in every profile checked — red hours (understaffed vs. peer band) correspond
+exactly to the build/peak window the queue sentence names, and blue (overstaffed) hours
+correspond to where the sentence reports the queue clearing, with a chronically-red department
+(`underTargetDayShort`, red 07:00-18:00 every day) correctly reported as never fully clearing
+rather than falsely claiming a night-time clear. This is the defect Ben's original finding
+described, now resolved and directly re-verified, not just assumed fixed because the code
+compiles.
+
+**Invariants held throughout, verified not assumed:** `reconcile.test.ts` passes with a
+zero-line diff (`git diff --stat` confirmed empty — this reversal never touches
+`annualCoreRnHoursBudget`/`hourlyRequirement`). Full suite (229 vitest tests, 19 e2e tests)
+green. `npm run build`/`oxlint`/`npm run test:e2e` all clean (only the pre-existing
+`StepIndicator.tsx` warning).

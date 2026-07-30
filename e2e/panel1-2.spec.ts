@@ -14,15 +14,19 @@ test('Panel 1 renders, its toggle switches views, and the frame shows all three 
   await expect(panel1.locator('.frame-queue-strip')).toBeVisible();
   await expect(panel1.locator('.whppv-heatmap')).toBeVisible();
 
-  const boardingToggle = panel1.getByRole('tab', { name: 'Boarding' });
-  if (await boardingToggle.count()) {
-    await boardingToggle.click();
-    await expect(boardingToggle).toHaveAttribute('aria-selected', 'true');
-  }
-
+  // PANEL1_COPY_REVISION_SPEC_2026-07-28.md §6 — the "Effective wHPPV" toggle is dropped;
+  // 2026-07-30 — the "Boarding" toggle is also dropped, and the remaining "Combined" toggle
+  // is renamed "Arrivals + Boarding" (matching Panels 2/3). Panel 1 keeps exactly two toggles:
+  // Arrivals, Arrivals + Boarding.
   const effectiveToggle = panel1.getByRole('tab', { name: 'Effective wHPPV' });
-  await effectiveToggle.click();
-  await expect(effectiveToggle).toHaveAttribute('aria-selected', 'true');
+  await expect(effectiveToggle).toHaveCount(0);
+
+  const boardingToggle = panel1.getByRole('tab', { name: 'Boarding', exact: true });
+  await expect(boardingToggle).toHaveCount(0);
+
+  const combinedToggle = panel1.getByRole('tab', { name: 'Arrivals + Boarding' });
+  await combinedToggle.click();
+  await expect(combinedToggle).toHaveAttribute('aria-selected', 'true');
 });
 
 test('Panel 2 renders, its toggle switches views and updates the left-column stats', async ({ page }) => {
@@ -33,7 +37,7 @@ test('Panel 2 renders, its toggle switches views and updates the left-column sta
   await expect(panel2.locator('.whppv-heatmap')).toBeVisible();
 
   const currentTab = panel2.getByRole('tab', { name: 'Current' });
-  const arrivalsTab = panel2.getByRole('tab', { name: 'Reallocated for arrivals', exact: true });
+  const arrivalsTab = panel2.getByRole('tab', { name: 'Arrivals', exact: true });
   await expect(currentTab).toHaveAttribute('aria-selected', 'true');
 
   const statBefore = await panel2.locator('p').first().innerText();

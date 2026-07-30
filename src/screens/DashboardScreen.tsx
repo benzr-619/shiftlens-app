@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useStore } from '../store';
 import { StepBar, type StepBarEntry } from '../components/StepBar';
 import { Panel1 } from './dashboard/Panel1';
@@ -16,7 +16,7 @@ const CHAPTERS: StepBarEntry[] = [
   { id: 'ch-current-staffing', label: 'Your current staffing' },
   { id: 'ch-scenario-b', label: 'Could moving hours fix it?' },
   { id: 'ch-full-coverage', label: 'What would full coverage take?' },
-  { id: 'ch-recommended', label: 'Recommended staffing' },
+  { id: 'ch-recommended', label: 'ShiftLens Idealized Staffing' },
   { id: 'ch-sandbox', label: 'Test it yourself' },
   { id: 'ch-evidence', label: 'How this works' },
 ];
@@ -39,6 +39,13 @@ export function DashboardScreen() {
     sandboxHoldGrid,
   } = useStore();
   const [exporting, setExporting] = useState(false);
+
+  // The screen switch in App.tsx is a plain conditional render with no route/scroll reset, so
+  // without this the dashboard mounts at whatever scroll position setup's Review step left the
+  // page at — landing near Panel 1 instead of the welcome banner at the top of this screen.
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, []);
 
   async function handleExport() {
     setExporting(true);

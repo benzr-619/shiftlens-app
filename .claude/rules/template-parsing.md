@@ -285,9 +285,31 @@ boarding ratios, ENA floor, LWBS rate) are set in the UI, never parsed from a wo
 `SETTINGS_HEADER_ALIASES`/`SETTINGS_FIELD_ALIASES`/`looksLikeSettingsSheet`/`rowsToSettings`
 and the Settings sheet generator are gone from `lib/parseUpload.ts`/`lib/template.ts` — don't
 reintroduce a settings-values parse path without checking first. The two boarding ratios live
-in `ShiftMenuStep.tsx`'s "Boarding Staffing Ratios" card (store `boardingRatioTarget`/
+in `ShiftMenuStep.tsx`'s "Staffing Policy Settings" card (store `boardingRatioTarget`/
 `bhBoardingRatioTarget`, defaults 4/10) — this is where `boardingRatioTarget` already lived
 before this session; `bhBoardingRatioTarget` was added alongside it, not moved from anywhere.
+**2026-07-30: the same card gained "hours per FTE" (store `fteInputMode: 'weekly' | 'annual'`
+default `'weekly'` + `fteInputValue: number` default `40`) — a third policy field in this card,
+same rule** (card renamed from "Boarding Staffing Ratios" to "Staffing Policy Settings" since
+it's no longer boarding-only). `buildEngineInputs()` derives the canonical
+`EngineInputs.hoursPerFteAnnual = fteInputMode === 'weekly' ? fteInputValue * 52 :
+fteInputValue`, read via `inputs.hoursPerFteAnnual ?? DEFAULTS.hoursPerFteAnnual` (default 2080)
+everywhere an FTE figure is derived from nurse-hours — `engine/boarding.ts`'s `annualFte`
+computations and `boardingCoverageFte`, `engine/index.ts`'s `fullCoverage.fteDelta`,
+`engine/synthesis.ts`'s `gapFte`, `lib/narrative.ts`'s `deliveryPremiumSentence` (a pure
+function, takes it as a parameter — never reaches into the store), and
+`Panel3.tsx`/`Panel4.tsx`'s `fteDelta`/`kneeFte`/`kneeShiftCount`. Both the raw entered value
+and the mode are stored (not just the derived annual figure) so the field redisplays exactly
+as entered. This never touches the uploaded workbook AS DATA, same as the two boarding ratios
+above — but, also like those two ratios (see the Setup Decisions section below), it DOES
+round-trip through the export/re-import path: `ReviewStep.tsx` shows a "Hours per FTE" row
+(entered value + mode + the derived annual figure) and passes `fteInputMode`/`fteInputValue`
+into `downloadFilledConsolidatedTemplateXlsx`; `lib/template.ts`'s `DECISIONS_TEMPLATE_FIELDS`
+gained two rows ("Hours Per FTE Mode"/"Hours Per FTE Value") in the Setup Decisions tab (BOTH
+fields, not just the derived hours — `fteInputValue` alone can't redisplay the field without
+knowing which mode it was entered in); `lib/parseUpload.ts`'s `DecisionField`/
+`DECISION_FIELD_ALIASES`/`rowsToDecisions` and `applyParsedUpload.ts` mirror the existing
+`boardingRatioTarget` plumbing exactly.
 
 The `boardingCensusClockStart` field (and its "counted from arrival, here's a caveat"
 compromise) was deleted for the same reason described above — see the measured-path section
@@ -342,8 +364,10 @@ reloaded fine.
   import).
 - **Setup Decisions tab** — NEW, `Decision`/`Value` shaped (deliberately NOT `Field`/`Setting`,
   so it can't collide with Scalars or resurrect the reverted Settings-tab shape). Carries
-  `boardingPath` (`census`/`classic`/`skip`), `headcountIncludesIndirectCare` (yes/no),
-  `indirectCareUpliftPct`, and the three `flexAxes` booleans. **This is deliberately NOT a
+  `boardingPath` (`census`/`classic`/`skip`), `headcountIncludesIndirectCare` (yes/no), and
+  the three `flexAxes` booleans. (`indirectCareUpliftPct` was REMOVED 2026-07-28 — it was a
+  dead-end display-only field nothing read back; see `.claude/rules/results-redesign.md`'s
+  Change 7 revision for what replaced it.) **This is deliberately NOT a
   reversal of the Settings-tab decision above** — the distinction: Settings carried TOOL-WIDE
   POLICY (wHPPV target, both boarding ratios, ENA floor, LWBS rate) that stays a fresh UI
   decision every setup pass; Setup Decisions carries PER-DATASET WORKFLOW ANSWERS — how THIS
@@ -353,7 +377,7 @@ reloaded fine.
   wired into `parseXlsxFile`'s normal dispatch (not a second parser call, unlike staffing).
 - Both are additive to `ExportableSetupData`/`ParsedUpload` — `ReviewStep.tsx`'s export button
   now passes `shiftMenu`/`currentStaffingGrid`/`boardingPath`/`headcountIncludesIndirectCare`/
-  `indirectCareUpliftPct`/`flexAxes` alongside the existing data fields.
+  `flexAxes` alongside the existing data fields.
 - Tests: `lib/__tests__/exportRoundTrip.test.ts` gained a describe covering the staffing-grid
   round-trip (via a SECOND `parseStaffingUploadFile` call, shifts recovered from an EMPTY
   passed-in menu — proving the whole export->reimport path works, not just a hand-built
@@ -435,3 +459,34 @@ re-parse via `parseXlsxFile` → assert byte-for-byte equality with the original
 minimal arrivals-only case proving every absent optional field stays absent (not falsely
 populated by blank-cell parsing), plus a sheet-name assertion that no Settings sheet is ever
 written.
+
+## Setup Decisions tab gains the two boarding nursing ratios (2026-07-28, Ben's direct ask)
+
+`DECISIONS_TEMPLATE_FIELDS` (`lib/template.ts`) gained two rows: `Boarding Ratio (RN :
+Medical Boarders)` and `BH Boarding Ratio (RN : BH Boarders)` — the store's
+`boardingRatioTarget`/`bhBoardingRatioTarget` (default 4/10), previously reset to their
+`DEFAULTS` on every re-import since the "no policy values in the upload" rule (Settings-tab
+reversal, above) covered them too. Ben found this confusing on a re-imported dataset: the
+ratios silently reverted even though everything else about the department round-tripped.
+
+**This is a deliberately SCOPED, NARROW exception to that rule — it does not reopen it.**
+The rule's reasoning (a workbook carries per-DATASET data, not tool-wide policy the user sets
+fresh each pass) still holds for wHPPV target and ENA floor, which stay UI-only. The two
+boarding ratios are different in practice: they're a near-fixed clinical convention for a
+given department (how many boarders one RN can safely cover), not a value someone
+deliberately reconsiders at the start of every setup pass the way wHPPV target or ENA floor
+are — closer in spirit to the OTHER Setup Decisions fields (per-dataset answers) than to a
+policy dial. Don't read this as license to move wHPPV target/ENA floor/LWBS rate into the
+export too without a similarly explicit, separate ask.
+
+- `parseUpload.ts`: `DecisionField`/`DECISION_FIELD_ALIASES` gained `boardingRatioTarget`/
+  `bhBoardingRatioTarget` (matched the same normalized-label way every other Decisions row
+  is); `rowsToDecisions`/`ParsedUpload` carry them through the same numeric-value path
+  the (since-removed, 2026-07-28) `indirectCareUpliftPct` field used to use.
+- `applyParsedUpload.ts` writes them via `store.setBoardingRatioTarget`/
+  `setBhBoardingRatioTarget` on a 'returning' re-import, same as every other Setup Decisions
+  field.
+- `ReviewStep.tsx`'s export button passes `boardingRatioTarget`/`bhBoardingRatioTarget` from
+  the store into `downloadFilledConsolidatedTemplateXlsx`.
+- Round-trip tested in `lib/__tests__/exportRoundTrip.test.ts`'s existing Setup Decisions
+  describe block (extended, not a new block).

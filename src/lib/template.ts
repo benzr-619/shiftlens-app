@@ -139,7 +139,7 @@ function staffingRows(shiftMenu: ShiftDef[], grid?: Grid | null): (string | numb
 // Setup Decisions tab (2026-07-27, follow-up to Part 3) — workflow ANSWERS specific to this
 // department's data (which boarding path was used, headcount semantics, which flex axes were
 // explored), NOT tool-wide policy constants. Deliberately distinct from the REVERTED Settings
-// tab (wHPPV target/ratios/ENA floor/LWBS rate — see .claude/rules/template-parsing.md's
+// tab (wHPPV target/ratios/ENA floor — see .claude/rules/template-parsing.md's
 // reversal section): those stay UI-only, set fresh on every setup pass; these are closer to
 // data than policy — answers about how THIS dataset should be read, lost otherwise on
 // re-import (the boarding fork would have to be re-answered even though the underlying
@@ -149,17 +149,33 @@ export const DECISIONS_TEMPLATE_COLUMNS = ['Decision', 'Value'] as const;
 export const DECISIONS_TEMPLATE_FIELDS = [
   'Boarding Path',
   'Headcount Includes Indirect Care',
-  'Indirect Care Uplift Pct',
   'Flexible Start Times',
   'Flexible Shift Count',
   'Flexible Shift Lengths',
+  // 2026-07-28, Ben's direct ask — the two boarding nursing ratios, so a re-imported dataset
+  // doesn't reset them to the DEFAULTS (4/10). Deliberately scoped to ONLY these two fields —
+  // wHPPV target and ENA floor still never appear in any exported file (see
+  // .claude/rules/template-parsing.md's Settings-tab reversal section for why that line
+  // otherwise holds).
+  'Boarding Ratio (RN : Medical Boarders)',
+  'BH Boarding Ratio (RN : BH Boarders)',
+  // 2026-07-30 — same scoped exception as the two ratios above: "hours per FTE" is a
+  // near-fixed department convention (a 3x12 vs. 4x10 rotation), not a policy dial someone
+  // reconsiders fresh each setup pass, so it round-trips here rather than resetting to the
+  // 40 hrs/week default on re-import. Both the mode AND the raw value are stored (not just
+  // the derived annual figure) so the setup field redisplays exactly as entered.
+  'Hours Per FTE Mode',
+  'Hours Per FTE Value',
 ] as const;
 
 export interface SetupDecisionsData {
   boardingPath?: 'census' | 'classic' | 'skip' | null;
   headcountIncludesIndirectCare?: boolean | null;
-  indirectCareUpliftPct?: number | null;
   flexAxes?: FlexAxes | null;
+  boardingRatioTarget?: number | null;
+  bhBoardingRatioTarget?: number | null;
+  fteInputMode?: 'weekly' | 'annual' | null;
+  fteInputValue?: number | null;
 }
 
 function decisionsRows(data: SetupDecisionsData): (string | number)[][] {
@@ -167,10 +183,13 @@ function decisionsRows(data: SetupDecisionsData): (string | number)[][] {
   const values: (string | number)[] = [
     data.boardingPath ?? '',
     boolStr(data.headcountIncludesIndirectCare),
-    data.indirectCareUpliftPct ?? '',
     boolStr(data.flexAxes?.startTimes),
     boolStr(data.flexAxes?.shiftCount),
     boolStr(data.flexAxes?.shiftLengths),
+    data.boardingRatioTarget ?? '',
+    data.bhBoardingRatioTarget ?? '',
+    data.fteInputMode ?? '',
+    data.fteInputValue ?? '',
   ];
   return [DECISIONS_TEMPLATE_COLUMNS.slice(), ...DECISIONS_TEMPLATE_FIELDS.map((f, i) => [f, values[i]])];
 }

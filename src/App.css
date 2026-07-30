@@ -787,46 +787,38 @@ h1 {
    `.heat-legend-spine` are gone — don't reintroduce a per-cell backlog marker here without
    checking first. */
 
+/* PANEL1_COPY_REVISION_SPEC_2026-07-28.md §8 — legend rewrite. Drops the old three-swatch
+   leaner/typical/richer row and the "against each hour's OWN typical range" line for two
+   plain-prose lines (what a cell shows, what red/blue mean) plus a conditional ENA-floor
+   line, only rendered when the currently-displayed grid actually has a flagged cell. */
 .whppv-heatmap-legend {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 14px 18px;
+  flex-direction: column;
+  gap: 6px;
   margin-top: 10px;
   font-size: 12px;
   color: var(--text-muted);
 }
 
-.heat-legend-band {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-basis: 100%;
+.heat-legend-line {
+  line-height: 1.5;
 }
 
-.heat-legend-band-text {
-  flex-basis: 100%;
-  font-size: 12px;
-}
-
-.heat-legend-swatch {
+.heat-legend-swatch-inline {
   display: inline-block;
-  width: 16px;
-  height: 12px;
-  border: 1px solid var(--border);
-  border-radius: 3px;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  margin: 0 3px 0 6px;
+  vertical-align: middle;
 }
 
 .heat-legend-swatch-lean {
-  background: rgba(194, 59, 59, 0.55);
-}
-
-.heat-legend-swatch-neutral {
-  background: transparent;
+  background: rgba(194, 59, 59, 0.65);
 }
 
 .heat-legend-swatch-rich {
-  background: rgba(110, 132, 150, 0.55);
+  background: rgba(37, 99, 235, 0.65);
 }
 
 .heat-legend-risk {
@@ -857,22 +849,32 @@ h1 {
 }
 
 .diff-grid td {
-  font-weight: 600;
+  font-weight: 400;
   font-variant-numeric: tabular-nums;
-}
-
-.diff-grid td.diff-under {
-  color: var(--warning);
-  background: rgba(232, 196, 104, 0.12);
-}
-
-.diff-grid td.diff-over {
-  color: var(--error);
-  background: rgba(194, 59, 59, 0.1);
 }
 
 .diff-grid td.diff-even {
   color: var(--text-muted);
+}
+
+.diff-grid td .diff-cell {
+  display: inline-flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 2px;
+}
+
+.diff-grid td .diff-main {
+  color: var(--text);
+  min-width: 1.2em;
+  text-align: right;
+}
+
+.diff-grid td .diff-delta {
+  color: var(--text-muted);
+  font-size: 0.85em;
+  min-width: 2em;
+  text-align: left;
 }
 
 /* §2.2 comparison unit: idealized grid + current grid + diff + budget/shape reconciliation,
@@ -1252,6 +1254,60 @@ h1 {
 
 .frame-queue-strip-blank {
   opacity: 0.4;
+}
+
+/* PANEL1_COPY_REVISION_SPEC_2026-07-28.md §5d — minimal chart-level labeling: a compact
+   two-item legend and a one-line queue-strip label. Kept deliberately small so the frame
+   doesn't get cluttered — the fuller explanation lives in each panel's own prose. */
+.frame-chart-legend {
+  display: flex;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.frame-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.frame-legend-swatch {
+  width: 10px;
+  height: 3px;
+  border-radius: 2px;
+  display: inline-block;
+}
+
+.frame-legend-swatch-demand {
+  background: var(--error);
+}
+
+.frame-legend-swatch-capacity {
+  background: var(--accent);
+}
+
+.frame-legend-swatch-boarding {
+  background: var(--warning);
+}
+
+.frame-queue-label,
+.frame-heatmap-label {
+  font-size: 13px;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.frame-heatmap-header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 4px;
+}
+
+.frame-heatmap-sublabel {
+  font-size: 11px;
+  color: var(--text-muted);
 }
 
 .frame-demand-chart {

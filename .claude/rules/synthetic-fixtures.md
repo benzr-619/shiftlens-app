@@ -72,7 +72,7 @@ time is strictly worse than building it first).
 | Validates | Does not validate |
 |---|---|
 | Generalizability: no crashes, no sign-assuming copy (once PR H wires narrative.ts), every branch reachable, invariants hold | Whether the model is RIGHT about a real ED |
-| That "you're fine" and "wrong shape" render as well as "understaffed" (profiles G, B) | Whether `abandonRate`/`recoveryEfficiency`/`maxDrainFraction` are correctly calibrated |
+| That "you're fine" and "wrong shape" render as well as "understaffed" (profiles G, B) | Whether the backlog model's capacity-elasticity mechanics (spare/stretch paydown, the peer-benchmark ceiling — see `.claude/rules/engine-solver.md`'s 2026-07-28 section; the abandonment model this table used to reference is retired) are correctly calibrated |
 
 Calibration needs real department data (§12.6) — never tune an engine constant to make this
 sweep or the seven fixtures prettier; a change that does so while regressing real-department

@@ -19,6 +19,7 @@ const ALLOWED_BUDGET_SUBSTRINGS = [
   'ShiftLens budgets your department twice',
   "that's the arrivals budget alone talking",
   'Boarding gets its own budget',
+  'accepting the trade-offs of real world budgets',
 ];
 
 // PR F (RESULTS_PAGE_V2_SPEC_2026-07-27.md §5.5) — extends this file's existing strategy to

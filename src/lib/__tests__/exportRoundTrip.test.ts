@@ -73,8 +73,11 @@ describe('export -> re-import round trip', () => {
       currentStaffingGrid,
       boardingPath: 'census',
       headcountIncludesIndirectCare: true,
-      indirectCareUpliftPct: 15,
       flexAxes: { startTimes: true, shiftCount: false, shiftLengths: true },
+      boardingRatioTarget: 5,
+      bhBoardingRatioTarget: 12,
+      fteInputMode: 'annual',
+      fteInputValue: 1872,
     };
 
     const blob = generateFilledConsolidatedTemplateXlsxBlob(data);
@@ -84,8 +87,11 @@ describe('export -> re-import round trip', () => {
     expect(reparsed.errors).toHaveLength(0);
     expect(reparsed.boardingPath).toBe('census');
     expect(reparsed.headcountIncludesIndirectCare).toBe(true);
-    expect(reparsed.indirectCareUpliftPct).toBe(15);
     expect(reparsed.flexAxes).toEqual({ startTimes: true, shiftCount: false, shiftLengths: true });
+    expect(reparsed.boardingRatioTarget).toBe(5);
+    expect(reparsed.bhBoardingRatioTarget).toBe(12);
+    expect(reparsed.fteInputMode).toBe('annual');
+    expect(reparsed.fteInputValue).toBe(1872);
 
     // Empty menu passed in -> both shifts must be recovered from the file's own Start
     // Hour/Length columns (proves the shift-recovery fix works end to end on an export, not
@@ -121,6 +127,8 @@ describe('export -> re-import round trip', () => {
     expect(reparsed.monthlyBoardingCensusMedical).toBeUndefined();
     expect(reparsed.monthlyBoardingCensusBH).toBeUndefined();
     expect(reparsed.preBedRequestCensus).toBeUndefined();
+    expect(reparsed.fteInputMode).toBeUndefined();
+    expect(reparsed.fteInputValue).toBeUndefined();
   });
 
   it('the export never carries tool-wide policy values — no Settings sheet (Setup Decisions is per-dataset workflow answers, not policy)', async () => {

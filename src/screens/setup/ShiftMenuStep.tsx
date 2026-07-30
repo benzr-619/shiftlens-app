@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import { useStore } from '../../store';
+import type { Grid } from '../../engine/types';
 import { ShiftMenuEditor } from '../../components/ShiftMenuEditor';
 import { CurrentStaffingGrid } from '../../components/CurrentStaffingGrid';
 import { FlexAxesToggles } from '../../components/FlexAxesToggles';
@@ -18,13 +19,35 @@ export function ShiftMenuStep() {
     setBoardingRatioTarget,
     bhBoardingRatioTarget,
     setBhBoardingRatioTarget,
+    fteInputMode,
+    setFteInputMode,
+    fteInputValue,
+    setFteInputValue,
     headcountIncludesIndirectCare,
     setHeadcountIncludesIndirectCare,
-    indirectCareUpliftPct,
-    setIndirectCareUpliftPct,
   } = useStore();
   const fileInput = useRef<HTMLInputElement>(null);
   const [uploadMsgs, setUploadMsgs] = useState<{ warnings: string[]; errors: string[] } | null>(null);
+  const [indirectCareCount, setIndirectCareCount] = useState('');
+  const [indirectCareAppliedMsg, setIndirectCareAppliedMsg] = useState<string | null>(null);
+
+  // One-time data-entry correction (not an ongoing multiplier/flag): adds a typed
+  // indirect-care headcount to every currentStaffingGrid cell for the current shift menu,
+  // then leaves the grid as plain editable cells. See CLAUDE.md's headcount-semantics note.
+  function applyIndirectCareToGrid() {
+    const amount = Number(indirectCareCount);
+    if (!amount || amount <= 0 || shiftMenu.length === 0) return;
+    const next: Grid = {};
+    for (let day = 0; day < 7; day++) {
+      next[day] = {};
+      for (const shift of shiftMenu) {
+        next[day][shift.id] = (currentStaffingGrid?.[day]?.[shift.id] ?? 0) + amount;
+      }
+    }
+    setCurrentStaffingGrid(next);
+    setIndirectCareAppliedMsg(`Added ${amount} to every cell of your current staffing grid.`);
+    setIndirectCareCount('');
+  }
 
   async function handleFile(file: File) {
     const parsed = await parseStaffingUploadFile(file, shiftMenu);
@@ -113,7 +136,7 @@ export function ShiftMenuStep() {
       <section className="card">
         <div className="optional-input">
           <div className="optional-label">
-            Boarding Staffing Ratios <span className="review-sub">(settings, not data — defaults shown)</span>
+            Staffing Policy Settings <span className="review-sub">(settings, not data — defaults shown)</span>
           </div>
           <p>
             Enter the nursing ratios used by your institution's inpatient floors, to estimate
@@ -139,18 +162,36 @@ export function ShiftMenuStep() {
             />
             behavioral-health boarders <span className="degrade-note">(classic range 10-12 — far less licensed RN care than med/surg)</span>
           </label>
+
+          <p>
+            How many hours does one FTE represent for your department? This converts every
+            FTE figure shown on your results (funding asks, boarding coverage) from nurse-hours.
+          </p>
+          <label className="field-row">
+            Hours per FTE, per
+            <select value={fteInputMode} onChange={(e) => setFteInputMode(e.target.value as 'weekly' | 'annual')}>
+              <option value="weekly">week</option>
+              <option value="annual">year</option>
+            </select>
+            <input
+              type="number"
+              min={1}
+              value={fteInputValue}
+              onChange={(e) => setFteInputValue(Number(e.target.value))}
+            />
+            {fteInputMode === 'weekly' ? 'hours/week' : 'hours/year'}
+          </label>
         </div>
       </section>
 
       <section className="card">
         <div className="optional-input">
           <div className="optional-label">
-            Headcount semantics <EvidenceBadge status="OPTIONAL" note="Optional — helps us frame the grid's numbers correctly for you, doesn't change any calculation." />
+            Headcount semantics <EvidenceBadge status="OPTIONAL" note="Optional — helps us make sure the grid's numbers are counted the way the benchmark expects." />
           </div>
           <p>
-            A headcount of "5" reads very differently depending on who counts toward it. This doesn't change any
-            number on the results page — it only shapes how we describe it, so the grid doesn't read as wrong when
-            it's really just counting differently than you expected.
+            A headcount of "5" reads very differently depending on who counts toward it — this helps us catch a
+            common data-entry gap before it understates your staffing.
           </p>
           <label className="field-row">
             <span>Does the headcount you enter (shift menu, current staffing) include charge and triage nurses?</span>
@@ -163,19 +204,37 @@ export function ShiftMenuStep() {
               <option value="yes">Yes — it includes charge/triage/other indirect-care roles</option>
             </select>
           </label>
-          {headcountIncludesIndirectCare === true && (
-            <label className="field-row">
-              About what share of that headcount is indirect care (charge, triage, etc.), roughly?
-              <input
-                type="number"
-                min={0}
-                max={100}
-                value={indirectCareUpliftPct ?? ''}
-                placeholder="e.g. 15"
-                onChange={(e) => setIndirectCareUpliftPct(e.target.value === '' ? null : Number(e.target.value))}
-              />
-              %
-            </label>
+          {headcountIncludesIndirectCare === false && (
+            <div className="indirect-care-correction">
+              <p className="degrade-note">
+                The peer wHPPV benchmark assumes charge/triage hours are counted in headcount — leaving them out of
+                your current staffing grid understates your staffing relative to that target. If you know roughly
+                how many charge/triage (or other indirect-care) staff are typically on duty per shift, add that
+                count to every cell of your current staffing grid below as a one-time correction.
+              </p>
+              <label className="field-row">
+                Charge/triage (or other indirect-care) staff typically on duty per shift
+                <input
+                  type="number"
+                  min={0}
+                  value={indirectCareCount}
+                  placeholder="e.g. 1"
+                  onChange={(e) => {
+                    setIndirectCareCount(e.target.value);
+                    setIndirectCareAppliedMsg(null);
+                  }}
+                />
+              </label>
+              <button
+                className="btn-secondary"
+                onClick={applyIndirectCareToGrid}
+                disabled={!Number(indirectCareCount) || shiftMenu.length === 0}
+              >
+                Add to current staffing grid
+              </button>
+              {shiftMenu.length === 0 && <p className="msg-warning">Add at least one shift above before applying this.</p>}
+              {indirectCareAppliedMsg && <p className="degrade-note">{indirectCareAppliedMsg}</p>}
+            </div>
           )}
         </div>
       </section>

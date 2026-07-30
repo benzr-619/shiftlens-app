@@ -250,9 +250,31 @@ describe('§2.6 single representative-week coverage model', () => {
     expect(covered / boarding.annualBoardingHours).toBeCloseTo(1, 2); // gapless menu ⇒ ~100% coverage
   });
 
-  it('boardingCoverageFte converts annual hours to FTE at 2080 hrs/yr', () => {
+  it('boardingCoverageFte converts annual hours to FTE at 2080 hrs/yr by default', () => {
     expect(boardingCoverageFte(2080)).toBeCloseTo(1, 9);
     expect(boardingCoverageFte(1040)).toBeCloseTo(0.5, 9);
+  });
+
+  it('boardingCoverageFte respects a non-default hoursPerFteAnnual', () => {
+    // A 3x12 department running 36 hrs/week (36*52 = 1872 hrs/yr) reports MORE FTE for the
+    // same nurse-hours than the 2080 default would.
+    expect(boardingCoverageFte(1872, 1872)).toBeCloseTo(1, 9);
+    expect(boardingCoverageFte(2080, 1872)).toBeGreaterThan(boardingCoverageFte(2080));
+  });
+
+  it('a non-default hoursPerFteAnnual (36 hrs/week, a 3x12 department) scales computeBoarding\'s annualFte consistently, never the underlying nurse-hours', () => {
+    const arrivals = randomArrivals168(43);
+    const defaultBoarding = computeBoarding(arrivals, 0.2, 4, 4, shiftMenu, undefined, undefined)!;
+    const hoursPerFteAnnual36x52 = 36 * 52; // 1872
+    const customBoarding = computeBoarding(arrivals, 0.2, 4, 4, shiftMenu, undefined, undefined, undefined, hoursPerFteAnnual36x52)!;
+
+    // The underlying nurse-hours figures are completely unaffected by hoursPerFteAnnual.
+    expect(customBoarding.annualBoardingHours).toBeCloseTo(defaultBoarding.annualBoardingHours, 9);
+    expect(customBoarding.cellBoardingRnHours).toEqual(defaultBoarding.cellBoardingRnHours);
+
+    // Only the FTE conversion changes, and it changes exactly as the ratio implies.
+    expect(customBoarding.annualFte).toBeCloseTo((defaultBoarding.annualBoardingHours / hoursPerFteAnnual36x52), 9);
+    expect(customBoarding.annualFte).toBeGreaterThan(defaultBoarding.annualFte);
   });
 });
 

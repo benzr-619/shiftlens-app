@@ -68,23 +68,11 @@ const METADATA: Record<keyof typeof DEFAULTS, ConstantMetadata> = {
     evidenceTag: 'ESTABLISHED',
     ifMoved: 'Raising it can push the solved schedule over budget at genuinely low-volume hours (a real, documented behavior, not a bug — see engine-solver.md §5.6).',
   },
-  backlogAbandonRate: {
-    label: 'Backlog abandon rate (LWBS proxy)',
-    controls: 'Fraction of carried backlog that leaves the system (via attrition/LWBS) per hour, in the backlog recurrence (engine/backlogModel.ts).',
-    evidenceTag: 'ASSUMPTION',
-    ifMoved: 'Higher = backlog dissipates faster on its own (a more forgiving model); lower = backlog persists longer, reads worse. The ONE parameter of the three plausibly measurable from a real ED\'s own LWBS rate — see EngineInputs.lwbsRate (PR E).',
-  },
-  backlogRecoveryEfficiency: {
-    label: 'Backlog recovery efficiency',
-    controls: 'How much of a spare nurse-hour actually retires an hour of queued backlog (< 1: catch-up loses batching, adds re-triage/reassessment).',
-    evidenceTag: 'ASSUMPTION',
-    ifMoved: 'Higher = spare capacity drains the queue faster; lower = backlog persists even with slack staff nearby.',
-  },
-  backlogMaxDrainFraction: {
-    label: 'Backlog max drain fraction',
-    controls: 'Hard per-hour ceiling on how much of the carried backlog can drain, regardless of how much spare capacity exists (beds/providers/imaging gate real recovery, not just nurse headcount).',
-    evidenceTag: 'ASSUMPTION',
-    ifMoved: 'Raising it lets a single excess-capacity hour absorb more backlog at once — investigated in PR E (see engine-solver.md\'s PR E section): meaningfully protective in the realistic 4-6hr spare range, only truly inert at very low spare (<=2hr).',
+  hoursPerFteAnnual: {
+    label: 'Hours per FTE (annual)',
+    controls: 'The annual hours one FTE represents, used to convert every FTE-denominated figure on the page (funding asks, boarding coverage, the synthesis gap) from nurse-hours. Set on the setup screen\'s Staffing Policy Settings card, either as hours/week (×52) or directly as hours/year.',
+    evidenceTag: 'CONVENTION',
+    ifMoved: 'A department running fewer hours per FTE (e.g. a 36-hr/week 3x12 rotation) reports a larger FTE figure for the same nurse-hours ask; more hours/FTE reports a smaller one. Never affects the underlying nurse-hours themselves.',
   },
 };
 

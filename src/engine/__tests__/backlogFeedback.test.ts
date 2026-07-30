@@ -2,21 +2,18 @@ import { describe, expect, it } from 'vitest';
 import { solveShiftFitWithBacklogFeedback } from '../backlogFeedback';
 import { trimWeekToBudget, solveFullCoverageWeek } from '../solver';
 import { computeBacklog } from '../backlog';
-import { DEFAULTS } from '../types';
+import { NO_COMPRESSION_FLOOR_WHPPV } from '../backlogModel';
 import type { Grid, ShiftDef } from '../types';
 
-// PR B (SOLVER_REALISM_SPEC_2026-07-26.md): computeBacklog takes a BacklogRecurrenceParams
-// object now, not a single decay number — use the SAME realistic defaults
-// solveShiftFitWithBacklogFeedback itself falls back to, so this helper measures the loop
-// against its own actual objective.
-const REALISTIC_PARAMS = {
-  abandonRate: DEFAULTS.backlogAbandonRate,
-  recoveryEfficiency: DEFAULTS.backlogRecoveryEfficiency,
-  maxDrainFraction: DEFAULTS.backlogMaxDrainFraction,
-};
-
-function totalBacklogHours(grid: Grid, requirement: number[], shifts: ShiftDef[]): number {
-  return computeBacklog(grid, requirement, shifts, REALISTIC_PARAMS).backlog.reduce((a, b) => a + b, 0);
+// 2026-07-28 REVERSAL (NINTH shape, BACKLOG_MODEL_VISITS_BASED_SPEC_2026-07-28.md, see
+// .claude/rules/engine-solver.md) — `computeBacklog`/`trimWeekToBudget`/
+// `solveShiftFitWithBacklogFeedback` now take `arrivals168`/`floorWhppv` instead of a
+// `bandCeilingHourly` array. These tests hand-construct `requirement` as the demand curve
+// directly (not real visit counts), so they use the NO-COMPRESSION degenerate case
+// (`NO_COMPRESSION_FLOOR_WHPPV`, `requirement` itself as the "arrivals" input) — see
+// backlogModel.ts's header for why that's mathematically the right substitution.
+function totalBacklogHours(grid: Grid, requirement: number[], shifts: ShiftDef[], floorWhppv: number = NO_COMPRESSION_FLOOR_WHPPV): number {
+  return computeBacklog(grid, requirement, requirement, shifts, floorWhppv).backlog.reduce((a, b) => a + b, 0);
 }
 
 function scheduledHours(grid: Grid, shifts: ShiftDef[]): number {
@@ -33,6 +30,12 @@ const shifts: ShiftDef[] = [
   { id: 'target', startHour: 0, lengthHours: 8 },
   { id: 'recovery', startHour: 8, lengthHours: 2 },
 ];
+
+// 2026-07-28 (ninth shape): re-swept AGAIN for the new visits-based objective at a genuine
+// compression floorWhppv (0.5) — same documented history as every prior change to the trim's
+// cost function (this pins a budget value empirically found to oscillate for this hand-built
+// scenario; any future change to candidateCutCost may require re-sweeping it once more).
+const OSCILLATION_BUDGET = 56;
 
 function chronicPeakRequirement(): number[] {
   const requirement = new Array(168).fill(0);
@@ -52,26 +55,46 @@ describe('2026-07-26 Phase 2b — true backlog-feedback relaxation loop (fourth 
     const requirement = chronicPeakRequirement();
     const bandFloorHourly = new Array(168).fill(0);
     const demandVolatilityHourly = new Array(168).fill(0);
-    const weeklyBudgetHours = 60;
+    // 2026-07-28 (ninth shape): a genuine compression floorWhppv (0.5, not the no-compression
+    // 1) is needed here — this test is specifically about the FEEDBACK LOOP mechanism (does
+    // raising a local floor pass-over-pass actually change what the trim picks), and under
+    // NO_COMPRESSION_FLOOR_WHPPV this particular hand-built scenario's optimal trim happens to
+    // be completely insensitive to the floor raise (re-swept and confirmed empirically) — a
+    // real property of this specific abstract scenario, not a bug in the mechanism. A modest
+    // compression factor restores genuine sensitivity, matching the spirit of the old model's
+    // fixed +4 "stretch" ceiling this test used before.
+    const floorWhppv = 0.5;
+    const weeklyBudgetHours = 64;
     const capHours = weeklyBudgetHours * 1.1;
 
     // Pass 1 in isolation: the exact same trim call the loop's first iteration makes,
     // against the UN-raised floor — our baseline to compare against the loop's final result.
     const fullCoverageGrid: Grid = solveFullCoverageWeek(requirement, shifts);
-    const pass1Grid = trimWeekToBudget(requirement, bandFloorHourly, demandVolatilityHourly, shifts, fullCoverageGrid, capHours);
-    const pass1Total = totalBacklogHours(pass1Grid, requirement, shifts);
+    const pass1Grid = trimWeekToBudget(
+      requirement,
+      bandFloorHourly,
+      demandVolatilityHourly,
+      requirement,
+      floorWhppv,
+      shifts,
+      fullCoverageGrid,
+      capHours
+    );
+    const pass1Total = totalBacklogHours(pass1Grid, requirement, shifts, floorWhppv);
 
     const result = solveShiftFitWithBacklogFeedback(
       requirement,
       bandFloorHourly,
       demandVolatilityHourly,
+      requirement,
+      floorWhppv,
       shifts,
       weeklyBudgetHours,
       0.1,
       0,
       8
     );
-    const finalTotal = totalBacklogHours(result.grid, requirement, shifts);
+    const finalTotal = totalBacklogHours(result.grid, requirement, shifts, floorWhppv);
 
     // The loop actually reallocated capacity somewhere (not a no-op) ...
     const gridsDiffer = [0, 1, 2, 3, 4, 5, 6].some(
@@ -96,7 +119,18 @@ describe('2026-07-26 Phase 2b — true backlog-feedback relaxation loop (fourth 
     const bandFloorHourly = new Array(168).fill(2);
     const demandVolatilityHourly = new Array(168).fill(0);
 
-    const result = solveShiftFitWithBacklogFeedback(requirement, bandFloorHourly, demandVolatilityHourly, localShifts, 0, 0, 0, 8);
+    const result = solveShiftFitWithBacklogFeedback(
+      requirement,
+      bandFloorHourly,
+      demandVolatilityHourly,
+      requirement,
+      NO_COMPRESSION_FLOOR_WHPPV,
+      localShifts,
+      0,
+      0,
+      0,
+      8
+    );
 
     expect(result.weeklyScheduledHours).toBe(0); // reached the cap despite every cut breaching every pass — no stall
   });
@@ -106,19 +140,17 @@ describe('2026-07-26 Phase 2b — true backlog-feedback relaxation loop (fourth 
     const bandFloorHourly = new Array(168).fill(0);
     const demandVolatilityHourly = new Array(168).fill(0);
 
+    // 2026-07-28 (ninth shape): a genuine compression floorWhppv (0.5), same reasoning as the
+    // chronic-shortfall test above — see OSCILLATION_BUDGET's own comment for the re-sweep.
+    const floorWhppv = 0.5;
     const result = solveShiftFitWithBacklogFeedback(
       requirement,
       bandFloorHourly,
       demandVolatilityHourly,
+      requirement,
+      floorWhppv,
       shifts,
-      // PR B found budget=50 (single-decay model) oscillated; PR B re-swept to budget=70 for
-      // the new abandon/recovery/drain-cap physics. PR C (SOLVER_REALISM_SPEC_2026-07-26.md)
-      // changes the trim's cost function again (convex severity + peak term, replacing linear
-      // backlog-hours) — 70 no longer oscillates cleanly under THIS objective either. Re-swept
-      // empirically a second time against the same scenario — 65 oscillates cleanly (pass 1
-      // total ≈1000, pass 2 drops to ≈800 — the best pass — then rises back to ≈933 and stays
-      // there, worse than pass 2's own result).
-      65,
+      OSCILLATION_BUDGET,
       0.1,
       0,
       8
@@ -132,7 +164,7 @@ describe('2026-07-26 Phase 2b — true backlog-feedback relaxation loop (fourth 
     expect(best).toBeLessThan(last - 1e-6);
 
     // The returned grid matches the BEST pass, not the last.
-    const returnedTotal = totalBacklogHours(result.grid, requirement, shifts);
+    const returnedTotal = totalBacklogHours(result.grid, requirement, shifts, floorWhppv);
     expect(returnedTotal).toBeCloseTo(best, 3);
     expect(returnedTotal).toBeLessThan(last - 1e-6);
   });

@@ -1,21 +1,45 @@
 import { useMemo, useState } from 'react';
 import { useStore } from '../../store';
-import type { ShiftDef } from '../../engine/types';
-import { computeBacklog, computeScenarioB, computeCombinedReallocation } from '../../engine';
+import { DAY_LABELS } from '../../engine/types';
+import type { Grid, ShiftDef } from '../../engine/types';
+import { computeBacklog, computeScenarioB, computeCombinedReallocation, NO_COMPRESSION_FLOOR_WHPPV } from '../../engine';
 import { fullWeekCapacity } from '../../engine/solver';
-import { namePattern } from '../../lib/whenPattern';
 import { VisualFrame, type VisualFrameView } from '../../components/VisualFrame';
 import type { WhppvHeatmapCell } from '../../components/WhppvHeatmap';
+import { averageDay } from '../../lib/averageDay';
+import {
+  computeQueuePattern,
+  queuePatternSentence,
+  fmtHour,
+  WEEKDAY_DAYS,
+  WEEKEND_DAYS,
+  averageOverDays,
+  patternsDifferMeaningfully,
+} from '../../lib/queuePattern';
+import { buildPerShiftBreakdown } from '../../lib/shiftBreakdown';
+import { DISPLAY_DAY_ORDER, DISPLAY_DAY_LABELS } from '../../lib/dayOrder';
 
 function sortByStartHour(shifts: ShiftDef[]): ShiftDef[] {
   return [...shifts].sort((a, b) => a.startHour - b.startHour);
 }
 
-function buildCells(onDuty168: number[], requirement168: number[], bandFloor168: number[], bandCeiling168: number[], arrivals168: number[]): WhppvHeatmapCell[] {
+/** `perShiftBreakdown168`, when passed, gives split cell text/tooltip when more than one shift
+ * structurally covers a global hour (same convention as Panel 1's heatmap, §7) — only
+ * meaningful when `onDuty168` IS actual reallocated-grid headcount, which is true for both of
+ * this panel's toggles (their capacity comes straight from `fullWeekCapacity` on a real grid). */
+function buildCells(
+  onDuty168: number[],
+  requirement168: number[],
+  bandFloor168: number[],
+  bandCeiling168: number[],
+  arrivals168: number[],
+  perShiftBreakdown168?: Array<Array<{ label: string; headcount: number }>>
+): WhppvHeatmapCell[] {
   const cells: WhppvHeatmapCell[] = [];
   for (let day = 0; day < 7; day++) {
     for (let hour = 0; hour < 24; hour++) {
       const g = day * 24 + hour;
+      const perShift = perShiftBreakdown168 && perShiftBreakdown168[g].length > 1 ? perShiftBreakdown168[g] : undefined;
       cells.push({
         day,
         hour,
@@ -27,25 +51,65 @@ function buildCells(onDuty168: number[], requirement168: number[], bandFloor168:
         arrivals: arrivals168[g] ?? 0,
         belowFloor: false,
         riskReasons: [],
+        perShift,
       });
     }
   }
   return cells;
 }
 
-function shortfallHours(demand168: number[], capacity168: number[]): number {
+/** Total weekly scheduled nurse-hours a grid produces — Σ headcount × shift length, every
+ * (day, shift) cell. Used to state the reallocated grid's own hours/week figure; since
+ * `reallocateHoursExact` (engine/exactReallocation.ts) only ever trades one shift-unit for
+ * another, this is provably identical to the current grid's own total — see the
+ * "no change" wording below. */
+function weeklyScheduledHoursOf(grid: Grid, shiftMenu: ShiftDef[]): number {
   let total = 0;
-  for (let i = 0; i < 168; i++) total += Math.max(0, (demand168[i] ?? 0) - (capacity168[i] ?? 0));
+  for (let day = 0; day < 7; day++) {
+    const headcount = grid[day] ?? {};
+    for (const s of shiftMenu) total += (headcount[s.id] ?? 0) * s.lengthHours;
+  }
   return total;
 }
 
+interface HourlyWhppvExtreme {
+  value: number;
+  day: number;
+  hour: number;
+}
+
+/** Hour-to-hour realized wHPPV range — direct per-cell nurse-hours ÷ arrivals, same formula
+ * Panel 1 uses for its own realized-wHPPV range (see Panel1.tsx). Zero-arrival cells are
+ * skipped (no meaningful per-visit ratio there). */
+function hourlyWhppvRange(
+  capacity168: number[],
+  arrivals168: number[]
+): { min: HourlyWhppvExtreme | null; max: HourlyWhppvExtreme | null } {
+  let min: HourlyWhppvExtreme | null = null;
+  let max: HourlyWhppvExtreme | null = null;
+  for (let g = 0; g < 168; g++) {
+    const cellArrivals = arrivals168[g] ?? 0;
+    if (cellArrivals <= 0) continue;
+    const value = (capacity168[g] ?? 0) / cellArrivals;
+    const day = Math.floor(g / 24);
+    const hour = g % 24;
+    if (!min || value < min.value) min = { value, day, hour };
+    if (!max || value > max.value) max = { value, day, hour };
+  }
+  return { min, max };
+}
+
 /**
- * PANEL 2 (RESULTS_PAGE_V2_SPEC_2026-07-27.md §4) — "Could moving hours fix it?" Reuses
- * `computeScenarioB` (arrivals only) and `computeCombinedReallocation` (arrivals + boarding)
- * UNCHANGED — no new engine work, per the spec. The honest-cost sentence renders on EVERY
- * state, not just when the "arrivals + boarding" option is selected (spec's explicit
- * instruction) — reallocating to cover boarding necessarily costs the arrivals picture
- * something, and that cost must never be hidden behind a toggle click.
+ * PANEL 2 (PANEL2_REWORK_SPEC_2026-07-28, planned in Cowork) — "What can moving hours fix?"
+ * Reuses `computeScenarioB` (arrivals only) and `computeCombinedReallocation` (arrivals +
+ * boarding) UNCHANGED — no new engine work. Two toggles only ("Current" is dropped — Panel 1
+ * already shows current staffing). Below the toggle: a shift-change diff grid (each cell shows
+ * the reallocated headcount with the +/- delta in parentheses), a whole-schedule wHPPV mirror
+ * of Panel 1's own current-staffing framing (still X wHPPV at X hours/week — necessarily
+ * unchanged, since `reallocateHoursExact` only ever trades hours, never adds/removes them —
+ * plus the hour-to-hour realized-wHPPV range and how its variance compares to today's), and a
+ * backlog build/peak/clear stat (reusing Panel 1's shared `lib/queuePattern.ts` helpers) — all
+ * vocabulary Panel 1 already introduced, rather than inventing new stats.
  */
 export function Panel2() {
   const { shiftMenu, arrivals, currentStaffingGrid, buildEngineInputs, getResult } = useStore();
@@ -54,14 +118,14 @@ export function Panel2() {
   const grid = currentStaffingGrid ?? {};
   const inputs = buildEngineInputs();
 
-  const [active, setActive] = useState<'current' | 'arrivals' | 'combined'>('current');
+  const [active, setActive] = useState<'arrivals' | 'combined'>('arrivals');
 
   const hasCurrentStaffing = Object.values(grid).some((row) => row && Object.values(row).some((v) => (v ?? 0) > 0));
 
   if (!hasCurrentStaffing) {
     return (
       <section className="card panel panel-2" id="ch-scenario-b">
-        <h2>Could moving hours fix it?</h2>
+        <h2>What can moving hours fix?</h2>
         <p>Add your current staffing above to see whether reallocating the same hours would close any gap.</p>
       </section>
     );
@@ -76,23 +140,77 @@ export function Panel2() {
   const arrivalsCapacity = scenarioB ? fullWeekCapacity(scenarioB.grid, sortedShiftMenu) : currentCapacity;
   const combinedCapacity = combinedRealloc ? fullWeekCapacity(combinedRealloc.grid, sortedShiftMenu) : currentCapacity;
 
-  const stateFor = (key: 'current' | 'arrivals' | 'combined') => {
-    if (key === 'arrivals') return { demand: result.hourlyRequirement, capacity: arrivalsCapacity, gridForBacklog: scenarioB?.grid ?? grid };
-    if (key === 'combined') return { demand: combinedRequirement, capacity: combinedCapacity, gridForBacklog: combinedRealloc?.grid ?? grid };
-    return { demand: result.hourlyRequirement, capacity: currentCapacity, gridForBacklog: grid };
-  };
+  const arrivalsReallocatedGrid = scenarioB?.grid ?? grid;
+  const combinedReallocatedGrid = combinedRealloc?.grid ?? grid;
+
+  // 'combined' blends in boarding demand, which has no honest "visits" concept — see
+  // backlogModel.ts's header and .claude/rules/engine-solver.md's ninth-shape section.
+  const stateFor = (key: 'arrivals' | 'combined') =>
+    key === 'arrivals'
+      ? {
+          demand: result.hourlyRequirement,
+          capacity: arrivalsCapacity,
+          reallocatedGrid: arrivalsReallocatedGrid,
+          recurrenceArrivals: arrivals,
+          floorWhppv: result.floorWhppv,
+        }
+      : {
+          demand: combinedRequirement,
+          capacity: combinedCapacity,
+          reallocatedGrid: combinedReallocatedGrid,
+          recurrenceArrivals: combinedRequirement,
+          floorWhppv: NO_COMPRESSION_FLOOR_WHPPV,
+        };
 
   const activeState = stateFor(active);
-  const activeBacklog = computeBacklog(activeState.gridForBacklog, activeState.demand, sortedShiftMenu);
-  const activeShortfall = shortfallHours(activeState.demand, activeState.capacity);
-  const worstStretchLabel = namePattern(activeBacklog.cyclicalBacklog, 'higher-is-worse');
 
-  const views: VisualFrameView[] = (['current', 'arrivals', 'combined'] as const)
+  // Backlog build/peak/clear is an ARRIVALS-specific measure, full stop — never re-derived
+  // against the combined (arrivals+boarding) demand curve, which has no honest "queue" concept
+  // (see backlogModel.ts's header on the no-compression degenerate case). Every toggle asks the
+  // SAME question — "how does this reallocated grid's capacity affect the arrivals backlog?" —
+  // only the GRID varies by toggle, never the demand curve or compression floor.
+  const avgArrivalsDemand = averageDay(result.hourlyRequirement);
+  const backlogAfter = computeBacklog(activeState.reallocatedGrid, arrivals, result.hourlyRequirement, sortedShiftMenu, result.floorWhppv);
+  const patternAfter = computeQueuePattern(averageDay(backlogAfter.backlog), avgArrivalsDemand);
+  const weekdayPatternAfter = computeQueuePattern(
+    averageOverDays(backlogAfter.backlog, WEEKDAY_DAYS),
+    averageOverDays(result.hourlyRequirement, WEEKDAY_DAYS)
+  );
+  const weekendPatternAfter = computeQueuePattern(
+    averageOverDays(backlogAfter.backlog, WEEKEND_DAYS),
+    averageOverDays(result.hourlyRequirement, WEEKEND_DAYS)
+  );
+  const splitMeaningfullyAfter = patternsDifferMeaningfully(weekdayPatternAfter, weekendPatternAfter);
+
+  // Demand-vs-staffing peak lag, same sentence shape as Panel 1's late-ramp sentence — this one
+  // legitimately follows the active toggle's own demand curve (it's describing that toggle's
+  // own demand/capacity chart, not the backlog). Computed both today (current grid) and on the
+  // reallocated schedule so the sentence can honestly state when a lag disappears, and skip
+  // itself entirely when there was never one to begin with (redundant with Panel 1 otherwise).
+  const avgActiveDemand = averageDay(activeState.demand);
+  const avgActiveCapacity = averageDay(activeState.capacity);
+  const avgCurrentCapacity = averageDay(currentCapacity);
+  const peakDemandHour = avgActiveDemand.indexOf(Math.max(...avgActiveDemand));
+  const peakCapacityHourAfter = avgActiveCapacity.indexOf(Math.max(...avgActiveCapacity));
+  const peakCapacityHourBefore = avgCurrentCapacity.indexOf(Math.max(...avgCurrentCapacity));
+  const rampGapAfter = (peakCapacityHourAfter - peakDemandHour + 24) % 24;
+  const rampGapBefore = (peakCapacityHourBefore - peakDemandHour + 24) % 24;
+
+  // Reallocated-grid wHPPV: total hours/week (conserved EXACTLY by `reallocateHoursExact` —
+  // see engine/exactReallocation.ts — hence "no change") and the hour-to-hour realized-wHPPV
+  // range, compared against the same range computed on today's actual grid.
+  const reallocatedWeeklyHours = weeklyScheduledHoursOf(activeState.reallocatedGrid, sortedShiftMenu);
+  const reallocatedRealizedWhppv = result.annualVisits > 0 ? (reallocatedWeeklyHours * 52) / result.annualVisits : 0;
+  const reallocatedWhppvRange = hourlyWhppvRange(activeState.capacity, arrivals);
+  const currentWhppvRange = hourlyWhppvRange(currentCapacity, arrivals);
+
+  const views: VisualFrameView[] = (['arrivals', 'combined'] as const)
     .filter((key) => key !== 'combined' || combinedRealloc)
     .map((key) => {
       const s = stateFor(key);
-      const b = computeBacklog(s.gridForBacklog, s.demand, sortedShiftMenu);
-      const label = key === 'current' ? 'Current' : key === 'arrivals' ? 'Reallocated for arrivals' : 'Reallocated for arrivals + boarding';
+      const b = computeBacklog(s.reallocatedGrid, s.recurrenceArrivals, s.demand, sortedShiftMenu, s.floorWhppv);
+      const label = key === 'arrivals' ? 'Arrivals' : 'Arrivals + Boarding';
+      const perShiftBreakdown = buildPerShiftBreakdown(sortedShiftMenu, s.reallocatedGrid);
       return {
         key,
         label,
@@ -100,7 +218,7 @@ export function Panel2() {
         capacity168: s.capacity,
         queueDepth168: b.cyclicalBacklog,
         structuralFloor: b.structuralFloorMin,
-        heatmapCells: buildCells(s.capacity, s.demand, result.bandFloorHourly, result.bandCeilingHourly, arrivals),
+        heatmapCells: buildCells(s.capacity, s.demand, result.bandFloorHourly, result.bandCeilingHourly, arrivals, perShiftBreakdown),
       } satisfies VisualFrameView;
     });
 
@@ -108,27 +226,100 @@ export function Panel2() {
     <section className="panel panel-2" id="ch-scenario-b">
       <div className="panel-columns">
         <div className="panel-words">
-          <h2>Could moving hours fix it?</h2>
-
+          <h2>What can moving hours fix?</h2>
           <p>
-            Hours below need this week: <strong>{activeShortfall.toFixed(0)}</strong>. Worst unbroken stretch:{' '}
-            <strong>{worstStretchLabel}</strong>.
+            Holding your total hours flat, this solver re-distributes them to try and better match demand. Toggle
+            to test focusing solely on arrivals, or stretching the same hours to also cover boarding.
           </p>
 
-          <div className="banner banner-info">
-            "Reallocated for arrivals" only ever answers what arrivals alone would justify — it is bounded to that
-            question on every render, never a standalone recommendation for your whole department.
-          </div>
+          <table className="staffing-grid diff-grid">
+            <thead>
+              <tr>
+                <th className="hour-col">Shift</th>
+                {DISPLAY_DAY_LABELS.map((d) => (
+                  <th key={d}>{d}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {sortedShiftMenu.map((s) => (
+                <tr key={s.id}>
+                  <td className="hour-col">{s.label || s.id}</td>
+                  {DISPLAY_DAY_ORDER.map((day) => {
+                    const newValue = activeState.reallocatedGrid[day]?.[s.id] ?? 0;
+                    const diff = newValue - (grid[day]?.[s.id] ?? 0);
+                    return (
+                      <td key={day}>
+                        <span className="diff-cell">
+                          <span className="diff-main">{newValue}</span>
+                          <span className="diff-delta">({diff > 0 ? `+${diff}` : diff})</span>
+                        </span>
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <details className="why-toggle-wrap">
+            <summary className="btn-link why-toggle">Why do day-to-day numbers look uneven?</summary>
+            <div className="why-explainer">
+              <p>
+                The model is trying to match staffing to demand each day, not aiming for a steady pattern across the
+                week. To smooth it out, you can test alternatives further down in "Test it yourself."
+              </p>
+            </div>
+          </details>
 
-          {combinedRealloc && (
+          <p>
+            Staffing still realizes <strong>{reallocatedRealizedWhppv.toFixed(2)} wHPPV</strong> at{' '}
+            <strong>{reallocatedWeeklyHours.toFixed(0)} hours/week</strong>, no change.
+          </p>
+
+          {reallocatedWhppvRange.min && reallocatedWhppvRange.max && (
             <p>
-              Reallocating your same hours to also cover boarding makes the arrivals picture worse, not better —
-              covering boarding this way costs you{' '}
-              <strong>
-                {Math.max(0, combinedRealloc.arrivalsShortfallHoursAfter - combinedRealloc.arrivalsShortfallHoursBefore).toFixed(0)} more hours
-              </strong>{' '}
-              short against arrivals alone. This is the honest price of a same-hours compromise, not a hidden cost.
+              Hour to hour, wHPPV now ranges from <strong>{reallocatedWhppvRange.min.value.toFixed(2)}</strong> (
+              {DAY_LABELS[reallocatedWhppvRange.min.day]} {fmtHour(reallocatedWhppvRange.min.hour)}) up to{' '}
+              <strong>{reallocatedWhppvRange.max.value.toFixed(2)}</strong> ({DAY_LABELS[reallocatedWhppvRange.max.day]}{' '}
+              {fmtHour(reallocatedWhppvRange.max.hour)}).{' '}
+              {currentWhppvRange.min && currentWhppvRange.max && (() => {
+                const reallocatedWidth = reallocatedWhppvRange.max!.value - reallocatedWhppvRange.min!.value;
+                const currentWidth = currentWhppvRange.max!.value - currentWhppvRange.min!.value;
+                if (currentWidth <= 0) return null;
+                const variancePct = ((reallocatedWidth - currentWidth) / currentWidth) * 100;
+                const direction = variancePct >= 0 ? 'more' : 'less';
+                return (
+                  <>
+                    <strong>{Math.abs(variancePct).toFixed(0)}% {direction}</strong> variance compared to current staffing.
+                  </>
+                );
+              })()}
             </p>
+          )}
+
+          {(rampGapBefore > 0 || rampGapAfter > 0) && (
+            <p>
+              On this reallocated schedule, demand peaks around <strong>{fmtHour(peakDemandHour)}</strong>
+              {rampGapAfter === 0 ? (
+                <>
+                  , and staffing peaks at <strong>{fmtHour(peakCapacityHourAfter)}</strong> — no longer any lag.
+                </>
+              ) : (
+                <>
+                  , but staffing doesn't peak until <strong>{fmtHour(peakCapacityHourAfter)}</strong> — roughly a{' '}
+                  {rampGapAfter}-hour lag.
+                </>
+              )}
+            </p>
+          )}
+
+          {splitMeaningfullyAfter ? (
+            <>
+              <p>{queuePatternSentence(weekdayPatternAfter, 'On weekdays under this reallocated schedule, ', result.floorWhppv)}</p>
+              <p>{queuePatternSentence(weekendPatternAfter, 'On weekends under this reallocated schedule, ', result.floorWhppv)}</p>
+            </>
+          ) : (
+            <p>{queuePatternSentence(patternAfter, 'On this reallocated schedule, ', result.floorWhppv)}</p>
           )}
         </div>
         <div className="panel-frame">
@@ -136,7 +327,7 @@ export function Panel2() {
             views={views}
             shiftMenu={sortedShiftMenu}
             activeKey={active}
-            onActiveKeyChange={(k) => setActive(k as 'current' | 'arrivals' | 'combined')}
+            onActiveKeyChange={(k) => setActive(k as 'arrivals' | 'combined')}
           />
         </div>
       </div>

@@ -4,79 +4,45 @@
 // is derived (not measured). Resolved with Ben 2026-07-24 (see .claude/rules/results-redesign.md
 // and the algorithm-spec's evidence-tagging convention — same rigor as the boarding convolution).
 //
-// DIAGNOSTIC. This specific function (computeBacklog) never feeds the solver — it reads a
-// grid that has already been solved/edited and reports how shortfall accumulates. It reuses
-// the exact demand/capacity values the shortfall math already uses (no new demand model):
-//   demand  = hourlyRequirement[h]           (the smoothed per-hour required headcount)
-//   capacity = on-duty headcount from the grid (fullWeekCapacity, same as the wHPPV heatmap)
-//
 // 2026-07-26 UPDATE: the Step 3 budget trim DOES now feed on this SAME recurrence (a
 // deliberate reversal — see .claude/rules/engine-solver.md's "Budget-capped trim" section) —
-// `engine/solver.ts`'s `trimWeekToBudget` minimizes marginal backlog-hours while choosing what
-// to cut — so "never imported by solver.ts" is no longer true of the MODEL, only of this
-// literal function.
+// `engine/solver.ts`'s `trimWeekToBudget` minimizes marginal severity while choosing what to
+// cut — so "never imported by solver.ts" is no longer true of the MODEL, only of this literal
+// function.
 //
-// 2026-07-26 PR A: capacity is now computed via `fullWeekCapacity` over the WHOLE grid
-// (global-week shift-hour attribution — see .claude/rules/engine-solver.md's "Shift
-// wraparound model" section), not per-day `coverageForDay` — a day's own early hours can now
-// be covered by the PREVIOUS day's shift (spillover), so per-day-independent capacity was no
-// longer correct. Same for the shift-attribution split below (`coveringCellsByGlobalHour`
-// replaces the old hour-of-day-only `coveringByHod`/`shiftHoursOfDay` lookup).
+// 2026-07-28 REVERSAL (NINTH shape, see .claude/rules/engine-solver.md) — the capacity-
+// elasticity model (`spare`/`stretch`/`bandCeilingHourly`-as-recurrence-input) is RETIRED,
+// replaced by a VISITS-BASED model (see `backlogModel.ts`'s header for the full formula and
+// rationale — the old model's `stretch = max(0, bandCeiling - capacity)` was backwards: it
+// assumed the WORSE an hour was staffed, the MORE backlog-clearing throughput was available).
+// `computeBacklog` now takes `arrivals168` (raw visit counts) + `floorWhppv` (a single flat
+// department-level p25-wHPPV scalar, `lookupWhppvBand(annualVisits).p25Whppv`) in place of
+// `bandCeilingHourly`. `hourlyRequirement168` STAYS as a parameter — it's still needed for
+// severity normalization and the caught-up threshold (both unrelated to which recurrence
+// generates the backlog curve).
 //
-// 2026-07-26 PR B (SOLVER_REALISM_SPEC_2026-07-26.md): the recurrence itself moved to a new
-// leaf module, `engine/backlogModel.ts`'s `backlogRecurrence` — see that file's header for the
-// full formula and the physics rationale for retiring the old single-decay model. This also
-// removes the circular-import problem that used to force a hand-duplicated copy of the
-// recurrence in `solver.ts` (`backlog.ts` imports `fullWeekCapacity`/`coveringCellsByGlobalHour`
-// FROM `solver.ts`; `solver.ts` now imports the recurrence from `backlogModel.ts` too, a leaf
-// module neither of them owns, so there's no cycle and no duplication). Do not reimplement the
-// recurrence here again — import it.
+// NO-COMPRESSION DEGENERATE CASE (a disclosed judgment call — see backlogModel.ts's header and
+// .claude/rules/engine-solver.md's ninth-shape section): callers whose demand curve isn't
+// literally ED-visit arrivals (Panel 1's Boarding/Combined toggles, pptxExport) pass
+// `floorWhppv = NO_COMPRESSION_FLOOR_WHPPV` (1) and the demand curve itself as `arrivals168` —
+// there's no honest "visits" concept for boarding coverage (a fixed nurse-ratio, not a
+// per-visit pace), so no compression is modeled for those curves.
 //
-// DECLINED (recorded so it's not re-litigated): a rework/degradation term — waiting patients
-// generating EXTRA nursing work the longer they wait (re-triage, reassessment, complications).
-// It is real but second-order and harder to defend with the evidence this tool already leans
-// on; explicitly out of scope for PR B. If revisited, it would add a fourth term to the
-// recurrence, not replace any of the three above.
+// FRAMING: backlog is un-started FRONT-LOADED ARRIVAL WORK — i.e. the waiting room. It clears
+// only by nurses compressing their own pace down to the peer-cohort floor (never past it) or
+// by genuinely idle capacity — never via a passive attrition/LWBS assumption.
 //
-// FRAMING: backlog is un-started FRONT-LOADED ARRIVAL WORK — i.e. the waiting room — which is
-// the direct antecedent of LWBS. This is why `abandonRate` is the one parameter of the three
-// that's plausibly measurable from a real ED's own LWBS-rate data, unlike the other two.
-//
-// 2026-07-26 PR E (RESULTS_COMPREHENSION_SPEC_2026-07-26.md §4) — REVERSAL of part of PR B,
-// the SEVENTH shape of the Step 3 trim's history (see .claude/rules/engine-solver.md's
-// "Budget-capped trim" section for the full six-shape history this is now a seventh entry in).
-//
-// THE FINDING this reverses: the model was never wrong about the physics — the REPORTING layer
-// was destroying the evidence. A real department's own current-staffing grid, run through this
-// exact recurrence, drains its queue overnight EVERY night, bottoming out at a genuinely low
-// (but non-zero, and day-varying) floor, then rebuilds through the day — exactly the cyclical
-// pattern the department reports living through. But the page reported a flat "neverClears:
-// true, 168 of 168 hours behind," because (1) one blended `backlog` curve conflated a real
-// STRUCTURAL floor (the amount you start each day already behind — a budget/sizing signal)
-// with the CYCLICAL swing around it (a shape signal, independent of total budget size), and
-// (2) `BACKLOG_CAUGHT_UP_THRESHOLD`'s flat 0.5 nurse-hour bar was calibrated against peaks an
-// order of magnitude smaller than this model's own physics (PR B) now produces — a queue 98%
-// drained from a peak of 44 still read as "still behind."
-//
-// TWO CHANGES, both below: (a) `computeBacklog` now reports STRUCTURAL (the per-day floor the
-// ACTUAL backlog curve never drops below — `structuralFloorByDay`/`structuralFloorMin`) and
-// CYCLICAL (the SAME recurrence run against capacity RESCALED so its weekly total matches the
-// requirement's own weekly total — `cyclicalBacklog`/`cyclicalLongestStreakHours`/etc. — see
-// `backlogModel.ts`'s `rescaleCapacityToRequirementTotal` header for why this isolates shape
-// from size) as SEPARATE fields — never blend them into one number again. (b) the "caught up"
-// bar is now `caughtUpThresholdForHour` (~10% of THAT HOUR's own requirement, floored at the
-// old absolute value) instead of a flat constant — see `backlogModel.ts`'s header for the
-// full before/after. `neverClears`/`longestStreakHours`/etc. (the ACTUAL/raw curve's own
-// diagnostics) now use this per-hour threshold too, not just the new cyclical fields.
-//
-// (e) `estimatedAbandonedHours` — the fraction of each hour's INHERITED backlog that
-// `abandonRate` already removes from the recurrence every hour was computed and discarded;
-// now summed and reported (see `BacklogResult.estimatedAbandonedHours` below). This is an
-// estimate of WORK abandoned (nurse-hours of queued care that left the system via attrition),
-// NOT a patient count and NEVER a dollar figure — do not convert it to either (spec §12).
+// 2026-07-26 PR E (RESULTS_COMPREHENSION_SPEC_2026-07-26.md §4) — structural vs. cyclical
+// split, UNCHANGED IN SHAPE by the 2026-07-28 reversal above (only the per-hour step formula
+// and what gets rescaled changed, not this split's existence): `computeBacklog` reports
+// STRUCTURAL (the per-day floor the ACTUAL backlog curve never drops below —
+// `structuralFloorByDay`/`structuralFloorMin`) and CYCLICAL (the SAME recurrence run against
+// capacity RESCALED so its weekly total matches the recurrence's OWN requirement-equivalent
+// curve's weekly total — `cyclicalBacklog`/`cyclicalLongestStreakHours`/etc.) as SEPARATE
+// fields — never blend them into one number again. The "caught up" bar is
+// `caughtUpThresholdForHour` (~10% of THAT HOUR's own requirement) instead of a flat constant.
 
 import type { Cell168, Grid, ShiftDef } from './types';
-import { DEFAULTS } from './types';
 import { fullWeekCapacity, coveringCellsByGlobalHour, totalSeverity, peakSeverityOf } from './solver';
 import {
   backlogRecurrence,
@@ -84,7 +50,6 @@ import {
   caughtUpThresholds168,
   rescaleCapacityToRequirementTotal,
   BACKLOG_CAUGHT_UP_THRESHOLD,
-  type BacklogRecurrenceParams,
 } from './backlogModel';
 
 // Re-exported for backward compatibility — the canonical definition now lives in
@@ -108,9 +73,8 @@ export interface BacklogResult {
    * curve — against real capacity, not rescaled. Never report this alone; see
    * `structuralFloorByDay`/`cyclicalBacklog` below (PR E). */
   backlog: Cell168;
-  /** 2026-07-26 (Phase 2b): per-hour inherited backlog flowing INTO this hour from the
-   * previous hour (`backlog[h-1] * (1 - abandonRate)` as of PR B — the passive-attrition
-   * carry, BEFORE this hour's own newWork/paydown is applied). Powers
+  /** 2026-07-26 (Phase 2b): per-hour backlog flowing INTO this hour from the previous hour
+   * (`backlog[h-1]`, BEFORE this hour's own deficit/paydown is applied). Powers
    * `engine/backlogFeedback.ts`'s relaxation loop (raise a protected floor by the inherited
    * amount, not the total backlog, which would also count this hour's own freshly-generated
    * shortfall). */
@@ -144,62 +108,65 @@ export interface BacklogResult {
    * ACTUAL backlog never drops below anywhere, at any hour. */
   structuralFloorMin: number;
   /** The SAME recurrence, run against capacity RESCALED so its weekly total matches the
-   * requirement curve's own weekly total (`rescaleCapacityToRequirementTotal`,
-   * `backlogModel.ts`) — isolates SHAPE from SIZE. A department that's genuinely under-budget
-   * in aggregate will show real ACTUAL backlog but a much smaller CYCLICAL curve (most of its
-   * problem is size, not shape); a department that's adequately staffed in aggregate but
-   * badly allocated will show the opposite. This is what drives the heatmap overlay, the
-   * lean-stretch headline, and the Step 3 trim's own objective (see engine-solver.md) — the
-   * trim can only ever fix shape (it operates under a FIXED budget), so its cost signal must
-   * be blind to size or it spends effort on a problem it structurally cannot solve. */
+   * recurrence's own requirement-equivalent curve's weekly total — isolates SHAPE from SIZE.
+   * A department that's genuinely under-target in aggregate will show real ACTUAL backlog but
+   * a much smaller CYCLICAL curve (most of its problem is size, not shape); a department
+   * that's adequately staffed in aggregate but badly allocated will show the opposite. This is
+   * what drives the heatmap overlay, the lean-stretch headline, and the Step 3 trim's own
+   * objective (see engine-solver.md) — the trim can only ever fix shape (it operates under a
+   * FIXED budget), so its cost signal must be blind to size or it spends effort on a problem
+   * it structurally cannot solve. */
   cyclicalBacklog: Cell168;
   cyclicalLongestStreakHours: number;
   cyclicalLongestStreakStart: { day: number; hour: number } | null;
   cyclicalNeverClears: boolean;
   cyclicalPeakBacklog: number;
   cyclicalPeakAt: { day: number; hour: number } | null;
-
-  // --- PR E change (e) ---
-  /** Sum over the week of `abandonRate * backlog[hour-1]` — the nurse-hours of queued work
-   * the recurrence's own passive-attrition term already removes every hour, previously
-   * computed internally and discarded. An ESTIMATE of WORK abandoned (queued nurse-hours that
-   * left the system via attrition), NOT a patient count — never convert to a dollar figure
-   * (spec §12). Computed against the ACTUAL/raw curve (real attrition happens to real backlog,
-   * not the shape-only cyclical view). */
-  estimatedAbandonedHours: number;
 }
-
-const DEFAULT_BACKLOG_PARAMS: BacklogRecurrenceParams = {
-  abandonRate: DEFAULTS.backlogAbandonRate,
-  recoveryEfficiency: DEFAULTS.backlogRecoveryEfficiency,
-  maxDrainFraction: DEFAULTS.backlogMaxDrainFraction,
-};
 
 /**
  * Compute the backlog diagnostic for ANY grid (idealized or current) against the requirement
  * curve. Pure function, no solver interaction.
+ *
+ * @param arrivals168 raw visit counts (the recurrence's own "new demand" input, in VISITS) —
+ *   pass `NO_COMPRESSION_FLOOR_WHPPV`/the demand-hours curve itself (see backlogModel.ts's
+ *   header) for a boarding/combined curve that has no real visits concept.
+ * @param hourlyRequirement168 the target-pace nurse-hours curve — used ONLY for severity
+ *   normalization and the caught-up threshold, unrelated to which recurrence produced the
+ *   backlog curve itself. For a no-compression call, this is typically the SAME array as
+ *   `arrivals168`.
+ * @param floorWhppv the single flat department-level p25 wHPPV (or `NO_COMPRESSION_FLOOR_WHPPV`
+ *   = 1 for a curve with no real visits concept).
  */
 export function computeBacklog(
   grid: Grid,
-  hourlyRequirement: Cell168,
+  arrivals168: Cell168,
+  hourlyRequirement168: Cell168,
   shifts: ShiftDef[],
-  params: BacklogRecurrenceParams = DEFAULT_BACKLOG_PARAMS
+  floorWhppv: number
 ): BacklogResult {
   // Capacity (on-duty headcount) per global hour from the grid — PR A: a day's own early
   // hours can be covered by the PREVIOUS day's shift (spillover), so this must always be
   // computed from the whole grid, not per-day.
   const capacity = fullWeekCapacity(grid, shifts);
-  const deficit = hourlyRequirement.map((req, g) => (req ?? 0) - capacity[g]);
 
-  // The recurrence itself lives in engine/backlogModel.ts (PR B) — circular over the full
-  // 168-hour week with NO boundary reset, two-pass settle so the Sat->Sun carry into
+  // The recurrence's own requirement-equivalent — the floor-pace-implied hours curve
+  // (arrivals*floorWhppv). Used for (a) the per-shift generated/inherited attribution below,
+  // and (b) rescaling capacity for the CYCLICAL pass — NOT `hourlyRequirement168` (see
+  // backlogModel.ts's `rescaleCapacityToRequirementTotal` header for why the two curves
+  // shouldn't be conflated).
+  const requirementEquivalent = arrivals168.map((a) => (a ?? 0) * floorWhppv);
+  const deficit = requirementEquivalent.map((req, g) => req - capacity[g]);
+
+  // The recurrence itself lives in engine/backlogModel.ts (ninth shape) — circular over the
+  // full 168-hour week with NO boundary reset, multi-pass settle so the Sat->Sun carry into
   // backlog[0] is a real value rather than a zero seed. See that file's header for the
-  // formula and physics rationale.
-  const { backlog, carriedIn } = backlogRecurrence(capacity, hourlyRequirement, params);
+  // formula.
+  const { backlog, carriedIn } = backlogRecurrence(capacity, arrivals168, floorWhppv);
 
-  // PR E (b) — the "caught up" bar is now relative to each hour's own requirement, not a flat
+  // PR E (b) — the "caught up" bar is relative to each hour's own requirement, not a flat
   // nurse-hours constant. See backlogModel.ts's header for the before/after.
-  const thresholds = caughtUpThresholds168(hourlyRequirement);
+  const thresholds = caughtUpThresholds168(hourlyRequirement168);
   const behind = backlog.map((b, g) => b >= thresholds[g]);
   // Longest circular run of "behind" hours — shared implementation (backlogModel.ts) so this
   // and solver.ts's trim-trajectory recorder (PR D) never drift on what counts as a "streak."
@@ -211,7 +178,9 @@ export function computeBacklog(
   // PR E (a) — structural (per-day floor of the ACTUAL curve) + cyclical (same recurrence
   // against size-rescaled capacity — shape only). See BacklogResult's header for the full
   // rationale; this is the split that stops a real cyclical-clearing department from reading
-  // as "neverClears."
+  // as "neverClears." Capacity is rescaled against `requirementEquivalent` (the recurrence's
+  // OWN implied-hours curve), not `hourlyRequirement168` — see backlogModel.ts's
+  // `rescaleCapacityToRequirementTotal` header.
   const structuralFloorByDay: number[] = [];
   for (let day = 0; day < 7; day++) {
     let dayMin = Infinity;
@@ -220,9 +189,9 @@ export function computeBacklog(
   }
   const structuralFloorMin = Math.min(...structuralFloorByDay);
 
-  const { rescaled: cyclicalCapacity } = rescaleCapacityToRequirementTotal(capacity, hourlyRequirement);
-  const { backlog: cyclicalBacklog } = backlogRecurrence(cyclicalCapacity, hourlyRequirement, params);
-  const cyclicalThresholds = caughtUpThresholds168(hourlyRequirement);
+  const { rescaled: cyclicalCapacity } = rescaleCapacityToRequirementTotal(capacity, requirementEquivalent);
+  const { backlog: cyclicalBacklog } = backlogRecurrence(cyclicalCapacity, arrivals168, floorWhppv);
+  const cyclicalThresholds = caughtUpThresholds168(hourlyRequirement168);
   const cyclicalStreak = longestStreakAboveThreshold(cyclicalBacklog, cyclicalThresholds);
   let cyclicalPeakBacklog = 0;
   let cyclicalPeakAt: { day: number; hour: number } | null = null;
@@ -231,15 +200,6 @@ export function computeBacklog(
       cyclicalPeakBacklog = cyclicalBacklog[g];
       cyclicalPeakAt = { day: Math.floor(g / 24), hour: g % 24 };
     }
-  }
-
-  // PR E (e) — nurse-hours of queued work the recurrence's own passive-attrition term already
-  // removes every hour (abandonRate * the PRIOR hour's actual backlog), summed across the
-  // week. An estimate of work abandoned, never a patient count or a dollar figure.
-  let estimatedAbandonedHours = 0;
-  for (let g = 0; g < 168; g++) {
-    const priorBacklog = backlog[(g - 1 + 168) % 168];
-    estimatedAbandonedHours += params.abandonRate * priorBacklog;
   }
 
   // "Overnight reset": the hour-of-day most reliably caught up across the 7 days.
@@ -271,11 +231,12 @@ export function computeBacklog(
 
   // Per-shift inherited-vs-generated attribution. Each hour's backlog decomposes into a
   // carried-in portion (min(carriedIn, backlog) — what survived from prior hours after any
-  // paydown) and a freshly-generated portion (max(0, deficit) — this hour's own shortfall).
-  // Attribute each hour to its covering (day, shift) CELL(s), split evenly at hand-off hours
-  // — PR A: this must use the actual covering cell, which can be the PREVIOUS day's shift
-  // for spillover hours, not a simple hour-of-day lookup. Aggregated by shiftId only (this
-  // diagnostic doesn't distinguish which day a shift's coverage came from).
+  // paydown) and a freshly-generated portion (max(0, deficit) — this hour's own shortfall,
+  // against the recurrence's OWN requirement-equivalent curve). Attribute each hour to its
+  // covering (day, shift) CELL(s), split evenly at hand-off hours — PR A: this must use the
+  // actual covering cell, which can be the PREVIOUS day's shift for spillover hours, not a
+  // simple hour-of-day lookup. Aggregated by shiftId only (this diagnostic doesn't
+  // distinguish which day a shift's coverage came from).
   const coveringCells = coveringCellsByGlobalHour(shifts);
 
   const inherited: Record<string, number> = {};
@@ -321,7 +282,6 @@ export function computeBacklog(
     cyclicalNeverClears: cyclicalStreak.neverClears,
     cyclicalPeakBacklog,
     cyclicalPeakAt,
-    estimatedAbandonedHours,
   };
 }
 
@@ -350,11 +310,12 @@ export interface BacklogSeveritySummary {
  */
 export function summarizeBacklogSeverity(
   grid: Grid,
+  arrivals168: Cell168,
   hourlyRequirement: Cell168,
   shifts: ShiftDef[],
-  params?: BacklogRecurrenceParams
+  floorWhppv: number
 ): BacklogSeveritySummary {
-  const { backlog, cyclicalBacklog } = computeBacklog(grid, hourlyRequirement, shifts, params);
+  const { backlog, cyclicalBacklog } = computeBacklog(grid, arrivals168, hourlyRequirement, shifts, floorWhppv);
   return {
     totalBacklogHours: backlog.reduce((a, b) => a + b, 0),
     totalSeverity: totalSeverity(cyclicalBacklog, hourlyRequirement),

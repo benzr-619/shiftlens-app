@@ -1,8 +1,12 @@
+import { useState } from 'react';
 import { useStore } from '../../store';
-import type { ShiftDef } from '../../engine/types';
+import { DEFAULTS, DAY_LABELS, type ShiftDef } from '../../engine/types';
 import { fullWeekCapacity } from '../../engine/solver';
 import { VisualFrame, type VisualFrameView } from '../../components/VisualFrame';
 import type { WhppvHeatmapCell } from '../../components/WhppvHeatmap';
+import { DISPLAY_DAY_ORDER, DISPLAY_DAY_LABELS } from '../../lib/dayOrder';
+import { fmtHour } from '../../lib/queuePattern';
+import { lookupWhppvBand } from '../../lib/edbaLookup';
 
 function sortByStartHour(shifts: ShiftDef[]): ShiftDef[] {
   return [...shifts].sort((a, b) => a.startHour - b.startHour);
@@ -57,48 +61,67 @@ function TwoBarComparison({
   const x2 = width / 2 + 16;
 
   return (
-    <svg viewBox={`0 0 ${width} ${height}`} className="two-bar-chart" role="img" aria-label="Total demand versus hours staffed today">
-      <line x1={pad - 8} y1={height - pad} x2={width - pad + 8} y2={height - pad} stroke="var(--border)" strokeWidth={1} />
-      {/* Demand bar — boarding stacked on top of arrivals when present. */}
-      <rect x={x1} y={height - pad - arrivalsH} width={barWidth} height={arrivalsH} fill="var(--error)" opacity={0.75} />
+    <>
+      <svg viewBox={`0 0 ${width} ${height}`} className="two-bar-chart" role="img" aria-label="Total demand versus hours staffed today">
+        <line x1={pad - 8} y1={height - pad} x2={width - pad + 8} y2={height - pad} stroke="var(--border)" strokeWidth={1} />
+        {/* Demand bar — boarding stacked on top of arrivals when present. */}
+        <rect x={x1} y={height - pad - arrivalsH} width={barWidth} height={arrivalsH} fill="var(--error)" opacity={0.75} />
+        {boardingHours !== null && (
+          <rect x={x1} y={height - pad - arrivalsH - boardingH} width={barWidth} height={boardingH} fill="var(--warning)" opacity={0.75} />
+        )}
+        <text x={x1 + barWidth / 2} y={height - pad + 16} fontSize={11} fill="var(--text-muted)" textAnchor="middle">
+          total demand
+        </text>
+        <text x={x1 + barWidth / 2} y={height - pad - arrivalsH - boardingH - 6} fontSize={11} fill="var(--text)" textAnchor="middle">
+          {totalDemand.toFixed(0)}
+        </text>
+        {/* Staffed-today bar. */}
+        <rect x={x2} y={height - pad - staffedH} width={barWidth} height={staffedH} fill="var(--accent)" opacity={0.75} />
+        <text x={x2 + barWidth / 2} y={height - pad + 16} fontSize={11} fill="var(--text-muted)" textAnchor="middle">
+          staffed today
+        </text>
+        <text x={x2 + barWidth / 2} y={height - pad - staffedH - 6} fontSize={11} fill="var(--text)" textAnchor="middle">
+          {staffedHours.toFixed(0)}
+        </text>
+      </svg>
       {boardingHours !== null && (
-        <rect x={x1} y={height - pad - arrivalsH - boardingH} width={barWidth} height={boardingH} fill="var(--warning)" opacity={0.75} />
+        <div className="frame-chart-legend">
+          <span className="frame-legend-item">
+            <span className="frame-legend-swatch frame-legend-swatch-demand" /> Arrivals demand
+          </span>
+          <span className="frame-legend-item">
+            <span className="frame-legend-swatch frame-legend-swatch-boarding" /> Boarding demand
+          </span>
+        </div>
       )}
-      <text x={x1 + barWidth / 2} y={height - pad + 16} fontSize={11} fill="var(--text-muted)" textAnchor="middle">
-        total demand
-      </text>
-      <text x={x1 + barWidth / 2} y={height - pad - arrivalsH - boardingH - 6} fontSize={11} fill="var(--text)" textAnchor="middle">
-        {totalDemand.toFixed(0)}
-      </text>
-      {/* Staffed-today bar. */}
-      <rect x={x2} y={height - pad - staffedH} width={barWidth} height={staffedH} fill="var(--accent)" opacity={0.75} />
-      <text x={x2 + barWidth / 2} y={height - pad + 16} fontSize={11} fill="var(--text-muted)" textAnchor="middle">
-        staffed today
-      </text>
-      <text x={x2 + barWidth / 2} y={height - pad - staffedH - 6} fontSize={11} fill="var(--text)" textAnchor="middle">
-        {staffedHours.toFixed(0)}
-      </text>
-    </svg>
+    </>
   );
 }
 
 /**
  * PANEL 3 (RESULTS_PAGE_V2_SPEC_2026-07-27.md §4) — "What would it take to fully cover the
- * department?" New. The honest ceiling: `EngineResult.fullCoverageCombined` (PR B) — total
- * nurses so arrivals AND boarding demand are both fully met, zero shortfall anywhere.
- * Resource-agnostic (§3.5 — no hold/ED decomposition here, one number, one grid). The queue
- * strip is deliberately BLANK (`queueDepth168: null`) — after Panels 1/2's queue-building
- * frames, an empty strip is itself the finding, free of charge.
+ * department?" The honest ceiling. Two toggles (2026-07-30, Ben's ask, matching Panels 1/2):
+ * "Arrivals" — `EngineResult.fullCoverage` — total nurses so arrivals demand alone is fully
+ * met, zero shortfall anywhere, ignoring boarding entirely; "Arrivals + Boarding" (the
+ * original, still the default) — `EngineResult.fullCoverageCombined` (PR B) — total nurses so
+ * BOTH arrivals and boarding demand are fully met. Both reuse `solveFullCoverageWeek` verbatim
+ * — no second solver, resource-agnostic (§3.5 — no hold/ED decomposition here, one number, one
+ * grid, per toggle). The queue strip is deliberately BLANK (`queueDepth168: null`) on both
+ * toggles — after Panels 1/2's queue-building frames, an empty strip is itself the finding,
+ * free of charge.
  */
 export function Panel3() {
-  const { shiftMenu, arrivals, currentStaffingGrid, getResult } = useStore();
+  const { shiftMenu, arrivals, currentStaffingGrid, buildEngineInputs, getResult } = useStore();
   const result = getResult();
+  const inputs = buildEngineInputs();
+  const hoursPerFteAnnual = inputs.hoursPerFteAnnual ?? DEFAULTS.hoursPerFteAnnual;
   const sortedShiftMenu = sortByStartHour(shiftMenu);
   const grid = currentStaffingGrid ?? {};
 
+  const [active, setActive] = useState<'arrivals' | 'combined'>('arrivals');
+
   const boardingCurve = result.boarding?.cellBoardingRnHours ?? null;
   const combinedRequirement = result.hourlyRequirement.map((v, i) => v + (boardingCurve ? boardingCurve[i] : 0));
-  const fullCoverageCapacity = fullWeekCapacity(result.fullCoverageCombined.grid, sortedShiftMenu);
 
   const staffedHours = sortedShiftMenu.reduce(
     (acc, s) => acc + Object.keys(grid).reduce((a, d) => a + (grid[Number(d)]?.[s.id] ?? 0) * s.lengthHours, 0),
@@ -109,21 +132,76 @@ export function Panel3() {
 
   const combinedBandFloor = result.bandFloorHourly.map((v, i) => v + (boardingCurve ? boardingCurve[i] : 0));
   const combinedBandCeiling = result.bandCeilingHourly.map((v, i) => v + (boardingCurve ? boardingCurve[i] : 0));
-  const cells = buildCells(fullCoverageCapacity, combinedRequirement, combinedBandFloor, combinedBandCeiling, arrivals);
 
-  const views: VisualFrameView[] = [
-    {
-      key: 'full-coverage',
-      label: 'Full coverage',
-      demand168: combinedRequirement,
-      capacity168: fullCoverageCapacity,
+  // Per-toggle state — same shape both toggles share, only the demand curve/grid/band vary.
+  const stateFor = (key: 'arrivals' | 'combined') =>
+    key === 'arrivals'
+      ? {
+          demand: result.hourlyRequirement,
+          fullGrid: result.fullCoverage.grid,
+          weeklyHours: result.fullCoverage.weeklyHours,
+          bandFloor: result.bandFloorHourly,
+          bandCeiling: result.bandCeilingHourly,
+        }
+      : {
+          demand: combinedRequirement,
+          fullGrid: result.fullCoverageCombined.grid,
+          weeklyHours: result.fullCoverageCombined.weeklyHours,
+          bandFloor: combinedBandFloor,
+          bandCeiling: combinedBandCeiling,
+        };
+
+  const activeState = stateFor(active);
+  const fteDelta = ((activeState.weeklyHours - staffedHours) * 52) / hoursPerFteAnnual;
+
+  // Average + hour-to-hour realized wHPPV for the active ceiling grid, same computation
+  // Panel1/Panel2 use (realizedWHppv = weeklyHours*52/annualVisits; min/max is a direct
+  // per-cell capacity/arrivals ratio, zero-arrival cells skipped).
+  const activeCapacity = fullWeekCapacity(activeState.fullGrid, sortedShiftMenu);
+  const avgWhppv = (activeState.weeklyHours * 52) / result.annualVisits;
+  const peerBand = lookupWhppvBand(result.annualVisits);
+  const showTooLargeNote = avgWhppv > peerBand.p75Whppv;
+  let minHourlyWhppv: { value: number; day: number; hour: number } | null = null;
+  let maxHourlyWhppv: { value: number; day: number; hour: number } | null = null;
+  for (let g = 0; g < 168; g++) {
+    const cellArrivals = arrivals[g] ?? 0;
+    if (cellArrivals <= 0) continue;
+    const value = (activeCapacity[g] ?? 0) / cellArrivals;
+    const day = Math.floor(g / 24);
+    const hour = g % 24;
+    if (!minHourlyWhppv || value < minHourlyWhppv.value) minHourlyWhppv = { value, day, hour };
+    if (!maxHourlyWhppv || value > maxHourlyWhppv.value) maxHourlyWhppv = { value, day, hour };
+  }
+
+  const views: VisualFrameView[] = (['arrivals', 'combined'] as const).map((key) => {
+    const s = stateFor(key);
+    const capacity = fullWeekCapacity(s.fullGrid, sortedShiftMenu);
+    return {
+      key,
+      label: key === 'arrivals' ? 'Arrivals' : 'Arrivals + Boarding',
+      demand168: s.demand,
+      capacity168: capacity,
       queueDepth168: null,
       structuralFloor: null,
-      heatmapCells: cells,
-    },
-  ];
+      heatmapCells: buildCells(capacity, s.demand, s.bandFloor, s.bandCeiling, arrivals),
+    } satisfies VisualFrameView;
+  });
 
-  const fteDelta = ((result.fullCoverageCombined.weeklyHours - staffedHours) * 52) / 2080;
+  const headline =
+    active === 'arrivals' ? (
+      <>
+        Fully covering arrivals alone, with no shortfall anywhere, would take{' '}
+        <strong>{result.fullCoverage.weeklyHours.toFixed(0)} hours/week</strong> —{' '}
+        <strong>{Math.max(0, fteDelta).toFixed(1)} FTE</strong> above what you staff today. This ignores boarding
+        entirely — it's the ceiling for arrivals demand only.
+      </>
+    ) : (
+      <>
+        Fully covering both arrivals and boarding, with no shortfall anywhere, would take{' '}
+        <strong>{result.fullCoverageCombined.weeklyHours.toFixed(0)} hours/week</strong> —{' '}
+        <strong>{Math.max(0, fteDelta).toFixed(1)} FTE</strong> above what you staff today.
+      </>
+    );
 
   return (
     <section className="panel panel-3" id="ch-full-coverage">
@@ -131,24 +209,83 @@ export function Panel3() {
         <div className="panel-words">
           <h2>What would it take to fully cover the department?</h2>
 
-          <p className="comparison-headline">
-            Fully covering both arrivals and boarding, with no shortfall anywhere, would take{' '}
-            <strong>{result.fullCoverageCombined.weeklyHours.toFixed(0)} hours/week</strong> —{' '}
-            <strong>{Math.max(0, fteDelta).toFixed(1)} FTE</strong> above what you staff today.
-          </p>
+          <p className="comparison-headline">{headline}</p>
+
+          <table className="staffing-grid diff-grid">
+            <thead>
+              <tr>
+                <th className="hour-col">Shift</th>
+                {DISPLAY_DAY_LABELS.map((d) => (
+                  <th key={d}>{d}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {sortedShiftMenu.map((s) => (
+                <tr key={s.id}>
+                  <td className="hour-col">{s.label || s.id}</td>
+                  {DISPLAY_DAY_ORDER.map((day) => {
+                    const newValue = activeState.fullGrid[day]?.[s.id] ?? 0;
+                    const diff = newValue - (grid[day]?.[s.id] ?? 0);
+                    return (
+                      <td key={day}>
+                        <span className="diff-cell">
+                          <span className="diff-main">{newValue}</span>
+                          <span className="diff-delta">({diff > 0 ? `+${diff}` : diff})</span>
+                        </span>
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <details className="why-toggle-wrap">
+            <summary className="btn-link why-toggle">Why do day-to-day numbers look uneven?</summary>
+            <div className="why-explainer">
+              <p>
+                The model is trying to match staffing to demand each day, not aiming for a steady pattern across the
+                week. To smooth it out, you can test alternatives further down in "Test it yourself."
+              </p>
+            </div>
+          </details>
 
           <p>
-            This number is large, and it is meant to be: it is the ceiling, not the ask. The next panel is what is
-            actually worth asking for, and why — without that handoff this number reads as unsellable and easy to
-            bounce off of.
+            This staffing comes out to <strong>{avgWhppv.toFixed(2)} wHPPV</strong> on average.
+            {minHourlyWhppv && maxHourlyWhppv && (
+              <>
+                {' '}
+                Hour to hour, wHPPV ranges from <strong>{minHourlyWhppv.value.toFixed(2)}</strong> (
+                {DAY_LABELS[minHourlyWhppv.day]} {fmtHour(minHourlyWhppv.hour)}) up to{' '}
+                <strong>{maxHourlyWhppv.value.toFixed(2)}</strong> ({DAY_LABELS[maxHourlyWhppv.day]}{' '}
+                {fmtHour(maxHourlyWhppv.hour)}).
+              </>
+            )}
           </p>
 
+          {showTooLargeNote && (
+            <p>
+              This number is <strong>{(avgWhppv - peerBand.medianWhppv).toFixed(2)} wHPPV</strong> larger than
+              typical average staffing since it does not allow a single hour to fall below ideal staffing. The next
+              panel is more rational, accepting the trade-offs of real world budgets.
+            </p>
+          )}
+
           <div className="two-bar-wrap">
-            <TwoBarComparison arrivalsHours={arrivalsAnnualHours / 52} boardingHours={boardingAnnualHours !== null ? boardingAnnualHours / 52 : null} staffedHours={staffedHours} />
+            <TwoBarComparison
+              arrivalsHours={arrivalsAnnualHours / 52}
+              boardingHours={active === 'combined' && boardingAnnualHours !== null ? boardingAnnualHours / 52 : null}
+              staffedHours={staffedHours}
+            />
           </div>
         </div>
         <div className="panel-frame">
-          <VisualFrame views={views} shiftMenu={sortedShiftMenu} />
+          <VisualFrame
+            views={views}
+            shiftMenu={sortedShiftMenu}
+            activeKey={active}
+            onActiveKeyChange={(k) => setActive(k as 'arrivals' | 'combined')}
+          />
         </div>
       </div>
     </section>

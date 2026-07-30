@@ -1,18 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { computeSandbox } from '../sandbox';
-import { DEFAULTS } from '../types';
-import type { BacklogRecurrenceParams } from '../backlogModel';
+
 
 const N = 168;
 function flat(v: number): number[] {
   return new Array(N).fill(v);
 }
 
-const PARAMS: BacklogRecurrenceParams = {
-  abandonRate: DEFAULTS.backlogAbandonRate,
-  recoveryEfficiency: DEFAULTS.backlogRecoveryEfficiency,
-  maxDrainFraction: DEFAULTS.backlogMaxDrainFraction,
-};
+// 2026-07-28 (ninth shape): computeSandbox no longer takes a peer-ceiling parameter — the
+// queue-depth strip always uses the recurrence's NO-COMPRESSION degenerate case (see
+// engine/sandbox.ts's header). These tests are about the sandbox's demand/surplus arithmetic,
+// not the queue-depth paydown mechanics themselves (see backlog.test.ts/backlogModel.test.ts
+// for those).
 
 describe('PR C — sandbox model (§5.4)', () => {
   it('hold nurses never reduce arrivals/BH shortfall — with zero medical boarding, hold has zero effect', () => {
@@ -22,8 +21,8 @@ describe('PR C — sandbox model (§5.4)', () => {
     const arrivals = flat(5);
     const edNurses = flat(8); // short against residual demand (10+2=12)
 
-    const noHold = computeSandbox(arrivalsRequirement, medBoarding, bhBoarding, arrivals, edNurses, flat(0), PARAMS);
-    const withHold = computeSandbox(arrivalsRequirement, medBoarding, bhBoarding, arrivals, edNurses, flat(50), PARAMS);
+    const noHold = computeSandbox(arrivalsRequirement, medBoarding, bhBoarding, arrivals, edNurses, flat(0));
+    const withHold = computeSandbox(arrivalsRequirement, medBoarding, bhBoarding, arrivals, edNurses, flat(50));
 
     expect(withHold.residualDemand).toEqual(noHold.residualDemand);
     expect(withHold.unmet).toEqual(noHold.unmet);
@@ -40,9 +39,9 @@ describe('PR C — sandbox model (§5.4)', () => {
     const arrivals = flat(5);
     const edNurses = flat(10);
 
-    const under = computeSandbox(arrivalsRequirement, medBoarding, bhBoarding, arrivals, edNurses, flat(2), PARAMS);
-    const exact = computeSandbox(arrivalsRequirement, medBoarding, bhBoarding, arrivals, edNurses, flat(3), PARAMS);
-    const over = computeSandbox(arrivalsRequirement, medBoarding, bhBoarding, arrivals, edNurses, flat(10), PARAMS);
+    const under = computeSandbox(arrivalsRequirement, medBoarding, bhBoarding, arrivals, edNurses, flat(2));
+    const exact = computeSandbox(arrivalsRequirement, medBoarding, bhBoarding, arrivals, edNurses, flat(3));
+    const over = computeSandbox(arrivalsRequirement, medBoarding, bhBoarding, arrivals, edNurses, flat(10));
 
     expect(under.holdApplied).toEqual(flat(2));
     expect(under.holdSurplus).toEqual(flat(0));
@@ -67,7 +66,7 @@ describe('PR C — sandbox model (§5.4)', () => {
     // residualDemand = 10 + 0 + 2 = 12 exactly; staff exactly that.
     const edNurses = flat(12);
 
-    const result = computeSandbox(arrivalsRequirement, medBoarding, bhBoarding, arrivals, edNurses, hold, PARAMS);
+    const result = computeSandbox(arrivalsRequirement, medBoarding, bhBoarding, arrivals, edNurses, hold);
     expect(result.unmet.every((v) => v === 0)).toBe(true);
     for (const v of result.queueDepth) expect(v).toBeCloseTo(0, 6);
   });
@@ -79,7 +78,7 @@ describe('PR C — sandbox model (§5.4)', () => {
     const arrivals = flat(2);
     const edNurses = flat(3); // far short once 20 unabsorbed hours of medical boarding are netted in
 
-    const result = computeSandbox(arrivalsRequirement, medBoarding, bhBoarding, arrivals, edNurses, flat(0), PARAMS);
+    const result = computeSandbox(arrivalsRequirement, medBoarding, bhBoarding, arrivals, edNurses, flat(0));
     // (3 - 20 - 0) / 2 = -8.5
     expect(result.effectiveWhppv[0]).toBeCloseTo(-8.5, 6);
   });
@@ -90,7 +89,7 @@ describe('PR C — sandbox model (§5.4)', () => {
     const medBoarding = flat(0);
     const arrivals = flat(0);
     const edNurses = flat(5);
-    const result = computeSandbox(arrivalsRequirement, medBoarding, bhBoarding, arrivals, edNurses, flat(0), PARAMS);
+    const result = computeSandbox(arrivalsRequirement, medBoarding, bhBoarding, arrivals, edNurses, flat(0));
     expect(result.effectiveWhppv[0]).toBe(0);
   });
 });

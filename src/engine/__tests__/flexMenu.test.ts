@@ -33,13 +33,19 @@ function noVolatility(): number[] {
   return new Array(168).fill(0);
 }
 
+// 2026-07-28 (ninth shape): searchFlexibleMenus now takes arrivals168/floorWhppv instead of
+// a bandCeilingHourly array. These candidate-search tests aren't about the backlog
+// compression mechanic itself (just that the search enumerates/ranks candidates correctly),
+// so they use the NO-COMPRESSION degenerate case (threeBlockRequirement() itself as the
+// "arrivals" input, floorWhppv=1) — see backlogModel.ts's header.
+
 const AXES = (o: Partial<FlexAxes>): FlexAxes => ({ startTimes: false, shiftCount: false, shiftLengths: false, ...o });
 
 const budget = 3000;
 
 describe('§2.3 shift-menu flexibility search (bounded, opt-in, advisory)', () => {
   it('holds every axis at the current structure when nothing is enabled (one regularized candidate)', () => {
-    const cands = searchFlexibleMenus(threeBlockRequirement(), threeBlockBandFloor(), noVolatility(), currentMenu, AXES({}), budget, 0.1, 2);
+    const cands = searchFlexibleMenus(threeBlockRequirement(), threeBlockBandFloor(), noVolatility(), threeBlockRequirement(), 1, currentMenu, AXES({}), budget, 0.1, 2);
     expect(cands).toHaveLength(1);
     // current: 2 shifts, dominant length 12
     expect(cands[0].menu).toHaveLength(2);
@@ -47,7 +53,7 @@ describe('§2.3 shift-menu flexibility search (bounded, opt-in, advisory)', () =
   });
 
   it('shiftCount axis explores 2/3/4-shift menus', () => {
-    const cands = searchFlexibleMenus(threeBlockRequirement(), threeBlockBandFloor(), noVolatility(), currentMenu, AXES({ shiftCount: true }), budget, 0.1, 2);
+    const cands = searchFlexibleMenus(threeBlockRequirement(), threeBlockBandFloor(), noVolatility(), threeBlockRequirement(), 1, currentMenu, AXES({ shiftCount: true }), budget, 0.1, 2);
     const counts = new Set(cands.map((c) => c.menu.length));
     expect(counts.has(2)).toBe(true);
     expect(counts.has(3)).toBe(true);
@@ -55,7 +61,7 @@ describe('§2.3 shift-menu flexibility search (bounded, opt-in, advisory)', () =
   });
 
   it('shiftLengths axis explores 8/10/12-hour shifts', () => {
-    const cands = searchFlexibleMenus(threeBlockRequirement(), threeBlockBandFloor(), noVolatility(), currentMenu, AXES({ shiftLengths: true }), budget, 0.1, 2);
+    const cands = searchFlexibleMenus(threeBlockRequirement(), threeBlockBandFloor(), noVolatility(), threeBlockRequirement(), 1, currentMenu, AXES({ shiftLengths: true }), budget, 0.1, 2);
     const lengths = new Set(cands.flatMap((c) => c.menu.map((s) => s.lengthHours)));
     expect(lengths.has(8)).toBe(true);
     expect(lengths.has(10)).toBe(true);
@@ -67,6 +73,7 @@ describe('§2.3 shift-menu flexibility search (bounded, opt-in, advisory)', () =
       threeBlockRequirement(),
       threeBlockBandFloor(),
       noVolatility(),
+      threeBlockRequirement(), 1,
       currentMenu,
       AXES({ shiftCount: true, shiftLengths: true }),
       budget,
@@ -83,6 +90,7 @@ describe('§2.3 shift-menu flexibility search (bounded, opt-in, advisory)', () =
       threeBlockRequirement(),
       threeBlockBandFloor(),
       noVolatility(),
+      threeBlockRequirement(), 1,
       currentMenu,
       AXES({ startTimes: true, shiftCount: true, shiftLengths: true }),
       budget,
@@ -100,6 +108,7 @@ describe('§2.3 shift-menu flexibility search (bounded, opt-in, advisory)', () =
       threeBlockRequirement(),
       threeBlockBandFloor(),
       noVolatility(),
+      threeBlockRequirement(), 1,
       currentMenu,
       AXES({ startTimes: true, shiftCount: true, shiftLengths: true }),
       budget,
@@ -112,7 +121,7 @@ describe('§2.3 shift-menu flexibility search (bounded, opt-in, advisory)', () =
   });
 
   it('returns nothing for an empty menu', () => {
-    expect(searchFlexibleMenus(threeBlockRequirement(), threeBlockBandFloor(), noVolatility(), [], AXES({ shiftLengths: true }), budget, 0.1, 2)).toEqual([]);
+    expect(searchFlexibleMenus(threeBlockRequirement(), threeBlockBandFloor(), noVolatility(), threeBlockRequirement(), 1, [], AXES({ shiftLengths: true }), budget, 0.1, 2)).toEqual([]);
   });
 
   describe('2026-07-26 PR D change 6 — swing-shift overlay family (SOLVER_REALISM_SPEC_2026-07-26.md)', () => {
@@ -121,6 +130,7 @@ describe('§2.3 shift-menu flexibility search (bounded, opt-in, advisory)', () =
         threeBlockRequirement(),
         threeBlockBandFloor(),
         noVolatility(),
+        threeBlockRequirement(), 1,
         currentMenu,
         AXES({ shiftCount: true }), // any single axis is enough to unlock the overlay family
         budget,
@@ -136,7 +146,7 @@ describe('§2.3 shift-menu flexibility search (bounded, opt-in, advisory)', () =
     });
 
     it('is gated on anyAxis: with NOTHING enabled, no overlay candidates appear (the "static = no search" contract holds)', () => {
-      const cands = searchFlexibleMenus(threeBlockRequirement(), threeBlockBandFloor(), noVolatility(), currentMenu, AXES({}), budget, 0.1, 2);
+      const cands = searchFlexibleMenus(threeBlockRequirement(), threeBlockBandFloor(), noVolatility(), threeBlockRequirement(), 1, currentMenu, AXES({}), budget, 0.1, 2);
       expect(cands).toHaveLength(1); // unchanged from the pre-PR-D contract
     });
   });

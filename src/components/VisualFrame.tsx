@@ -2,6 +2,22 @@ import { useState } from 'react';
 import type { ShiftDef } from '../engine/types';
 import { WhppvHeatmap, type WhppvHeatmapCell } from './WhppvHeatmap';
 import { averageDay } from '../lib/averageDay';
+import { DISPLAY_DAY_ORDER, DISPLAY_DAY_LABELS } from '../lib/dayOrder';
+
+/** Reorders a 168-point engine-indexed (day 0 = Sunday) curve into the shared Mon-Sun DISPLAY
+ * order (`lib/dayOrder.ts`) — the same convention the staffing tables/heatmap already render
+ * in, so the full-week chart/queue-strip x-axis reads left-to-right as Mon..Sun, weekend
+ * contiguous at the right edge, instead of splitting Sunday off to the far left. Display-only;
+ * does not touch the engine's own day-0-is-Sunday index anywhere else. */
+function toDisplayWeekOrder(values168: number[]): number[] {
+  const out = new Array(168);
+  DISPLAY_DAY_ORDER.forEach((engineDay, displayIdx) => {
+    for (let h = 0; h < 24; h++) {
+      out[displayIdx * 24 + h] = values168[engineDay * 24 + h];
+    }
+  });
+  return out;
+}
 
 /**
  * PR D (RESULTS_PAGE_V2_SPEC_2026-07-27.md §4) — THE SHARED VISUAL FRAME, built once and
@@ -15,7 +31,8 @@ import { averageDay } from '../lib/averageDay';
  * first real callers. Full end-to-end/e2e verification is therefore deferred to whichever PR
  * mounts it first, per §11's instruction to flag rather than fake verification that hasn't
  * happened. The component is still fully self-contained and exercised by its own logic here
- * (default/full-week toggle, cross-fade on view change, blank-queue-strip support for Panel 3).
+ * (full-week/average-day toggle — defaults to full week, cross-fade on view change,
+ * blank-queue-strip support for Panel 3).
  */
 export interface VisualFrameView {
   key: string;
@@ -23,15 +40,31 @@ export interface VisualFrameView {
   /** 168 values, index = day*24+hour (engine day-0-is-Sunday convention). */
   demand168: number[];
   capacity168: number[];
-  /** The CYCLICAL backlog curve (R4) — never the blended actual curve. `null` renders a BLANK
-   * strip on purpose (Panel 3's "after two panels of watching a queue build, the strip is
-   * empty — preserve that; it is the most persuasive frame on the page and it is free"). */
+  /** Normally the CYCLICAL backlog curve (R4), not the blended actual curve — EXCEPT Panel 1,
+   * which passes the ACTUAL curve as a deliberate, scoped exception
+   * (PANEL1_COPY_REVISION_SPEC_2026-07-28.md §5a — Panel 1 wants the department's real,
+   * current situation, not a shape-only hypothetical; see .claude/rules/results-redesign.md
+   * for the full note). `null` renders a BLANK strip on purpose (Panel 3's "after two panels
+   * of watching a queue build, the strip is empty — preserve that; it is the most persuasive
+   * frame on the page and it is free"). */
   queueDepth168: number[] | null;
   /** Horizontal baseline for the queue strip — the STRUCTURAL floor (a sizing signal), stated
    * as a number alongside the CYCLICAL curve per §3.1's two-sentence framing. `null` draws no
    * baseline (e.g. when `queueDepth168` is also null). */
   structuralFloor: number | null;
+  /** Label above the queue strip. Defaults to "Backlog" — override when a panel's queue curve
+   * models something more specific (e.g. Panel 1 always shows arrivals backlog regardless of
+   * toggle, since boarders are already physically present and can't "queue" the way an
+   * unseen arrival can). */
+  queueLabel?: string;
   heatmapCells: WhppvHeatmapCell[];
+  /** Label above the heatmap. Defaults to "Staffing heatmap". */
+  heatmapLabel?: string;
+  /** Optional second line under the heatmap label, naming what this specific toggle's cells
+   * are colored against — e.g. "Colored by staffing vs. arrivals demand" vs. "...vs. boarding
+   * demand" — so a manager switching toggles knows the color scale changed meaning, not just
+   * the numbers. Omitted (no second line) when a panel doesn't supply one. */
+  heatmapSubLabel?: string;
 }
 
 function linePath(values: number[], width: number, height: number, pad: number, max: number): string {
@@ -47,6 +80,25 @@ function areaPath(values: number[], width: number, height: number, pad: number, 
   return `${top} L ${x(values.length - 1).toFixed(1)} ${(height - pad).toFixed(1)} L ${x(0).toFixed(1)} ${(height - pad).toFixed(1)} Z`;
 }
 
+// PANEL1_COPY_REVISION_SPEC_2026-07-28.md §5d — minimal chart-level labeling (a compact
+// legend, one y-axis label, a handful of x-axis ticks) so the small strip stays legible
+// without captioning it; the fuller explanation lives in each panel's own prose, not here.
+/** A handful of x-axis tick positions/labels — 4 fixed clock points for the 24-point average-
+ * day view, one per day-of-week (Mon-Sun DISPLAY order, `lib/dayOrder.ts` — matching the
+ * `toDisplayWeekOrder` reorder applied to the underlying curves) for the 168-point full-week
+ * view. Never one tick per hour — that's exactly the clutter this is scoped to avoid. */
+function xAxisTicks(length: number): Array<{ pos: number; label: string }> {
+  if (length <= 24) {
+    return [
+      { pos: 0, label: '12a' },
+      { pos: 6, label: '6a' },
+      { pos: 12, label: '12p' },
+      { pos: 18, label: '6p' },
+    ];
+  }
+  return DISPLAY_DAY_LABELS.map((label, i) => ({ pos: i * 24, label }));
+}
+
 /** Demand vs. capacity — two lines, the gap shaded. §4's element 1. */
 function DemandCapacityChart({ demand, capacity }: { demand: number[]; capacity: number[] }) {
   const width = 640;
@@ -55,20 +107,52 @@ function DemandCapacityChart({ demand, capacity }: { demand: number[]; capacity:
   const max = Math.max(...demand, ...capacity, 1e-9) * 1.1;
   const gapAbove = demand.map((d, i) => Math.max(d, capacity[i] ?? 0));
   const gapBelow = demand.map((d, i) => Math.min(d, capacity[i] ?? 0));
+  const ticks = xAxisTicks(demand.length);
+  const xOf = (i: number) => pad + (i / Math.max(demand.length - 1, 1)) * (width - 2 * pad);
   return (
-    <svg viewBox={`0 0 ${width} ${height}`} className="frame-demand-chart" role="img" aria-label="Demand versus staffed capacity">
-      <path d={`${areaPath(gapAbove, width, height, pad, max)}`} fill="var(--warning)" opacity={0.12} />
-      <path d={`${areaPath(gapBelow, width, height, pad, max)}`} fill="var(--bg)" opacity={1} />
-      <path d={linePath(demand, width, height, pad, max)} fill="none" stroke="var(--error)" strokeWidth={2} />
-      <path d={linePath(capacity, width, height, pad, max)} fill="none" stroke="var(--accent)" strokeWidth={2} />
-      <line x1={pad} y1={height - pad} x2={width - pad} y2={height - pad} stroke="var(--border)" strokeWidth={1} />
-    </svg>
+    <>
+      <div className="frame-chart-legend">
+        <span className="frame-legend-item">
+          <span className="frame-legend-swatch frame-legend-swatch-demand" />
+          Demand
+        </span>
+        <span className="frame-legend-item">
+          <span className="frame-legend-swatch frame-legend-swatch-capacity" />
+          Capacity
+        </span>
+      </div>
+      <svg viewBox={`0 0 ${width} ${height}`} className="frame-demand-chart" role="img" aria-label="Demand versus staffed capacity">
+        <path d={`${areaPath(gapAbove, width, height, pad, max)}`} fill="var(--warning)" opacity={0.12} />
+        <path d={`${areaPath(gapBelow, width, height, pad, max)}`} fill="var(--bg)" opacity={1} />
+        <path d={linePath(demand, width, height, pad, max)} fill="none" stroke="var(--error)" strokeWidth={2} />
+        <path d={linePath(capacity, width, height, pad, max)} fill="none" stroke="var(--accent)" strokeWidth={2} />
+        <line x1={pad} y1={height - pad} x2={width - pad} y2={height - pad} stroke="var(--border)" strokeWidth={1} />
+        <text x={pad} y={12} fontSize={9} fill="var(--text-muted)">
+          Nurse-hours
+        </text>
+        {ticks.map((t) => (
+          <text key={t.label} x={xOf(t.pos)} y={height - 6} fontSize={9} fill="var(--text-muted)" textAnchor="middle">
+            {t.label}
+          </text>
+        ))}
+      </svg>
+    </>
   );
 }
 
 /** Queue depth strip — §4's element 2, same x-axis as the chart above it. Blank when
- * `queueDepth` is null (Panel 3's deliberately empty strip). */
-function QueueStrip({ queueDepth, structuralFloor }: { queueDepth: number[] | null; structuralFloor: number | null }) {
+ * `queueDepth` is null (Panel 3's deliberately empty strip). One short label only — no
+ * inline caption explaining the mechanism (§5d); the fuller explanation lives in each
+ * panel's own surrounding prose. */
+function QueueStrip({
+  queueDepth,
+  structuralFloor,
+  label,
+}: {
+  queueDepth: number[] | null;
+  structuralFloor: number | null;
+  label: string;
+}) {
   const width = 640;
   const height = 60;
   const pad = 24;
@@ -82,13 +166,16 @@ function QueueStrip({ queueDepth, structuralFloor }: { queueDepth: number[] | nu
   const max = Math.max(...queueDepth, structuralFloor ?? 0, 1e-9) * 1.1;
   const floorY = structuralFloor !== null ? height - pad - (structuralFloor / max) * (height - 2 * pad) : null;
   return (
-    <svg viewBox={`0 0 ${width} ${height}`} className="frame-queue-strip" role="img" aria-label="Queue depth over the week">
-      <path d={areaPath(queueDepth, width, height, pad, max)} fill="var(--error)" opacity={0.18} />
-      <path d={linePath(queueDepth, width, height, pad, max)} fill="none" stroke="var(--error)" strokeWidth={1.5} />
-      {floorY !== null && (
-        <line x1={pad} y1={floorY} x2={width - pad} y2={floorY} stroke="var(--text-muted)" strokeWidth={1} strokeDasharray="4,3" />
-      )}
-    </svg>
+    <>
+      <div className="frame-queue-label">{label}</div>
+      <svg viewBox={`0 0 ${width} ${height}`} className="frame-queue-strip" role="img" aria-label="Queue depth over the week">
+        <path d={areaPath(queueDepth, width, height, pad, max)} fill="var(--error)" opacity={0.18} />
+        <path d={linePath(queueDepth, width, height, pad, max)} fill="none" stroke="var(--error)" strokeWidth={1.5} />
+        {floorY !== null && (
+          <line x1={pad} y1={floorY} x2={width - pad} y2={floorY} stroke="var(--text-muted)" strokeWidth={1} strokeDasharray="4,3" />
+        )}
+      </svg>
+    </>
   );
 }
 
@@ -110,13 +197,14 @@ export function VisualFrame({
   const [uncontrolledActiveKey, setUncontrolledActiveKey] = useState(views[0]?.key ?? '');
   const activeKey = controlledActiveKey ?? uncontrolledActiveKey;
   const setActiveKey = onActiveKeyChange ?? setUncontrolledActiveKey;
-  const [fullWeek, setFullWeek] = useState(false);
+  const [fullWeek, setFullWeek] = useState(true);
   const active = views.find((v) => v.key === activeKey) ?? views[0];
   if (!active) return null;
 
-  const demand = fullWeek ? active.demand168 : averageDay(active.demand168);
-  const capacity = fullWeek ? active.capacity168 : averageDay(active.capacity168);
-  const queueDepth = active.queueDepth168 === null ? null : fullWeek ? active.queueDepth168 : averageDay(active.queueDepth168);
+  const demand = fullWeek ? toDisplayWeekOrder(active.demand168) : averageDay(active.demand168);
+  const capacity = fullWeek ? toDisplayWeekOrder(active.capacity168) : averageDay(active.capacity168);
+  const queueDepth =
+    active.queueDepth168 === null ? null : fullWeek ? toDisplayWeekOrder(active.queueDepth168) : averageDay(active.queueDepth168);
 
   return (
     <div className="visual-frame">
@@ -150,7 +238,11 @@ export function VisualFrame({
           </button>
         </div>
         <DemandCapacityChart demand={demand} capacity={capacity} />
-        <QueueStrip queueDepth={queueDepth} structuralFloor={active.structuralFloor} />
+        <QueueStrip queueDepth={queueDepth} structuralFloor={active.structuralFloor} label={active.queueLabel ?? 'Backlog'} />
+        <div className="frame-heatmap-header">
+          <span className="frame-heatmap-label">{active.heatmapLabel ?? 'Staffing heatmap'}</span>
+          {active.heatmapSubLabel && <span className="frame-heatmap-sublabel">{active.heatmapSubLabel}</span>}
+        </div>
         <WhppvHeatmap cells={active.heatmapCells} shiftMenu={shiftMenu} />
       </div>
     </div>

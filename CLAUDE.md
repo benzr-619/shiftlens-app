@@ -19,11 +19,11 @@ This is mandatory, not optional.
 
 Current rules files:
 - `.claude/rules/engine-solver.md` — Step 3 solver internals: full-coverage greedy search,
-  budget-trim (now a joint whole-week BACKLOG-minimizing trim, 2026-07-26 — five reversals of
-  this one area's history, read the "Budget-capped trim" section in full before touching it —
-  PR B's asymmetric abandon/recovery/drain-cap backlog model is the latest), department ENA
-  floor pass, live-edit recompute, shift wraparound model (GLOBAL-WEEK circular as of PR A,
-  2026-07-26 — read that section before touching shift-hour attribution), Phase 2a's
+  budget-trim (now a joint whole-week BACKLOG-minimizing trim — EIGHT reversals of this one
+  area's history, read the "Budget-capped trim" section in full before touching it — the
+  2026-07-28 capacity-elasticity backlog model, no abandonment/LWBS term, is the latest),
+  department ENA floor pass, live-edit recompute, shift wraparound model (GLOBAL-WEEK circular
+  as of PR A, 2026-07-26 — read that section before touching shift-hour attribution), Phase 2a's
   arrivals-volatility floor buffer, Phase 2b's iterative backlog-feedback relaxation loop
 - `.claude/rules/template-parsing.md` — the ONE consolidated multi-tab data template:
   per-tab alias tables, day/hour/month tolerance, all-or-nothing optional-field rule,
@@ -161,7 +161,7 @@ specific ED's data, always framed as "what similar EDs run at" and always user-e
 | — Step 3 | `src/screens/setup/ShiftMenuStep.tsx` | `ShiftMenuEditor` wrapper (unchanged) |
 | — Step 4 | `src/screens/setup/ReviewStep.tsx` | Summary of every input with per-field Edit links back to the owning step (admit rate/boarding duration/ESI mix/boarding seasonality all link back to Step 1 now); final `canContinue` gate lives in `SetupScreen.tsx`. **2026-07-27:** rows for boarding census (medical/BH)/ratios, and a "Download my data file" export button (`lib/template.ts`'s `downloadFilledConsolidatedTemplateXlsx` — data only, no policy values) — the app's only persistence, see `.claude/rules/template-parsing.md` |
 | Results dashboard | `src/screens/DashboardScreen.tsx` | **Not a tab container** (since 2026-07-13) — a single scrolling page. As of `RESULTS_PAGE_V2_SPEC_2026-07-27.md` (PRs A0-H, all landed), this is the FULL five-panel architecture (§4), not the old nine-chapter one. Top to bottom: `.dashboard-topbar` ("← Back to setup" only — no `<h1>`, no export button here anymore, R12 moved it to the bottom), the full-width `.results-welcome` section, the horizontal `StepBar` (R10, replaces the deleted `ChapterRail.tsx`) with 6 entries (`Panel1`-`Panel5` + `ch-evidence`), then `.dashboard-content`: `<Panel1 />` → `<Panel2 />` → `<Panel3 />` → `<Panel4 />` → `<Panel5 />` → `.export-row` ("Export to PPTX," PR H) → `<EvidenceSurfaceSection />` (unmodified, stays off the main arc per the spec's own instruction). Every prior chapter component (`CoreGridTab`, `CurrentStaffingAnalysis`, `ScenarioBSection`, `HiddenBoardingSection`, `BoardingTransition`, `ConstrainedReallocationSection`, `FundingAskSection`, `FinancePartnerWorksheet`, `SynthesisSection`, `BoardingCoverageSection`, `ShiftMenuFlexibilitySection`) is DELETED — see each Panel row below for what absorbed its content |
-| — Panel 1 | `src/screens/dashboard/Panel1.tsx` | (2026-07-27, PR E of `RESULTS_PAGE_V2_SPEC_2026-07-27.md` §4) "What your department demands, and what you staff against it" — REPLACES the deleted `CoreGridTab.tsx`/`CurrentStaffingAnalysis.tsx`/`HiddenBoardingSection.tsx`. Band comparison (realized wHPPV vs. peer p25-p75, the ONE band comparison on the page per §3.3), the late-ramp sentence (§3.2, demand-peak-hour vs. staffing-peak-hour on the average day), boarding medical/BH ratios + the required RN-understatement callout, effective wHPPV (never band-compared), the hidden-boarding day/night sentences (reused verbatim from `lib/narrative.ts`), the two backlog sentences (§3.1 — STRUCTURAL + CYCLICAL, never the blended actual curve; see `.claude/rules/engine-solver.md`'s PR A section for why), and the verbatim queue-honesty callout. A `VisualFrame` with 4 toggle views (Arrivals/Boarding/Combined/Effective wHPPV) — see `.claude/rules/results-redesign.md`'s PR E section for the judgment calls each view's "capacity" line makes (the spec describes the story, not the exact formula) |
+| — Panel 1 | `src/screens/dashboard/Panel1.tsx` | (2026-07-27, PR E of `RESULTS_PAGE_V2_SPEC_2026-07-27.md` §4; REVISED 2026-07-28 per `PANEL1_COPY_REVISION_SPEC_2026-07-28.md` — see `.claude/rules/results-redesign.md`'s dated section for the full record) "What your department demands, and what you staff against it" — REPLACES the deleted `CoreGridTab.tsx`/`CurrentStaffingAnalysis.tsx`/`HiddenBoardingSection.tsx`. **Categorical band comparison only** (below/within/above the peer band, no raw band numbers, no percentile — the ONE band comparison on the page), the late-ramp sentence (demand-peak-hour vs. staffing-peak-hour on the average day, unchanged), a plain boarding-ratio line (medical/BH nurse-to-patient ratios only — the RN-understatement callout was REMOVED from this page, it already lives on setup), NO "effective wHPPV after boarding" paragraph (deleted outright, judged duplicative), a **per-shift arrivals/boarding diagnostic** (`engine/hiddenBoarding.ts`'s `computePerShiftDiagnostic` — one merged sentence per group of shifts sharing an identical verdict, REPLACING the old fixed day/night 07-19/19-07 calendar-split model), and an **average-day queue build/peak/clear sentence** (with a weekday/weekend split when the two patterns differ meaningfully) replacing the old named-specific-days sentence, plus a short "modeled estimate, not measured wait-room data" callout (replacing the old "nurses go faster" claim, which the 2026-07-28 backlog-recurrence model made false). A `VisualFrame` with **3** toggle views (Arrivals/Boarding/Combined — the "Effective wHPPV" toggle was DROPPED 2026-07-28) whose queue strip is a **scoped exception**: it draws the ACTUAL backlog curve (`BacklogResult.backlog`, computed per-toggle via `computeBacklog(currentStaffingGrid, thatToggle'sDemandCurve, shiftMenu, bandCeilingHourly)`), never `.cyclicalBacklog` — see `.claude/rules/results-redesign.md`'s PR E section (judgment calls on what "capacity" means per toggle, still current) and its 2026-07-28 section (the per-shift diagnostic rebuild, the actual-vs-cyclical exception, the heatmap's per-shift split cells) |
 | — Panel 2 | `src/screens/dashboard/Panel2.tsx` | (2026-07-27, PR E §4) "Could moving hours fix it?" — REPLACES the deleted `ScenarioBSection.tsx`/`ConstrainedReallocationSection.tsx`. Reuses `computeScenarioB` (arrivals only)/`computeCombinedReallocation` (arrivals+boarding) UNCHANGED, toggled: Current · Reallocated for arrivals · Reallocated for arrivals + boarding. Left column ("hours below need"/"worst unbroken stretch" via `lib/whenPattern.ts`'s first real UI caller) updates WITH the toggle — required `VisualFrame` to gain a controlled mode (`activeKey`/`onActiveKeyChange`, optional, defaults to uncontrolled). The honest-cost sentence (reallocating for boarding costs the arrivals picture) renders on EVERY state, not gated behind the "combined" toggle |
 | — Panel 3 | `src/screens/dashboard/Panel3.tsx` | (2026-07-27, PR F of `RESULTS_PAGE_V2_SPEC_2026-07-27.md` §4) "What would it take to fully cover the department?" — REPLACES the deleted `SynthesisSection.tsx`. Reuses `EngineResult.fullCoverageCombined` (PR B) directly, no new engine work. Queue strip renders deliberately BLANK. New dedicated two-bar SVG comparison (total demand, stacked when boarding present, vs. hours staffed today) — degrades to a single (arrivals-only) bar when boarding is absent, per §10 open item 3, resolved this PR |
 | — Panel 4 | `src/screens/dashboard/Panel4.tsx` | (2026-07-27, PR F §4) "Recommended staffing" (R11: "idealized" renamed everywhere) — REPLACES the deleted `FundingAskSection.tsx`/`FinancePartnerWorksheet.tsx` (R8, absorbed into a reframed "benefit per additional shift" section) and folds `ShiftMenuFlexibilitySection.tsx` in, collapsed. R6: a display-level Arrivals/Boarding/Combined toggle — `EngineResult.grid` itself is never mutated; the combined grid is summed cell-wise in the component only. **Judgment call, flagged:** the "hours of unmet need" figure is approximated by scaling `EngineResult.totalBacklogHours` by the same % reduction the (severity-based) marginal curve shows, since the engine doesn't record raw hours per marginal-curve point — see `.claude/rules/results-redesign.md`'s PR F section |
@@ -231,6 +231,28 @@ src/
                       of an hour's own requirement, floored at the old absolute value) — see
                       `.claude/rules/engine-solver.md`'s PR E section for the full validation
                       gate and the (reported, not retuned) `maxDrainFraction` investigation.
+                      **2026-07-28 REVERSAL (eighth shape, NOW ALSO SUPERSEDED same day — see
+                      below) — the abandonment model above
+                      (`backlogAbandonRate`/`backlogRecoveryEfficiency`/`backlogMaxDrainFraction`)
+                      was RETIRED, replaced by a capacity-elasticity model with NO abandonment
+                      term** (`computeBacklog` took `bandCeilingHourly` instead of a
+                      `BacklogRecurrenceParams` object). `estimatedAbandonedHours` (above) and
+                      `EngineInputs.lwbsRate` are both REMOVED (no analog under this model —
+                      nothing is ever abandoned) and stay removed under the ninth shape too.
+                      **2026-07-28 REVERSAL (NINTH shape, `BACKLOG_MODEL_VISITS_BASED_SPEC_2026-
+                      07-28.md`, THE CURRENT MODEL, same day as the eighth shape) — the capacity-
+                      elasticity model above is ALSO retired** (its `stretch` term was backwards
+                      — see engine-solver.md). `computeBacklog(grid, arrivals168,
+                      hourlyRequirement168, shifts, floorWhppv)` — a NEW required `arrivals168`
+                      (visit counts) parameter, and `bandCeilingHourly` replaced by
+                      `floorWhppv: number` (a single flat scalar, `EngineResult.floorWhppv` =
+                      `lookupWhppvBand(annualVisits).p25Whppv`). `summarizeBacklogSeverity`
+                      gained the same `arrivals168` parameter. See `.claude/rules/
+                      engine-solver.md`'s new 2026-07-28 "ninth shape" section (below the
+                      eighth-shape one) for the full formula, the `NO_COMPRESSION_FLOOR_WHPPV`
+                      judgment call for boarding/combined curves, and every call site touched —
+                      this is now the current model; every `bandCeiling`-as-recurrence-input/
+                      `spare`/`stretch` reference above is history only.
     synthesis.ts    — (2026-07-26 PR G, `RESULTS_COMPREHENSION_SPEC_2026-07-26.md` §7)
                       `computeSynthesis` — the founding-question answer. Adds arrivals demand
                       (`sum(hourlyRequirement)`) and boarding demand (`BoardingResult
@@ -243,14 +265,26 @@ src/
                       `screens/dashboard/SynthesisSection.tsx`, which renders exactly this
                       arithmetic and stops — no interpretive closing sentence (spec §1(5)).
                       See `.claude/rules/results-redesign.md`'s PR G section.
-    hiddenBoarding.ts — (2026-07-26 PR F, `RESULTS_COMPREHENSION_SPEC_2026-07-26.md` §6.2)
-                      `computeHiddenBoardingDiagnostic` — "the advocacy artifact." Per
-                      (day 07-19 / night 19-07, a FIXED calendar split, not shift-menu-derived)
-                      block: current capacity minus ARRIVALS-ONLY requirement, plus boarding
-                      need from `BoardingResult.cellBoardingRnHours` when present (null, not
-                      zero, when absent). Diagnostic-only, no solver interaction. Powers
-                      `screens/dashboard/HiddenBoardingSection.tsx` — see
-                      `.claude/rules/results-redesign.md`'s PR F section.
+    hiddenBoarding.ts — (2026-07-26 PR F, `RESULTS_COMPREHENSION_SPEC_2026-07-26.md` §6.2;
+                      REWRITTEN 2026-07-28 per `PANEL1_COPY_REVISION_SPEC_2026-07-28.md` §4 —
+                      "the advocacy artifact," now per-actual-SHIFT rather than a fixed
+                      calendar split) `computePerShiftDiagnostic` — REPLACES the retired
+                      `computeHiddenBoardingDiagnostic`/`HiddenBoardingBlock` (the old FIXED
+                      07:00-19:00/19:00-07:00 calendar split, which didn't generalize to an
+                      8-8 split, a 3x8 menu, or any shift structure that doesn't land on a
+                      12-hour clock boundary). For each shift in the (sorted-by-startHour)
+                      shift menu: staffed hours vs. required hours (attributed via
+                      `coveringCellsByGlobalHour`, the same even-split-at-handoff convention
+                      boarding's priority ranking and the backlog per-shift diagnostics
+                      already use), an arrivals verdict (understaffed/overstaffed/appropriate
+                      against the per-hour peer band), and — when boarding data is present —
+                      whether the shift's surplus hours cover its boarding need. Shifts
+                      producing an identical (verdict, boardingCovered) tuple are MERGED into
+                      one group/sentence, even when non-adjacent in the menu. Diagnostic-only,
+                      no solver interaction. Powers `screens/dashboard/Panel1.tsx` (one
+                      sentence per merged group, via `lib/narrative.ts`'s
+                      `shiftDiagnosticSentence`) — see `.claude/rules/results-redesign.md`'s
+                      2026-07-28 section.
     sandbox.ts      — (2026-07-27, PR C of `RESULTS_PAGE_V2_SPEC_2026-07-27.md` §5.4)
                       `computeSandbox(...)` — Panel 5's "test it yourself" arithmetic, pure/
                       no-solve (same cheap-live-recompute convention as `recomputeAfterEdit`).
@@ -340,13 +374,35 @@ src/
                       engine imports) owning the backlog recurrence in exactly one place —
                       `backlogRecurrence` (full 168-hour week) and `backlogHourStep` (single-hour
                       primitive, reused by both the full recurrence AND `solver.ts`'s windowed
-                      `candidateCutCost` simulation). Replaces the retired single-decay model
-                      (`backlogHourlyDecay = 0.85`) with three named processes —
-                      `backlogAbandonRate`/`backlogRecoveryEfficiency`/`backlogMaxDrainFraction`
-                      (`DEFAULTS` in `types.ts`) — and removes the circular-import problem that
+                      `candidateCutCost` simulation). Removes the circular-import problem that
                       previously forced a hand-duplicated copy of the recurrence in `solver.ts`.
-                      Both `backlog.ts` and `solver.ts` import from it. See
-                      engine-solver.md's "Budget-capped trim" section for the physics rationale.
+                      Both `backlog.ts` and `solver.ts` import from it.
+                      **2026-07-28 REVERSAL (eighth shape, NOW SUPERSEDED — see the ninth-shape
+                      note directly below): the PR B abandonment model
+                      (`backlogAbandonRate`/`backlogRecoveryEfficiency`/`backlogMaxDrainFraction`)
+                      was RETIRED, replaced by a capacity-elasticity model with NO abandonment
+                      term** — `backlogHourStep(priorBacklog, capacity, requirement, bandCeiling)`
+                      (`deficit`/`spare`/`stretch`/`paydown`). Retired the same day (see below) —
+                      history only now.
+                      **2026-07-28 REVERSAL (NINTH shape, `BACKLOG_MODEL_VISITS_BASED_SPEC_2026-
+                      07-28.md`, THE CURRENT MODEL): the capacity-elasticity model above is
+                      RETIRED — its `stretch = max(0, bandCeiling - capacity)` term was backwards
+                      (worse-staffed hours got MORE assumed clearing throughput). Replaced by a
+                      VISITS-BASED model: nurses compress pace down to, but never past, the
+                      department's own flat peer-cohort p25 wHPPV (`EngineResult.floorWhppv`,
+                      NEW field). `backlogHourStep(priorBacklogVisits, capacity, arrivals,
+                      floorWhppv)` (visits-native) + `backlogHourStepHours`/`backlogRecurrence`
+                      (hours-bridged, what every real consumer calls) replace the retired
+                      signature — `bandCeilingHourly` is GONE as a recurrence input everywhere
+                      (it stays in `EngineResult` for band-color reporting only, unrelated to
+                      backlog now). `NO_COMPRESSION_FLOOR_WHPPV = 1` is the disclosed judgment
+                      call for boarding/combined curves with no real "visits" concept (Panel 1's
+                      Boarding/Combined toggles, `synthesis.ts`'s `computeCombinedReallocation`,
+                      `sandbox.ts`'s `computeSandbox` — the last one dropped its ceiling
+                      parameter entirely). See engine-solver.md's new 2026-07-28 "ninth shape"
+                      section (below the eighth-shape one) for the full formula, the algebraic
+                      identity that unifies the compression/no-compression cases, and every call
+                      site touched.
     backlogFeedback.ts — (2026-07-26, Phase 2b) `solveShiftFitWithBacklogFeedback` — the
                       iterative relaxation loop wrapping `solver.ts`'s trim: full-coverage
                       solve once, repeated `trimWeekToBudget` against a progressively-raised
@@ -361,6 +417,21 @@ src/
                       **2026-07-26 PR C: its floor parameter is `protectedFloorHourly168`**
                       (renamed from `bandFloorHourly168` — the loop's local raises compose onto
                       the UNCLAMPED solver-facing floor, same reasoning as before).
+    exactReallocation.ts — (2026-07-29) `reallocateHoursExact(currentGrid, shiftMenu,
+                      arrivals168, hourlyRequirement168, floorWhppv)` — Panel 2's "moving
+                      hours" reallocation. NOT the trim (`solveShiftFit`/
+                      `solveShiftFitWithBacklogFeedback`) — a genuinely different algorithm
+                      that only ever TRADES one shift-unit for another (never adds/removes), so
+                      total scheduled hours are conserved EXACTLY, by construction. Hill-climbing
+                      local search over gcd-based hour-neutral trades, scored on the same
+                      cyclical `totalSeverity` objective the Step 3 trim minimizes (via a lean
+                      helper that skips `computeBacklog`'s structural-floor/streak bookkeeping).
+                      Used by BOTH `computeScenarioB` and `computeCombinedReallocation` (below),
+                      replacing their prior parameter-swap-over-the-trim implementation, which
+                      only held hours within the standard ~10% tolerance, never exactly. See
+                      `.claude/rules/engine-solver.md`'s "Exact-hours reallocation" section for
+                      the full design/scope rationale (including why total shift COUNT is
+                      deliberately NOT a second hard constraint alongside hours).
     index.ts        — compute(): the single callable orchestrator; reconcile(); recomputeAfterEdit();
                       derives `bandFloorHourly`/`bandCeilingHourly`/`protectedFloorHourly`/
                       `demandVolatilityHourly` via `demandBand.ts` (cohort band composed with the
@@ -382,10 +453,10 @@ src/
                       inputs, currentStaffingGrid)`** — "the same hours, better placed" (spec
                       §5), a PARAMETER SWAP over the same `solveShiftFitWithBacklogFeedback`
                       pipeline (weeklyBudgetHours -> current grid's own weekly hours, everything
-                      else fixed), via a new shared `resolveBacklogParams(inputs)` helper
-                      (extracted from `compute()`, also used by `compute()` itself) so both
-                      honor PR E's `lwbsRate` override identically. Returns `null` with no
-                      current staffing. See results-redesign.md's PR F section.
+                      else fixed) — both `compute()` and `computeScenarioB` pass
+                      `result.bandCeilingHourly` straight through, no shared params helper needed
+                      since 2026-07-28's `resolveBacklogParams` removal (see below). Returns
+                      `null` with no current staffing. See results-redesign.md's PR F section.
     __tests__/      — reconcile.test.ts (Section 2.2 build-in check, still passes UNMODIFIED
                       through every reversal above), solver.test.ts, boarding.test.ts,
                       backlog.test.ts, flexMenu.test.ts, demandBand.test.ts (Phase 2a),
@@ -1189,9 +1260,11 @@ area's history) and `.claude/rules/results-redesign.md`'s PR D section. Summary:
   multiple files that had drifted false through the A/B/C reversals (the "why" explainer, the
   front-loaded-nursing premise, the backlog headline naming WHEN, the "Hours below the peer
   25th-percentile staffing floor" relabel), a second widening of the flexMenu candidate space
-  (swing-shift overlays), and one new setup question (headcount semantics — display-only, not
-  role modeling). The heatmap's cell number/color mechanism reversed a second time (per-hour
-  band drives both now, see Section 6).
+  (swing-shift overlays), and one new setup question (headcount semantics — never wired into
+  the engine, not role modeling; its "no" branch was later reworked, 2026-07-28, into a
+  one-time grid-correction action rather than a display-only uplift % field — see
+  `.claude/rules/results-redesign.md`'s Change 7 section). The heatmap's cell number/color
+  mechanism reversed a second time (per-hour band drives both now, see Section 6).
 
 Across all four: `reconcile.test.ts` passes completely UNMODIFIED (never touches solve output).
 Engine test count reached 121. `npm run build`/`npm test`/`oxlint` clean after every PR,
@@ -1601,6 +1674,113 @@ unmet-need approximation, Panel 5's medical/BH boarding split, the deck's cell-f
 scope reductions) and the one genuinely unreachable spec detail found and proven (§5.2's rung
 3, mathematically impossible at the spec's own fixed thresholds). No `reconcile.test.ts`
 change across all nine PRs — the reconciliation invariant was never touched.
+
+**Built (2026-07-28, backlog recurrence reversal — capacity elasticity, eighth shape of the
+Step 3 trim/backlog area's history):** Ben's direct ask, per `.claude/rules/engine-solver.md`'s
+new dated section for the full record. The PR B/E abandonment model
+(`backlogAbandonRate`/`backlogRecoveryEfficiency`/`backlogMaxDrainFraction`, `DEFAULTS`) is
+retired entirely, replaced by a capacity-elasticity model with NO abandonment/LWBS-proxy term:
+`backlog[h] = max(0, backlog[h-1] - paydown[h]) + deficit[h]`, `paydown[h] = min(backlog[h-1],
+spare[h] + stretch[h])`, where `spare` is genuinely idle scheduled hours and `stretch` is bounded
+catch-up capacity capped at the existing peer p75-equivalent ceiling
+(`EngineResult.bandCeilingHourly`, reused, not a new constant). Removed entirely:
+`EngineInputs.lwbsRate` (never actually wired to any setup UI control — a pure type-level
+deletion plus stale-prose cleanup), `EngineResult.estimatedAbandonedHours`/
+`BacklogResult.estimatedAbandonedHours` (no analog — nothing is ever abandoned under this
+model), the three `DEFAULTS`/`constantsMetadata.ts` entries, and `engine/index.ts`'s
+`resolveBacklogParams` helper. Every backlog-consuming function's signature changed from taking
+a `BacklogRecurrenceParams` object to taking a `bandCeilingHourly`/`bandCeilingHourly168` array
+in the same position — `computeBacklog`/`summarizeBacklogSeverity` (`backlog.ts`),
+`candidateCutCost`/`trimWeekToBudget*`/`solveShiftFit` (`solver.ts`),
+`solveShiftFitWithBacklogFeedback` (`backlogFeedback.ts`), `searchFlexibleMenus` (`flexMenu.ts`),
+`computeSandbox` (`sandbox.ts`) — all call sites updated (`engine/index.ts`, `synthesis.ts`,
+`Panel1`/`Panel2`/`Panel4`/`Panel5.tsx`, `lib/pptxExport.ts`). **Judgment call, flagged:** the
+CYCLICAL (shape-only, rescaled-capacity) backlog computation reuses `bandCeilingHourly` AS-IS
+rather than rescaling it alongside capacity — it's an external peer benchmark, not something
+that scales with this department's own total hours; see engine-solver.md's section for the full
+reasoning. Full test rewrite: `backlogModel.test.ts` (non-negativity, exact-no-decay carry,
+1:1 spare paydown, ceiling-capped stretch paydown), `backlog.test.ts` (closed-form assertions
+recomputed against the new exact-arithmetic formula, PR E validation-gate scenario retuned),
+`solver.test.ts`/`backlogFeedback.test.ts`/`sandbox.test.ts`/`scenarioB.test.ts`/
+`syntheticFixtures.test.ts`/`flexMenu.test.ts` (every call site threaded a bandCeiling array);
+`backlogFeedback.test.ts`'s oscillation test re-swept a third time (65 → 46). Also fixed, found
+by the full-suite re-run (not itself a consequence of the physics change):
+`syntheticSweep.test.ts`'s `fullCoverage >= weeklyScheduledHours` invariant's ENA-floor-dominance
+skip guard widened from `.every` to `.some` — a mixed-volume department where the floor
+dominates only SOME hours could still legitimately trip the old, narrower guard.
+`reconcile.test.ts` passes with a zero-line diff. 224 vitest tests, 16 e2e tests.
+`npm run build`/`npm test`/`oxlint`/`npm run test:e2e` all clean.
+
+**Built (2026-07-28, same day — backlog recurrence reversal #2, VISITS-BASED, ninth shape,
+`BACKLOG_MODEL_VISITS_BASED_SPEC_2026-07-28.md`):** the capacity-elasticity model directly
+above is ALREADY superseded, same day — designed with Ben in the same Cowork planning chat as
+`PANEL1_COPY_REVISION_SPEC_2026-07-28.md`, after he caught the capacity-elasticity model's
+`stretch = max(0, bandCeiling - capacity)` term producing a real, visible contradiction on a
+real department's Panel 1 (a queue strip claiming to clear by 19:00 while the heatmap read red
+continuously from 08:00 onward) — the term was backwards: worse-staffed hours got assumed MORE
+clearing throughput, not less. New model: nurses compress pace down to, but never past, the
+department's own flat peer-cohort p25 wHPPV (`EngineResult.floorWhppv`, NEW field,
+`lookupWhppvBand(annualVisits).p25Whppv`) — `demand[h] = arrivals[h] + backlogVisits[h-1]`,
+`maxServable[h] = capacity[h]/floorWhppv`, `backlogVisits[h] = max(0, demand[h] -
+maxServable[h])`, bridged to nurse-hours via `× floorWhppv` at every consumer boundary
+(`engine/backlogModel.ts`'s `backlogHourStepHours`/`backlogRecurrence`). `bandCeilingHourly` is
+GONE as a recurrence input everywhere (`computeBacklog`/`summarizeBacklogSeverity`/
+`candidateCutCost`/`trimWeekToBudget*`/`solveShiftFit`/`solveShiftFitWithBacklogFeedback`/
+`searchFlexibleMenus` all take `arrivals168`/`floorWhppv` instead) — it stays in `EngineResult`
+only for band-color reporting, unrelated to backlog now. **Judgment call, flagged:**
+boarding/combined demand curves (Panel 1's Boarding/Combined toggles, `synthesis.ts`'s
+`computeCombinedReallocation`, `sandbox.ts`'s `computeSandbox`) have no honest "visits" concept,
+so they use a NO-COMPRESSION degenerate case (`NO_COMPRESSION_FLOOR_WHPPV = 1`, the demand
+curve itself as the "arrivals" input) — proven algebraically equivalent to a plain `max(0,
+demand + backlog[h-1] - capacity[h])` recurrence, and consistent with the PRE-EXISTING
+precedent at the `computeCombinedReallocation` call site (which already passed an all-zero
+`bandCeilingHourly` under the retired model). Full test rewrite across
+`backlogModel.test.ts`/`backlog.test.ts`/`solver.test.ts`/`backlogFeedback.test.ts`/
+`sandbox.test.ts`/`scenarioB.test.ts`/`flexMenu.test.ts`/`syntheticFixtures.test.ts` — two
+integration-test overage bounds in `solver.test.ts` widened (real, confirmed §5.6 ENA-floor
+behavior firing more under the new cost landscape, not a bug), `backlogFeedback.test.ts`'s
+chronic-shortfall/oscillation tests needed genuine compression (`floorWhppv=0.5`, re-swept
+budgets 64/56) since the no-compression case made that hand-built scenario's feedback loop
+insensitive to floor-raising, and profile G's ("alreadyFine") severity-gap threshold widened
+(`<0.5` → `<1`) since the new severity genuinely reflects compression the old model never
+modeled. **Re-verified against the actual scenario that surfaced the bug** (Playwright
+screenshots across `underTargetDayShort`/`adequatelyStaffedBadlyShaped`/`alreadyFine`): the
+queue-clear timing (or honest "doesn't fully clear" statement) now lines up with the heatmap's
+red/blue coloring in every profile checked — the contradiction is resolved. Panel 1's §5b
+queue-copy sentence generator (`PANEL1_COPY_REVISION_SPEC_2026-07-28.md`) needed NO code
+changes — it was already written generically against whatever curve is passed in, so it
+automatically reflects the new model's actual (now much larger, visits-based) nurse-hours
+figures correctly. `reconcile.test.ts` passes with a zero-line diff. 229 vitest tests, 19 e2e
+tests. `npm run build`/`npm test`/`oxlint`/`npm run test:e2e` all clean. See
+`.claude/rules/engine-solver.md`'s new 2026-07-28 "ninth shape" section for the full record.
+
+**Built (2026-07-29, Panel 2 exact-hours reallocation):** Ben's direct ask, after noticing
+Panel 2's diff grid didn't obviously conserve hours — its own copy claims "Holding your current
+total hours fixed," but `computeScenarioB`/`computeCombinedReallocation` were parameter swaps
+over the primary TRIM pipeline (`solveShiftFitWithBacklogFeedback`), which only ever cuts from a
+full-coverage upper bound down to "at or under `currentHours * 1.10`" — a soft inequality with
+slack, not an exact target, and the ENA-floor pass could additionally push the total ABOVE it.
+New `engine/exactReallocation.ts`'s `reallocateHoursExact` — a genuinely different algorithm (a
+REALLOCATION, only ever trades one shift-unit for another, never adds/removes) so total hours
+are conserved EXACTLY, by construction. A bounded hill-climbing local search over gcd-based
+hour-neutral trades (equal-length shifts reduce to a plain 1-for-1 swap; unequal lengths produce
+a compound trade, e.g. 3 units of an 8h shift for 2 of a 12h shift), scored on the same cyclical
+`totalSeverity` the Step 3 trim itself minimizes. Both `computeScenarioB` (arrivals-only) and
+`computeCombinedReallocation` (arrivals+boarding) now call this instead of the trim; the ENA
+floor no longer runs for either (it could only add hours, which would break exact conservation)
+— `ScenarioBResult.overageFromFloor` is now always `0`. **Scope decision, confirmed with Ben:**
+total shift COUNT is deliberately NOT a second hard constraint alongside hours — with unequal
+shift lengths the two can conflict, and enforcing both could go infeasible for some shift menus.
+New `engine/__tests__/exactReallocation.test.ts` (5 tests: exact conservation for both
+equal-length and unequal-length shift menus, a real severity improvement, a genuine local-optimum
+case, and a degenerate single-shift-menu case). `scenarioB.test.ts`'s ENA-floor edge-case test
+was REWRITTEN (not loosened) to assert the new, opposite behavior. `combinedReallocation.test.ts`
+needed no changes. Full suite (234 vitest tests) green; `reconcile.test.ts` untouched. See
+`.claude/rules/engine-solver.md`'s "Exact-hours reallocation" section for the full record. No
+Playwright verification this session beyond the pre-existing suite (a pre-existing,
+unrelated-to-this-change failure in `e2e/panel1-2.spec.ts`'s Panel 2 spec — referencing a
+"Current" toggle tab that doesn't exist in the current Panel2.tsx — was found and left as-is,
+flagged for a separate fix, since neither Panel2.tsx nor that spec file were touched here).
 
 **Not yet built:**
 - Component/UI-level automated tests below the full-page e2e level (React Testing Library-

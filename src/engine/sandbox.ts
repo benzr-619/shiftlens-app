@@ -8,7 +8,7 @@
 // distinction the main engine's demand model has any concept of. Hold nurses cover MEDICAL
 // boarders only (never BH, never arrivals) — a real, load-bearing operational fact (hold pools
 // are float/med-surg staff, not behavioral-health-credentialed), not a simplification.
-import { backlogRecurrence, type BacklogRecurrenceParams } from './backlogModel';
+import { backlogRecurrence, NO_COMPRESSION_FLOOR_WHPPV } from './backlogModel';
 
 export interface SandboxResult {
   /** Per-hour hold-nurse hours actually absorbed by medical boarding demand (capped at that
@@ -49,6 +49,16 @@ export interface SandboxResult {
  * @param arrivals168 raw arrivals counts (for the effective-wHPPV denominator)
  * @param edNurses168 the "ED nurses" sandbox grid's per-hour on-duty headcount
  * @param hold168 the "hold nurses" sandbox grid's per-hour on-duty headcount
+ *
+ * 2026-07-28 (ninth shape, BACKLOG_MODEL_VISITS_BASED_SPEC_2026-07-28.md): the queue-depth
+ * strip below no longer takes a `bandCeilingHourly168` peer-ceiling parameter — the visits-
+ * based recurrence has no "stretch to a peer ceiling" concept. `residualDemand` blends
+ * arrivals + unabsorbed boarding into ONE curve (§5.4's "never decompose by source" rule), and
+ * there's no honest per-visit-pace-compression story for a curve that isn't literally ED-visit
+ * arrivals, so this uses the recurrence's NO-COMPRESSION degenerate case
+ * (`NO_COMPRESSION_FLOOR_WHPPV`, `residualDemand` itself as the "arrivals" input) — a plain
+ * deficit-carries-forward-until-capacity-clears-it model. See backlogModel.ts's header and
+ * .claude/rules/engine-solver.md's ninth-shape section.
  */
 export function computeSandbox(
   arrivalsRequirement168: number[],
@@ -56,8 +66,7 @@ export function computeSandbox(
   bhBoarding168: number[],
   arrivals168: number[],
   edNurses168: number[],
-  hold168: number[],
-  backlogParams: BacklogRecurrenceParams
+  hold168: number[]
 ): SandboxResult {
   const n = 168;
   const holdApplied = new Array(n).fill(0);
@@ -88,7 +97,7 @@ export function computeSandbox(
     effectiveWhppv[h] = arrivalsCount > 0 ? (ed - unabsorbedMed - bh) / arrivalsCount : 0;
   }
 
-  const { backlog: queueDepth } = backlogRecurrence(edNurses168, residualDemand, backlogParams);
+  const { backlog: queueDepth } = backlogRecurrence(edNurses168, residualDemand, NO_COMPRESSION_FLOOR_WHPPV);
 
   return { holdApplied, holdSurplus, residualDemand, unmet, spare, effectiveWhppv, queueDepth };
 }

@@ -620,15 +620,38 @@ returns exactly one candidate, unchanged). `searchFlexibleMenus` was refactored 
 solve-and-score logic. New bound: ≤57 candidates total (was ≤45), still deduped, still bounded.
 
 **Change 7 — headcount semantics, ONE setup question, explicitly NOT role-level modeling.**
-New store fields `headcountIncludesIndirectCare: boolean | null` / `indirectCareUpliftPct:
-number | null` (both null until answered, no ED-specific default) and a new setup card in
-`ShiftMenuStep.tsx` ("Does your headcount include charge and triage nurses?" + an uplift %
-field shown only when the answer is "yes"). **DISPLAY-ONLY by design** — neither field is
-threaded into `EngineInputs`/`compute()`; they never change `hourlyRequirement`, the grid, the
-ENA floor, or any solved number. This was a deliberate scope boundary (the spec explicitly
-declined role-level skill-mix modeling) — if a future session is tempted to wire these into
-the engine "to make the ENA floor more accurate," that's exactly the modeling the spec
-declined; don't, without a new, separate decision.
+New store field `headcountIncludesIndirectCare: boolean | null` (null until answered, no
+ED-specific default) and a new setup card in `ShiftMenuStep.tsx` ("Does your headcount
+include charge and triage nurses?"). **Never threaded into `EngineInputs`/`compute()`** — it
+never changes `hourlyRequirement`, the grid, the ENA floor, or any solved number. This was a
+deliberate scope boundary (the spec explicitly declined role-level skill-mix modeling) — if a
+future session is tempted to wire this into the engine "to make the ENA floor more accurate,"
+that's exactly the modeling the spec declined; don't, without a new, separate decision.
+
+**REVISED 2026-07-28 (Ben's direct ask) — the "no" branch is a one-time grid correction,
+not a display-only uplift % field.** The original build (above) paired this question with a
+conditional `indirectCareUpliftPct: number | null` field, shown only on "yes," that fed
+nothing but `ReviewStep.tsx`'s summary line and the Setup Decisions export tab — a pure
+dead-end input nobody read back. **`indirectCareUpliftPct` is REMOVED ENTIRELY** — from the
+store, the setup UI, `ReviewStep.tsx`'s summary/export, `lib/template.ts`'s
+`DECISIONS_TEMPLATE_FIELDS`/`SetupDecisionsData`, and `lib/parseUpload.ts`'s decision-field
+aliases/round-trip. `headcountIncludesIndirectCare` itself is UNCHANGED (still the one
+yes/no question, still never threaded into the engine). What replaced the uplift % field:
+answering **"no"** now shows a short explanation (the peer wHPPV benchmark assumes
+charge/triage hours are counted in headcount, so leaving them out understates staffing
+relative to the target) plus a one-time numeric input — "charge/triage (or other
+indirect-care) staff typically on duty per shift" — and an "Add to current staffing grid"
+button that adds that count to every `(day, shift)` cell of `currentStaffingGrid` for the
+current shift menu (component-local state in `ShiftMenuStep.tsx`, not a new store field —
+the amount itself is never persisted anywhere). After applying, the grid cells are just
+normal editable numbers, indistinguishable from hand-entered ones — this is a **one-time
+data-entry fix**, not an ongoing multiplier/flag layered on top of the grid. **This stays a
+setup-screen data-entry concern, per Ben's explicit instruction** — no changes to
+`EngineInputs`, `compute()`, the ENA floor check, or any comparison logic. If a future
+session is tempted to revive `indirectCareUpliftPct`-style wiring into the engine math (e.g.
+"apply an uplift % to the ENA floor automatically"), that is the exact role-level modeling
+this section's original "Change 7" note already declined — the grid-correction UX above is
+the intended resolution, not a stopgap pending a future engine hook.
 
 **Invariants verified:** `reconcile.test.ts` — zero-line diff (untouched by any PR D change).
 Recording the trim trajectory does not change the trim's OUTPUT — proven directly (byte-
@@ -1810,3 +1833,228 @@ new pptxExport cases). `npm run build`/`npm test`/`oxlint`/`npm run test:e2e` al
 **This completes `RESULTS_PAGE_V2_SPEC_2026-07-27.md` in full — PRs A0 through H, all nine,
 landed.** See CLAUDE.md's Feature Status for the consolidated summary and the session's final
 written account of every flagged judgment call, per §11's closing instruction.
+
+---
+
+## Panel 1 copy & queue-curve revision (2026-07-28, `PANEL1_COPY_REVISION_SPEC_2026-07-28.md`)
+
+Ben audited the just-completed Panel 1 (above) line by line in a Cowork planning chat and asked
+for eight scoped changes — **Panel 1 only** (`Panel1.tsx` + `engine/hiddenBoarding.ts`), no
+touching Panel 2-5/StepBar/VisualFrame's shared mechanics beyond what dropping one toggle
+strictly required. One genuine engine change (§4); everything else is copy/display.
+
+### §1 — wHPPV headline: categorical only, no raw band numbers, no percentile
+
+The old headline restated the peer band's actual p25/p75 numbers and implied a percentile
+position. Replaced with a plain three-branch categorical comparison (below/within/above),
+reusing the SAME band-position logic (`lookupWhppvBand` + the existing `position` comparison)
+that already drove the (unchanged) late-ramp sentence below it — no new comparison logic. "Week,"
+not "year," confirmed again: everything driving this stat is one representative week.
+
+### §2 — boarding ratio: plain line, no RN-understatement callout on this page
+
+The old text paired a full ratio sentence with a `banner banner-info` warning that RN-only
+boarding figures understate BH boarding's true cost. The banner is DELETED from Panel 1 entirely
+(no pointer back to setup either, per Ben's explicit ask) — it already lives on the setup page
+(`ShiftMenuStep.tsx`'s boarding-ratio card). The "boarding demands the equivalent of X wHPPV,
+about Y% of total nursing demand" sentence (a different concept, not named in the spec's
+"Current" excerpt) was NOT touched — only the ratio-plus-warning sentence was replaced with a
+single plain line pulling `boardingRatioTarget`/`bhBoardingRatioTarget` from the store, never
+hardcoded.
+
+### §3 — "effective wHPPV after boarding" paragraph: deleted outright
+
+No replacement text — Ben judged it duplicative with §1's band line and whatever the reworked
+queue section now conveys. The `consumed`/`effectiveAfterBoarding` local variables that fed only
+this paragraph were removed as dead code alongside it.
+
+### §4 — per-shift arrivals/boarding diagnostic (THE genuine engine change)
+
+`engine/hiddenBoarding.ts`'s `computeHiddenBoardingDiagnostic` (fixed 07:00-19:00/19:00-07:00
+calendar blocks, `HiddenBoardingBlock`) is RETIRED, replaced by `computePerShiftDiagnostic`
+(`PerShiftDiagnostic`/`ShiftDiagnosticGroup`) — rebuilt per actual shift in the (sorted-by-
+startHour) shift menu, per the spec's exact formulas:
+
+- `staffedHours(s)` = Σ over the week of `headcount(day, s) × s.lengthHours`.
+- `requiredHours(s)`/`floorSum(s)`/`ceilingSum(s)`/`boardingNeed(s)` — all computed the SAME
+  way: iterate all 168 global hours, split each hour's value evenly across whichever shifts
+  `coveringCellsByGlobalHour` says structurally cover it (the exact attribution convention
+  boarding's priority ranking and the backlog per-shift diagnostics already use — no new
+  convention invented). This means a swing/overlapping shift genuinely shares an hour's
+  requirement/floor/ceiling/boarding-need with whichever other shift(s) cover the same hour,
+  rather than double-counting it.
+- Arrivals verdict: `staffedHours(s) < floorSum(s)` → understaffed; `> ceilingSum(s)` →
+  overstaffed; else appropriate — against the SAME per-hour peer band
+  (`bandFloorHourly`/`bandCeilingHourly`) already driving the heatmap's color, not a new
+  threshold.
+- Boarding coverage (only when boarding data is present): `surplus(s) = max(0, staffedHours(s)
+  - requiredHours(s))`; `boardingCovered(s) = surplus(s) >= boardingNeed(s)`.
+
+**Merge logic:** shifts are grouped by the tuple `(arrivalsStatus, boardingCovered)` — or
+`arrivalsStatus` alone when boarding is absent — preserving first-appearance (startHour) order,
+with staffed/required/surplus/boardingNeed hours SUMMED across each group's members. Merging is
+NOT restricted to adjacent shifts — a 3-shift menu where Day and Night land on the same verdict
+while Evening differs merges Day+Night into one sentence even though Evening sits between them
+in the menu (tested directly, `hiddenBoarding.test.ts`). A zero-current-staffing 3-shift menu
+correctly collapses to ONE merged "understaffed" sentence, not three near-duplicates.
+
+**Sentence generation** moved to `lib/narrative.ts`'s new `shiftDiagnosticSentence` (replacing
+the retired `hiddenBoardingNightSentence`/`hiddenBoardingDaySentence`): "{Shift name(s)}
+{is/are} {understaffed/overstaffed/staffed about right} for arrivals on an average shift,
+{and/but} {does/doesn't or do/don't} have enough nursing hours left over to also cover
+{its/their} boarding load," with a conditional trailing clause only when `arrivalsStatus ===
+'overstaffed'` (either "...and those extra hours are enough to cover it" or "The extra N hours
+{it carries/they carry} don't fully close the M hours of boarding demand there"). The
+"and"/"but" conjunction is `'and'` when `boardingCovered` matches what you'd expect from the
+arrivals verdict (overstaffed-and-covers, or not-overstaffed-and-doesn't-cover) and `'but'` for
+the surprising combination — a judgment call, not something the spec's template literally
+resolved. **Bug caught by the actual Playwright screenshot review** (not by unit tests, which
+used hand-built fixtures that happened not to exercise it): the do/does/doesn't verb agreement
+didn't account for plural groups ("Day and Swing... doesn't have" — wrong). Fixed to
+`do`/`don't` for `labels.length > 1`, `does`/`doesn't` for singular — this is exactly why the
+checklist's screenshot-review step exists, not a redundant formality.
+
+`pptxExport.ts`'s boarding slide (outside Panel 1's own scope, but sharing the retired function)
+was updated to call `computePerShiftDiagnostic` + join every group's `shiftDiagnosticSentence`
+— a minimal compiling fix, not a re-verified PPTX content review.
+
+### §5 — queue section: actual curve, average-day sentence, honest framing
+
+**§5a — actual, not cyclical, curve.** Panel 1's `VisualFrame` views now pass
+`computeBacklog(currentStaffingGrid, thatToggle'sDemandCurve, sortedShiftMenu,
+bandCeilingHourly).backlog` (the ACTUAL curve) as `queueDepth168` for every toggle — a
+DELIBERATE, SCOPED EXCEPTION to how the rest of the results page treats the queue strip
+(elsewhere it isolates shape from size via the CYCLICAL curve). `VisualFrame.tsx`'s
+`queueDepth168` doc comment was updated to name this exception explicitly (the only
+`VisualFrame` edit this pass made beyond §6's toggle removal) — the component's OWN logic is
+completely unchanged; it just renders whichever curve it's handed. Per the spec's own
+literal instruction, EVERY toggle pairs the grid's actual full capacity with that toggle's own
+demand curve (`hourlyRequirement` / `boardingCurve` / `combinedRequirement`) — the boarding
+toggle's queue strip is NOT paired with `spareForBoarding` (the derived quantity its
+demand/capacity chart uses), it's paired with the same real current-staffing capacity as every
+other toggle. Three separate `computeBacklog` calls now exist (`backlogArrivals`/
+`backlogBoarding`/`backlogCombined`) where one shared call existed before.
+
+**§5b — average-day build/peak/clear sentence, replacing named-specific-days.** New local
+helpers in `Panel1.tsx` (not exported — page-specific prose, same pattern as the file's
+existing `sortByStartHour`/`fmtHour`):
+- `findBuildHour` — first hour, walking forward circularly from the day's own low point, where
+  the curve starts a SUSTAINED (2-hour) climb away from that low (not just any single-hour
+  uptick).
+- Peak — plain `indexOf(max(...))` on the averaged 24-point curve, plus the nurse-hours value
+  there.
+- `findClearHour` — reuses `engine/backlogModel.ts`'s exported `caughtUpThresholdForHour`
+  (~10% of that hour's own averaged requirement) applied to the averaged curve — the SAME
+  relative "caught up" logic already used elsewhere, not a new absolute threshold. Returns
+  `null` (never a fabricated clear time) if the curve never returns to near-baseline before
+  wrapping back to the peak.
+- **Weekday/weekend split** — `averageOverDays` computes the same averaged-day curve
+  separately for Mon-Fri (`WEEKDAY_DAYS`) and Sat-Sun (`WEEKEND_DAYS`, day-0-is-Sunday engine
+  convention). Split into two sentences when `PEAK_HOUR_DIFF_THRESHOLD_HOURS = 3` (circular
+  hour distance) OR `PEAK_MAGNITUDE_DIFF_FRACTION = 0.4` (40%) is exceeded — both named,
+  exported-as-local constants, explicitly flagged in code comments as **tunable display
+  heuristics, first-pass defaults per the spec's own framing, not load-bearing math** — same
+  convention as `BACKLOG_CAUGH_UP_ABSOLUTE_FLOOR`/`COLOR_EASE_GAMMA`/etc. elsewhere in this
+  codebase. Untuned/unvalidated against real department data this session; revisit if a real
+  case misfires per Ben's own "tune later if it misfires" framing.
+- The prose (§5b/§5c) always describes the ARRIVALS-toggle actual backlog
+  (`backlogArrivals.backlog`), regardless of which `VisualFrame` toggle is currently active —
+  it's a static description of "the department's real situation," not toggle-reactive. Only
+  the visual frame's queue STRIP changes per toggle (§5a).
+
+**§5c — callout rewrite.** The old "nurses don't let a line form, they go faster" claim (which
+implied the model doesn't already account for bounded catch-up capacity) is replaced with the
+spec's exact short text naming this as a modeled estimate, not measured wait-room data, that
+already assumes bounded catch-up absorption — accurate as of the 2026-07-28 capacity-elasticity
+backlog model (`engine/backlogModel.ts`'s `spare`/`stretch` terms, see
+`.claude/rules/engine-solver.md`'s matching dated section). Kept in the surrounding prose
+(`.banner.banner-info.queue-honesty-callout`, unchanged class), not on the chart.
+
+**§5d — minimal chart labeling, added to the SHARED `VisualFrame.tsx`.** Judgment call, flagged:
+the spec's ask (a compact Demand/Capacity legend, one "Nurse-hours" y-axis label, a handful of
+x-axis ticks, a one-line "Your current backlog" queue-strip label) is inherently a
+`VisualFrame`-level change since Panel 1's frame IS the shared component — there's no way to
+add this labeling "for Panel 1 only" without either forking the component or editing the shared
+one. Read this as in-scope ("strictly required" to satisfy §5d for Panel 1) rather than a
+drift into shared-mechanics territory: it's purely additive/presentational (no data, toggle, or
+layout-logic change), applies sensibly to every current/future `VisualFrame` consumer (Panels
+2-5 too), and the queue-strip label is skipped automatically when `queueDepth168` is `null`
+(Panel 3's deliberately blank strip is unaffected). New CSS: `.frame-chart-legend`/
+`.frame-legend-item`/`.frame-legend-swatch*`/`.frame-queue-label` in `App.css`. `xAxisTicks`
+returns 4 fixed clock points (12a/6a/12p/6p) for the 24-point average-day view, one per
+day-of-week (engine day-0-is-Sunday order) for the 168-point full-week view.
+
+### §6 — "Effective wHPPV" toggle dropped
+
+Removed from `Panel1.tsx`'s `views` array entirely (was the 4th of 4 toggles, now Panel 1 has
+exactly 3: Arrivals/Boarding/Combined) along with its `effectiveWhppv168` capacity-inversion
+computation and the flat-`wHppvTarget`-as-demand line. No shared `VisualFrame`/`WhppvHeatmap`
+mechanics needed to change for this — the toggle was purely a 4th entry in Panel 1's own
+`views` list. `e2e/panel1-2.spec.ts` was updated to assert the toggle's absence
+(`getByRole('tab', { name: 'Effective wHPPV' })` has count 0) instead of clicking it.
+
+### §7 — heatmap per-shift split cells
+
+New optional `WhppvHeatmapCell.perShift?: Array<{ label: string; headcount: number }>` field
+(`components/WhppvHeatmap.tsx`). When a global hour is covered by more than one shift (common
+for this department's 3x12 overlapping menu, not an edge case), the cell renders each covering
+shift's own headcount joined by `+` (e.g. "7+4"), ordered by each shift's `startHour` — reusing
+`coveringCellsByGlobalHour` for the per-hour attribution, same convention as everywhere else.
+Single-shift hours render the plain `onDuty` number, unchanged. The cell's hover tooltip always
+states the total PLUS the full labeled breakdown (`cellTitle`), regardless of what the cell
+text itself shows.
+
+**Judgment call, flagged:** the per-shift breakdown (`buildPerShiftBreakdown` in `Panel1.tsx`)
+is only computed and passed for the Arrivals and Combined toggle views, whose `onDuty168` is
+literal current-staffing headcount (`currentCapacity`, from `fullWeekCapacity`). The Boarding
+toggle's `onDuty168` is `spareForBoarding` (a DERIVED quantity — current capacity minus
+arrivals need) with no well-defined "each shift's own headcount" decomposition, so it's left
+without a `perShift` breakdown (falls back to the plain summed number, unchanged behavior) —
+not a bug, a scoping decision since a per-shift split of a derived spare-capacity number isn't
+a well-defined concept the way a literal headcount split is.
+
+Per Ben's own framing ("try it, and if it reads as too busy once rendered, he'll ask to revert
+to a plain sum") — verified via Playwright screenshot
+(`e2e/screenshots/panel1-copy-revision-current-3shift.png` and a closeup crop reviewed inline
+this session): split cells ("3+3" during the Day/Swing overlap, "3+10" during the Swing/Night
+overlap) render legibly against the existing color scale, with shift-boundary rows (DAY/
+SWING/NIGHT labels) making the overlap visually obvious. Not reverted this session; revisit if
+Ben asks after seeing it live.
+
+### §8 — heatmap legend rewrite
+
+Replaced the old three-swatch (leaner/typical/richer) row and its "against each hour's OWN
+typical range" line with the spec's exact new prose: what a cell shows (split by shift when
+more than one covers that hour), what red/blue mean (phrased relative to the per-hour band,
+never a fixed wHPPV number, since the band varies by hour), and a conditional "! Under the ENA
+on-duty floor" line — now rendered ONLY when `cells.some((c) => c.belowFloor)`, verified via
+Playwright to actually disappear on a zero-flagged-cell dataset AND actually appear on a
+flagged one (`lowVolumeFloorBinds` profile, both states screenshotted this session, temp specs
+not committed). **Confirmed, not silently assumed:** the underlying color mechanism
+(`cellVisual` in `WhppvHeatmap.tsx`) already matched the new legend's description exactly —
+per-hour band (each cell carries its own `bandFloor`/`bandCeiling`), asymmetric ramp
+(`LEAN_FULL_SATURATE_RATIO`/`RICH_CLAMP_MULTIPLE`), gamma-eased curve (subtle near the band,
+more saturated further out) — no color-math changes were needed, this was copy-only, per the
+spec's own instruction to check before assuming that.
+
+### Verification
+
+`npm run build`/`npm test` (227 vitest tests, up from 219 — new `hiddenBoarding.test.ts`
+describe block for `computePerShiftDiagnostic`, extended `narrative.test.ts`)/`oxlint` (only
+the pre-existing `StepIndicator.tsx` warning)/`npm run test:e2e` (19 e2e tests, up from 16 —
+new `e2e/panel1-copy-revision.spec.ts` covering both current-staffing-present, a 2-shift AND a
+3-shift menu, and current-staffing-absent states) all clean. `e2e/panel1-2.spec.ts` updated for
+the dropped toggle. Playwright screenshots reviewed inline this session (full-page + closeup
+crops of the prose panel, the heatmap with per-shift split cells, and both ENA-floor-legend
+states) — the plural-verb-agreement bug (§4) was caught this way, not by unit tests alone,
+which is the reason this verification step exists.
+
+
+**Follow-up (2026-07-28, same day, Ben's direct ask):** the plain boarding-ratio sentence §2
+introduced ("Medical boarding is staffed at 1:X, behavioral-health boarding at 1:Y") was
+removed from Panel 1 entirely — Ben found it added nothing on its own once the RN-
+understatement callout was already gone. `boardingRatioTarget`/`bhBoardingRatioTarget` were
+dropped from `Panel1.tsx`'s store destructure as dead code. The ratios themselves are still
+set and visible on `ShiftMenuStep.tsx`'s boarding-ratio card (unchanged) — this is a Panel-1-
+display-only removal, not a data/config change. `npm run build`/`npm test`/`oxlint`/`npm run
+test:e2e` all clean after the removal.

@@ -4,14 +4,12 @@
 // engine-solver.md's "Budget-capped trim" section for the full history) -> 5.6 department-
 // level ENA floor check.
 import type { Grid, ShiftDef, ShortfallEntry } from './types';
-import { DEFAULTS } from './types';
 import {
-  backlogHourStep,
+  backlogHourStepHours,
   backlogRecurrence,
   longestStreakAboveThreshold,
   caughtUpThresholds168,
   rescaleCapacityToRequirementTotal,
-  type BacklogRecurrenceParams,
 } from './backlogModel';
 
 // ---------------------------------------------------------------------------------------
@@ -150,14 +148,18 @@ function solveFullCoverageWeek(hourlyRequirement168: number[], shifts: ShiftDef[
  * Full-week baseline backlog, straight from `engine/backlogModel.ts`'s `backlogRecurrence` —
  * PR B removed the circular-import problem that used to force a hand-duplicated local copy of
  * this loop, so this is now a thin wrapper that just discards `carriedIn` (only `candidateCutCost`'s
- * per-candidate windowed simulation needs the single-step primitive, `backlogHourStep`, below).
+ * per-candidate windowed simulation needs the single-step primitive, `backlogHourStepHours`,
+ * below).
  *
  * 2026-07-26 PR E (`RESULTS_COMPREHENSION_SPEC_2026-07-26.md` §4a, engine-solver.md's PR E
  * section): callers now pass the CYCLICAL (size-rescaled) capacity here, not raw capacity —
  * see the callers below for why.
+ *
+ * 2026-07-28 (ninth shape): `arrivals168`/`floorWhppv` replace the retired `bandCeilingHourly168`
+ * — see backlogModel.ts's header for the visits-based formula.
  */
-function backlogFromCapacity(capacity: number[], hourlyRequirement168: number[], params: BacklogRecurrenceParams): number[] {
-  return backlogRecurrence(capacity, hourlyRequirement168, params).backlog;
+function backlogFromCapacity(capacity: number[], arrivals168: number[], floorWhppv: number): number[] {
+  return backlogRecurrence(capacity, arrivals168, floorWhppv).backlog;
 }
 
 // A single headcount-unit cut only ever perturbs capacity within the (at most 24) real hours
@@ -166,19 +168,18 @@ function backlogFromCapacity(capacity: number[], hourlyRequirement168: number[],
 // recompute per candidate — the O(168) recompute still happens, but only ONCE per outer trim
 // iteration, never per candidate.
 //
-// 2026-07-26 PR B CAVEAT (flagged, not silently resolved — see the PR B report): the OLD
-// single-decay model's tail vanished fast (0.85^24 ≈ 0.018), so a 48-hour window was a
-// comfortably negligible-tail approximation. The new `backlogAbandonRate = 0.03` decays MUCH
-// slower on its own (0.97^48 ≈ 0.23) — pure attrition alone does NOT make the tail negligible
-// within this window anymore; only nearby excess capacity (via `maxDrainFraction`/
-// `recoveryEfficiency`) drains it faster than that. In a genuinely chronic, no-recovery-nearby
-// stretch, this window can meaningfully UNDER-count a cut's true marginal cost. This is a
-// judgment call left AS-IS for this PR (widening the window is a bigger, separate performance/
-// accuracy tradeoff, not something the spec asked this PR to touch) — every candidate compared
-// within the same outer iteration is truncated by roughly the same proportional amount, so the
-// RELATIVE ranking (all `trimWeekToBudget` actually needs) is less affected than the absolute
-// magnitude, but this is a real approximation gap, not a proven-negligible one. Revisit if a
-// realistic scenario shows the trim making a visibly wrong call because of it.
+// 2026-07-28 CAVEAT (ninth shape — updated, the prior abandonment-model caveat here no longer
+// applies since that model was already retired): the visits-based recurrence has NO decay term
+// at all — a chronic hole that never crosses a genuinely well-staffed (capacity >= floor-pace-
+// implied demand) hour persists indefinitely rather than fading. A 48-hour window can therefore
+// meaningfully UNDER-count a cut's true marginal cost in a genuinely chronic, no-recovery-nearby
+// stretch (the perturbation's effect simply never gets a chance to clear within the window). This
+// is a judgment call left AS-IS (widening the window is a bigger, separate performance tradeoff,
+// not something this rewrite was scoped to touch) — every candidate compared within the same
+// outer iteration is truncated by roughly the same proportional amount, so the RELATIVE ranking
+// (all `trimWeekToBudget` actually needs) is less affected than the absolute magnitude, but this
+// is a real approximation gap, not a proven-negligible one. Revisit if a realistic scenario shows
+// the trim making a visibly wrong call because of it.
 const BACKLOG_SIM_WINDOW_HOURS = 48;
 
 // ---------------------------------------------------------------------------------------
@@ -289,14 +290,21 @@ export interface CandidateCutCost {
 const VOLATILITY_COST_WEIGHT = 1;
 
 // 2026-07-26 PR E (§4a): the severity simulation below runs against CYCLICAL capacity (size-
-// rescaled so its weekly total matches requirement's own total) rather than raw capacity — a
-// FIXED-budget trim can only ever redistribute hours, never add to the total, so its own cost
-// signal must be blind to whether the total itself is short (that's a budget/sizing question,
-// answered elsewhere — the funding-ask surface, §7 synthesis) and sensitive only to shape. The
-// FLOOR-BREACH check stays against RAW capacity (a real physical "can I actually staff this
-// low" constraint, not a shape concept) — `cyclicalCapacity`/`capacityScale` are ONLY used for
-// the severity-delta simulation. `capacityScale` converts a real 1-headcount-unit cut into its
-// size-normalized equivalent (`scale` nurse-hours) for that simulation.
+// rescaled so its weekly total matches the recurrence's own requirement-equivalent total)
+// rather than raw capacity — a FIXED-budget trim can only ever redistribute hours, never add
+// to the total, so its own cost signal must be blind to whether the total itself is short
+// (that's a budget/sizing question, answered elsewhere — the funding-ask surface, §7
+// synthesis) and sensitive only to shape. The FLOOR-BREACH check stays against RAW capacity (a
+// real physical "can I actually staff this low" constraint, not a shape concept) —
+// `cyclicalCapacity`/`capacityScale` are ONLY used for the severity-delta simulation.
+// `capacityScale` converts a real 1-headcount-unit cut into its size-normalized equivalent
+// (`scale` nurse-hours) for that simulation.
+//
+// 2026-07-28 (ninth shape): `arrivals168`/`floorWhppv` replace the retired
+// `bandCeilingHourly168` as the recurrence's own inputs — see backlogModel.ts's header for the
+// visits-based formula and the no-compression degenerate case (boarding/combined curves pass
+// `floorWhppv = NO_COMPRESSION_FLOOR_WHPPV`, `arrivals168` = the demand curve itself).
+// `hourlyRequirement168` is UNCHANGED in role — severity normalization only.
 export function candidateCutCost(
   day: number,
   shift: ShiftDef,
@@ -307,7 +315,8 @@ export function candidateCutCost(
   hourlyRequirement168: number[],
   protectedFloorHourly168: number[],
   demandVolatilityHourly168: number[],
-  params: BacklogRecurrenceParams
+  arrivals168: number[],
+  floorWhppv: number
 ): CandidateCutCost {
   const perturbedHours = shiftGlobalHours(day, shift);
   const perturbedSet = new Set(perturbedHours);
@@ -337,7 +346,7 @@ export function candidateCutCost(
     const g = (gStart + i) % 168;
     const req = hourlyRequirement168[g] ?? 0;
     const cap = cyclicalCapacity[g] - (perturbedSet.has(g) ? capacityScale : 0);
-    const newBacklog = backlogHourStep(prior, cap, req, params).backlog;
+    const newBacklog = backlogHourStepHours(prior, cap, arrivals168[g] ?? 0, floorWhppv).backlog;
 
     const sevBefore = severity(baselineBacklog[g] ?? 0, req);
     const sevAfter = severity(newBacklog, req);
@@ -365,12 +374,6 @@ export function candidateCutCost(
  * `protectedFloorHourly168` is the UNCLAMPED floor (PR C change 4) — pass
  * `EngineResult.protectedFloorHourly`, NOT `bandFloorHourly` (the clamped reporting curve).
  */
-const DEFAULT_BACKLOG_PARAMS: BacklogRecurrenceParams = {
-  abandonRate: DEFAULTS.backlogAbandonRate,
-  recoveryEfficiency: DEFAULTS.backlogRecoveryEfficiency,
-  maxDrainFraction: DEFAULTS.backlogMaxDrainFraction,
-};
-
 // PR D (SOLVER_REALISM_SPEC_2026-07-26.md, change 1): `trimWeekToBudget` already walks from
 // full coverage down to `capHours` one cheapest-cut-first, so recording state at each cut is
 // nearly free — reading that log BACKWARDS gives marginal value in decreasing order, a genuine
@@ -380,18 +383,26 @@ const DEFAULT_BACKLOG_PARAMS: BacklogRecurrenceParams = {
 // called once per outer iteration with the state BEFORE that iteration's cut is applied — i.e.
 // the state AFTER all PRIOR cuts. `trimWeekToBudgetWithTrajectory` below is the only caller
 // that passes a hook.
+// 2026-07-28 (ninth shape): `arrivals168`/`floorWhppv` replace the retired
+// `bandCeilingHourly168` throughout this trim — see backlogModel.ts's header. The rescale
+// target (`requirementEquivalent168`) is the recurrence's OWN floor-pace-implied hours curve
+// (`arrivals168 * floorWhppv`), not `hourlyRequirement168` — see
+// `rescaleCapacityToRequirementTotal`'s header for why the two must not be conflated.
 function trimWeekToBudgetCore(
   hourlyRequirement168: number[],
   protectedFloorHourly168: number[],
   demandVolatilityHourly168: number[],
+  arrivals168: number[],
+  floorWhppv: number,
   shifts: ShiftDef[],
   fullCoverageGrid: Grid,
   capHours: number,
-  params: BacklogRecurrenceParams,
   onBeforeCut?: (capacity: number[], baselineBacklog: number[], scheduledHours: number) => void
 ): Grid {
   const grid: Grid = {};
   for (let day = 0; day < 7; day++) grid[day] = { ...fullCoverageGrid[day] };
+
+  const requirementEquivalent168 = arrivals168.map((a) => (a ?? 0) * floorWhppv);
 
   const scheduledHours = () =>
     Object.values(grid).reduce(
@@ -405,13 +416,14 @@ function trimWeekToBudgetCore(
     const capacity = fullWeekCapacity(grid, shifts);
     // PR E (§4a): the trim's OWN cost signal must be size-blind (it can only ever
     // redistribute a fixed total, never add to it) — rescale capacity so its weekly total
-    // matches requirement's own total before simulating, so what's left to score is purely
-    // shape. See candidateCutCost's header and engine-solver.md's PR E section.
+    // matches the recurrence's own requirement-equivalent total before simulating, so what's
+    // left to score is purely shape. See candidateCutCost's header and engine-solver.md's PR
+    // E section.
     const { rescaled: cyclicalCapacity, scale: capacityScale } = rescaleCapacityToRequirementTotal(
       capacity,
-      hourlyRequirement168
+      requirementEquivalent168
     );
-    const baselineBacklog = backlogFromCapacity(cyclicalCapacity, hourlyRequirement168, params);
+    const baselineBacklog = backlogFromCapacity(cyclicalCapacity, arrivals168, floorWhppv);
     onBeforeCut?.(capacity, baselineBacklog, hours);
 
     let bestDay = -1;
@@ -432,7 +444,8 @@ function trimWeekToBudgetCore(
           hourlyRequirement168,
           protectedFloorHourly168,
           demandVolatilityHourly168,
-          params
+          arrivals168,
+          floorWhppv
         );
         if (
           cost < bestCost - 1e-9 ||
@@ -458,19 +471,21 @@ export function trimWeekToBudget(
   hourlyRequirement168: number[],
   protectedFloorHourly168: number[],
   demandVolatilityHourly168: number[],
+  arrivals168: number[],
+  floorWhppv: number,
   shifts: ShiftDef[],
   fullCoverageGrid: Grid,
-  capHours: number,
-  params: BacklogRecurrenceParams = DEFAULT_BACKLOG_PARAMS
+  capHours: number
 ): Grid {
   return trimWeekToBudgetCore(
     hourlyRequirement168,
     protectedFloorHourly168,
     demandVolatilityHourly168,
+    arrivals168,
+    floorWhppv,
     shifts,
     fullCoverageGrid,
-    capHours,
-    params
+    capHours
   );
 }
 
@@ -506,10 +521,11 @@ export function trimWeekToBudgetWithTrajectory(
   hourlyRequirement168: number[],
   protectedFloorHourly168: number[],
   demandVolatilityHourly168: number[],
+  arrivals168: number[],
+  floorWhppv: number,
   shifts: ShiftDef[],
   fullCoverageGrid: Grid,
-  capHours: number,
-  params: BacklogRecurrenceParams = DEFAULT_BACKLOG_PARAMS
+  capHours: number
 ): { grid: Grid; trajectory: MarginalCurvePoint[] } {
   const fullCoverageHours = Object.values(fullCoverageGrid).reduce(
     (acc, hc) => acc + shifts.reduce((a, s) => a + (hc[s.id] ?? 0) * s.lengthHours, 0),
@@ -520,10 +536,11 @@ export function trimWeekToBudgetWithTrajectory(
     hourlyRequirement168,
     protectedFloorHourly168,
     demandVolatilityHourly168,
+    arrivals168,
+    floorWhppv,
     shifts,
     fullCoverageGrid,
     capHours,
-    params,
     (_capacity, baselineBacklog, scheduledHoursBefore) => {
       // PR E (b): relative per-hour threshold, not the retired flat constant — see
       // backlogModel.ts's header. `baselineBacklog` here is the CYCLICAL curve (PR E §4a).
@@ -638,6 +655,8 @@ export function solveShiftFit(
   hourlyRequirement168: number[],
   protectedFloorHourly168: number[],
   demandVolatilityHourly168: number[],
+  arrivals168: number[],
+  floorWhppv: number,
   shifts: ShiftDef[],
   weeklyBudgetHours: number,
   hoursBudgetTolerance: number,
@@ -657,6 +676,8 @@ export function solveShiftFit(
     hourlyRequirement168,
     protectedFloorHourly168,
     demandVolatilityHourly168,
+    arrivals168,
+    floorWhppv,
     shifts,
     fullCoverageGrid,
     capHours

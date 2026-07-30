@@ -1,6 +1,5 @@
 import { useMemo } from 'react';
 import { useStore } from '../../store';
-import { DEFAULTS } from '../../engine/types';
 import type { ShiftDef, Grid } from '../../engine/types';
 import { fullWeekCapacity } from '../../engine/solver';
 import { recommendWeeklyBoardingGrid } from '../../engine/boarding';
@@ -121,12 +120,6 @@ export function Panel5() {
   const edCapacity = fullWeekCapacity(edGrid, sortedShiftMenu);
   const holdCapacity = fullWeekCapacity(holdGrid, sortedShiftMenu);
 
-  const backlogParams = {
-    abandonRate: inputs.lwbsRate ?? DEFAULTS.backlogAbandonRate,
-    recoveryEfficiency: DEFAULTS.backlogRecoveryEfficiency,
-    maxDrainFraction: DEFAULTS.backlogMaxDrainFraction,
-  };
-
   const combined = boarding?.cellBoardingRnHours ?? new Array(168).fill(0);
   const medWeekly = boarding?.medicalWeeklyRnHours ?? null;
   const bhWeekly = boarding?.bhWeeklyRnHours ?? null;
@@ -134,7 +127,7 @@ export function Panel5() {
   const medBoarding168 = combined.map((v) => v * medFraction);
   const bhBoarding168 = combined.map((v) => v * (1 - medFraction));
 
-  const sandbox = computeSandbox(result.hourlyRequirement, medBoarding168, bhBoarding168, arrivals, edCapacity, holdCapacity, backlogParams);
+  const sandbox = computeSandbox(result.hourlyRequirement, medBoarding168, bhBoarding168, arrivals, edCapacity, holdCapacity);
 
   const residualCapacity = edCapacity; // ED nurses are the one pooled resource against residualDemand
   const cells = buildCells(residualCapacity, sandbox.residualDemand, arrivals);

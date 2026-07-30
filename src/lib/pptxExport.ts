@@ -21,15 +21,15 @@
 // visibly the same product: a title slide with a simple native-shape mark, one accent color,
 // and a matching section-divider slide before each of the three main sections.
 import PptxGenJS from 'pptxgenjs';
-import { DAY_LABELS, DEFAULTS, type EngineInputs, type EngineResult, type Grid, type ShiftDef } from '../engine/types';
-import { computeBacklog, computeHiddenBoardingDiagnostic } from '../engine';
+import { DAY_LABELS, type EngineInputs, type EngineResult, type Grid, type ShiftDef } from '../engine/types';
+import { computeBacklog, computePerShiftDiagnostic } from '../engine';
 import { fullWeekCapacity } from '../engine/solver';
 import { recommendWeeklyBoardingGrid } from '../engine/boarding';
 import { computeSandbox } from '../engine/sandbox';
 import { lookupWhppvBand } from './edbaLookup';
 import { averageDay } from './averageDay';
 import { buildConstantsTable } from './constantsMetadata';
-import { hiddenBoardingNightSentence, hiddenBoardingDaySentence } from './narrative';
+import { shiftDiagnosticSentence } from './narrative';
 
 const ACCENT = '7C3AED';
 const ACCENT_BG = 'F5F0FF';
@@ -163,18 +163,25 @@ function currentStaffingSlides(pptx: PptxGenJS, result: EngineResult, currentSta
   headlineSlide.addNotes('The demand-vs-capacity chart mirrors Panel 1 on the results page, averaged across the week.');
 
   if (result.boarding) {
-    const hidden = computeHiddenBoardingDiagnostic(result.hourlyRequirement, currentStaffingGrid, sortedShiftMenu, result.boarding.cellBoardingRnHours);
+    const perShift = computePerShiftDiagnostic(
+      result.hourlyRequirement,
+      currentStaffingGrid,
+      sortedShiftMenu,
+      result.bandFloorHourly,
+      result.bandCeilingHourly,
+      result.boarding.cellBoardingRnHours
+    );
     const slide = pptx.addSlide();
     slide.addText('The second demand: boarding', { x: 0.5, y: 0.3, w: 9, h: 0.6, fontSize: 18, bold: true, color: ACCENT });
     const consumed = result.lostProductivity?.wHppvConsumedByBoarding ?? 0;
     slide.addText(
-      `Boarding demands the equivalent of ${consumed.toFixed(2)} wHPPV. ${hiddenBoardingNightSentence(hidden.night, hidden.boardingDataPresent)} ${hiddenBoardingDaySentence(hidden.day, hidden.boardingDataPresent)}`,
+      `Boarding demands the equivalent of ${consumed.toFixed(2)} wHPPV. ${perShift.groups.map(shiftDiagnosticSentence).join(' ')}`,
       { x: 0.5, y: 1.1, w: 9, h: 3, fontSize: 13 }
     );
     slide.addNotes('Effective wHPPV is never compared to the peer band — peer figures include their own boarding load.');
   }
 
-  const backlog = computeBacklog(currentStaffingGrid, result.hourlyRequirement, sortedShiftMenu);
+  const backlog = computeBacklog(currentStaffingGrid, arrivals, result.hourlyRequirement, sortedShiftMenu, result.floorWhppv);
   const structuralShort = -backlog.structuralFloorMin;
   const backlogSlide = pptx.addSlide();
   backlogSlide.addText('Where your staffing runs lean', { x: 0.5, y: 0.3, w: 9, h: 0.6, fontSize: 18, bold: true, color: ACCENT });
@@ -237,12 +244,7 @@ function sandboxSlides(
   const medFraction = medWeekly !== null && bhWeekly !== null && medWeekly + bhWeekly > 0 ? medWeekly / (medWeekly + bhWeekly) : 1;
   const medBoarding168 = combined.map((v) => v * medFraction);
   const bhBoarding168 = combined.map((v) => v * (1 - medFraction));
-  const backlogParams = {
-    abandonRate: inputs.lwbsRate ?? DEFAULTS.backlogAbandonRate,
-    recoveryEfficiency: DEFAULTS.backlogRecoveryEfficiency,
-    maxDrainFraction: DEFAULTS.backlogMaxDrainFraction,
-  };
-  const sandbox = computeSandbox(result.hourlyRequirement, medBoarding168, bhBoarding168, arrivals, edCapacity, holdCapacity, backlogParams);
+  const sandbox = computeSandbox(result.hourlyRequirement, medBoarding168, bhBoarding168, arrivals, edCapacity, holdCapacity);
   const unmetTotal = sandbox.unmet.reduce((a, b) => a + b, 0);
   const holdSurplusTotal = sandbox.holdSurplus.reduce((a, b) => a + b, 0);
 

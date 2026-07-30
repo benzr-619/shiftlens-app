@@ -10,8 +10,9 @@ import { computeBoarding } from './boarding';
 import { recomputeFromGrid, solveFullCoverageWeek, trimWeekToBudgetWithTrajectory, findMarginalKneePoint } from './solver';
 import { solveShiftFitWithBacklogFeedback } from './backlogFeedback';
 import { deriveCohortBandFloor, deriveDemandVolatilityHourly, applyVolatilityBuffer } from './demandBand';
-import { summarizeBacklogSeverity, computeBacklog } from './backlog';
-import type { BacklogRecurrenceParams } from './backlogModel';
+import { summarizeBacklogSeverity } from './backlog';
+import { reallocateHoursExact } from './exactReallocation';
+import { lookupWhppvBand } from '../lib/edbaLookup';
 import { DEFAULTS, type EngineInputs, type EngineResult, type Grid, type ReconciliationResult } from './types';
 
 export * from './types';
@@ -38,24 +39,13 @@ export {
   type BacklogSeveritySummary,
 } from './backlog';
 export { computeBandFloorViolations, type BandFloorResult } from './bandFloor';
-export { computeHiddenBoardingDiagnostic, type HiddenBoardingDiagnostic, type HiddenBoardingBlock } from './hiddenBoarding';
+export { computePerShiftDiagnostic, type PerShiftDiagnostic, type ShiftDiagnosticGroup, type ArrivalsStatus } from './hiddenBoarding';
 export { computeSynthesis, type SynthesisResult, computeCombinedReallocation, type CombinedReallocationResult } from './synthesis';
 export { searchFlexibleMenus, NO_FLEX, type FlexAxes, type MenuCandidate } from './flexMenu';
 export { computePreBedRequestValidation, type PreBedRequestValidation } from './preBedRequestValidation';
 export { solveShiftFitWithBacklogFeedback, type BacklogFeedbackDiagnostics, type BacklogFeedbackResult } from './backlogFeedback';
-
-// PR E (RESULTS_COMPREHENSION_SPEC_2026-07-26.md §4d): abandonRate becomes measurable from the
-// department's own LWBS rate when provided; absent -> the DEFAULTS cohort assumption.
-// recoveryEfficiency/maxDrainFraction stay at their DEFAULTS values — those two are not (yet)
-// plausibly measurable from a real ED's own data, unlike abandonRate. Shared by `compute()` and
-// `computeScenarioB` (PR F) so both use identical backlog physics for the same department.
-function resolveBacklogParams(inputs: EngineInputs): BacklogRecurrenceParams {
-  return {
-    abandonRate: inputs.lwbsRate ?? DEFAULTS.backlogAbandonRate,
-    recoveryEfficiency: DEFAULTS.backlogRecoveryEfficiency,
-    maxDrainFraction: DEFAULTS.backlogMaxDrainFraction,
-  };
-}
+export { NO_COMPRESSION_FLOOR_WHPPV } from './backlogModel';
+export { reallocateHoursExact, type ExactReallocationResult } from './exactReallocation';
 
 /** The single callable engine function: (arrivals, wHPPV target, shift menu, optional inputs) -> full result. */
 export function compute(inputs: EngineInputs): EngineResult {
@@ -64,7 +54,7 @@ export function compute(inputs: EngineInputs): EngineResult {
   const hoursBudgetTolerance = inputs.hoursBudgetTolerance ?? DEFAULTS.hoursBudgetTolerance;
   const boardingRatioTarget = inputs.boardingRatioTarget ?? DEFAULTS.boardingRatioTarget;
   const enaFloor = inputs.enaFloor ?? DEFAULTS.enaFloor;
-  const backlogParams = resolveBacklogParams(inputs);
+  const hoursPerFteAnnual = inputs.hoursPerFteAnnual ?? DEFAULTS.hoursPerFteAnnual;
 
   const annualVisits = inputs.annualVisits ?? deriveAnnualVisits(inputs.arrivals);
   const annualBudget = annualCoreRnHoursBudget(annualVisits, inputs.wHppvTarget);
@@ -106,6 +96,11 @@ export function compute(inputs: EngineInputs): EngineResult {
   const protectedFloorHourly = applyVolatilityBuffer(cohortBandFloor, demandVolatilityHourly, hourlyRequirement);
   const bandFloorHourly = protectedFloorHourly.map((v, i) => Math.min(v, hourlyRequirement[i]));
 
+  // 2026-07-28 (ninth shape) — the single flat department-level peer-cohort p25 wHPPV the
+  // visits-based backlog recurrence compresses down to (never past). See EngineResult's
+  // `floorWhppv` field doc and backlogModel.ts's header for the full formula.
+  const floorWhppv = lookupWhppvBand(annualVisits).p25Whppv;
+
   const weeklyBudgetHours = annualBudget / 52;
 
   // 2026-07-26 (Phase 2b, BACKLOG_FEEDBACK_AND_VARIANCE_SPEC_2026-07-25.md): the primary
@@ -121,12 +116,12 @@ export function compute(inputs: EngineInputs): EngineResult {
     hourlyRequirement,
     protectedFloorHourly,
     demandVolatilityHourly,
+    inputs.arrivals,
+    floorWhppv,
     inputs.shiftMenu,
     weeklyBudgetHours,
     hoursBudgetTolerance,
-    enaFloor,
-    undefined,
-    backlogParams
+    enaFloor
   );
 
   const overcoveragePct = weeklyBudgetHours > 0 ? (weeklyScheduledHours - weeklyBudgetHours) / weeklyBudgetHours : 0;
@@ -136,16 +131,11 @@ export function compute(inputs: EngineInputs): EngineResult {
   // even minimizing).
   const { totalBacklogHours, totalSeverity, peakSeverity } = summarizeBacklogSeverity(
     grid,
+    inputs.arrivals,
     hourlyRequirement,
     inputs.shiftMenu,
-    backlogParams
+    floorWhppv
   );
-  // PR E (§4e): estimatedAbandonedHours for the FINAL solved grid — computeBacklog is cheap
-  // pure arithmetic; summarizeBacklogSeverity above doesn't expose this field, so a second
-  // (identical-inputs) call is the simplest way to get it without changing that function's
-  // return shape for its other callers (flexMenu ranking, etc.) that don't need it.
-  const estimatedAbandonedHours = computeBacklog(grid, hourlyRequirement, inputs.shiftMenu, backlogParams)
-    .estimatedAbandonedHours;
 
   // 2026-07-26 PR D (SOLVER_REALISM_SPEC_2026-07-26.md, changes 1-2) — the funding-ask surface.
   // `solveFullCoverageWeek`'s never-short-at-any-hour grid was previously computed (inside
@@ -167,10 +157,11 @@ export function compute(inputs: EngineInputs): EngineResult {
     hourlyRequirement,
     protectedFloorHourly,
     demandVolatilityHourly,
+    inputs.arrivals,
+    floorWhppv,
     inputs.shiftMenu,
     fullCoverageGrid,
-    capHours,
-    backlogParams
+    capHours
   );
   const marginalKneePoint = findMarginalKneePoint(marginalCurve);
   // EDGE CASE (explicit, not assumed): a generous wHppvTarget can already fund full coverage,
@@ -180,7 +171,8 @@ export function compute(inputs: EngineInputs): EngineResult {
   const fullCoverage = {
     weeklyHours: fullCoverageWeeklyHours,
     impliedWhppv: annualVisits > 0 ? (fullCoverageWeeklyHours * 52) / annualVisits : 0,
-    fteDelta: ((fullCoverageWeeklyHours - capHours) * 52) / 2080,
+    fteDelta: ((fullCoverageWeeklyHours - capHours) * 52) / hoursPerFteAnnual,
+    grid: fullCoverageGrid,
   };
 
   const boarding = computeBoarding(
@@ -197,7 +189,8 @@ export function compute(inputs: EngineInputs): EngineResult {
       monthlyBoardingCensusMedical: inputs.monthlyBoardingCensusMedical,
       monthlyBoardingCensusBH: inputs.monthlyBoardingCensusBH,
       bhBoardingRatioTarget: inputs.bhBoardingRatioTarget,
-    }
+    },
+    hoursPerFteAnnual
   );
 
   // PR B (RESULTS_PAGE_V2_SPEC_2026-07-27.md §5.3) — Panel 3's "what would it take to fully
@@ -240,10 +233,10 @@ export function compute(inputs: EngineInputs): EngineResult {
     bandCeilingHourly,
     protectedFloorHourly,
     demandVolatilityHourly,
+    floorWhppv,
     totalBacklogHours,
     totalSeverity,
     peakSeverity,
-    estimatedAbandonedHours,
     backlogFeedbackPassCount: feedback.passesRun,
     backlogFeedbackStillImprovingAtCap: feedback.stillImprovingAtCap,
     fullCoverage,
@@ -265,12 +258,20 @@ export function compute(inputs: EngineInputs): EngineResult {
 
 // PR F (RESULTS_COMPREHENSION_SPEC_2026-07-26.md §5) — Scenario B, "the same hours, better
 // placed." The only scenario with no ask attached: a manager can act on it Monday without
-// permission. Mechanically a PARAMETER SWAP, not a second solver — the EXACT SAME pipeline
-// `compute()` uses for the primary idealized grid (`solveShiftFitWithBacklogFeedback`), just
-// with `weeklyBudgetHours` set to the CURRENT grid's own weekly scheduled hours instead of the
-// target-implied figure. `hourlyRequirement`/`protectedFloorHourly`/`demandVolatilityHourly`/
-// the ENA floor/the shift menu are all held FIXED (read off the already-computed `result` and
-// `inputs`) — this function does not re-derive any of them.
+// permission.
+//
+// 2026-07-29 REVERSAL (Ben's direct ask, see .claude/rules/engine-solver.md's "Exact-hours
+// reallocation" section): this used to be a PARAMETER SWAP over the primary solve pipeline
+// (`solveShiftFitWithBacklogFeedback`, budget set to the current grid's own hours) — but that
+// pipeline only ever CUTS from a full-coverage upper bound down to "at or under budget * 1.10,"
+// so the reallocated total routinely landed somewhat under (or, via the ENA-floor pass, above)
+// today's actual hours, not exactly ON it. Scenario B's whole premise is "the SAME hours,
+// better placed" — an inexact total contradicted its own headline. Now uses
+// `reallocateHoursExact` (`engine/exactReallocation.ts`) instead: a REALLOCATION (only ever
+// trades one shift-unit for another) rather than a TRIM (only ever removes), so total hours are
+// conserved EXACTLY, by construction, every time — not approximately. This also means the ENA
+// floor pass no longer runs for this scenario (it can only ever ADD hours, which would break
+// exact conservation) — see `ScenarioBResult.overageFromFloor`'s doc below.
 //
 // CRITICAL FRAMING (spec §5, not enforced by this function — it's a UI responsibility):
 // Scenario B is computed on the ARRIVALS budget only (`hourlyRequirement` never includes
@@ -282,10 +283,10 @@ export function compute(inputs: EngineInputs): EngineResult {
 // it alone is a good idea — that's the caller's (and ultimately the page's) job.
 export interface ScenarioBResult {
   grid: Grid;
-  /** The solved grid's actual weekly hours — equals `currentTotalWeeklyHours` unless the ENA
-   * floor pass (which runs LAST, unconditionally) pushed it higher. */
+  /** The reallocated grid's actual weekly hours — ALWAYS exactly `currentTotalWeeklyHours`
+   * (2026-07-29: exact reallocation never adds or removes hours, only trades them). */
   weeklyScheduledHours: number;
-  /** The current grid's own weekly scheduled hours — the fixed budget this scenario solves
+  /** The current grid's own weekly scheduled hours — the fixed total this scenario reallocates
    * against. */
   currentTotalWeeklyHours: number;
   totalBacklogHours: number;
@@ -294,10 +295,13 @@ export interface ScenarioBResult {
   /** Edge case (spec §5): current hours already meet/exceed full-coverage hours — B IS full
    * coverage. A great result; the caller must say so plainly, not render it as an error. */
   isFullCoverage: boolean;
-  /** Edge case (spec §5): current hours are below what the ENA floor requires, so the floor
-   * pass pushed B's actual hours above `currentTotalWeeklyHours`. Report this overage; never
-   * call B "budget-neutral" when the floor pass has already made it not one. Zero when the
-   * floor didn't need to intervene. */
+  /** ALWAYS 0 as of 2026-07-29 — kept on the type for backward compatibility with existing
+   * callers/narrative copy. Before the exact-reallocation reversal above, a department below
+   * the ENA floor could see the floor's safety pass push B's hours above
+   * `currentTotalWeeklyHours`; that safety net no longer runs for this scenario (it would
+   * break the "exactly the same hours" guarantee), so a below-floor department now stays below
+   * the floor after reallocation too — visible via the heatmap's floor flag/the "hours below
+   * the peer floor" stat, not auto-corrected here. */
   overageFromFloor: number;
 }
 
@@ -313,38 +317,31 @@ export function computeScenarioB(result: EngineResult, inputs: EngineInputs, cur
   }
   if (currentTotalWeeklyHours <= 0) return null;
 
-  const enaFloor = inputs.enaFloor ?? DEFAULTS.enaFloor;
-  const hoursBudgetTolerance = inputs.hoursBudgetTolerance ?? DEFAULTS.hoursBudgetTolerance;
-  const backlogParams = resolveBacklogParams(inputs);
-
-  const { grid, weeklyScheduledHours } = solveShiftFitWithBacklogFeedback(
-    result.hourlyRequirement,
-    result.protectedFloorHourly,
-    result.demandVolatilityHourly,
+  const { grid } = reallocateHoursExact(
+    currentStaffingGrid,
     inputs.shiftMenu,
-    currentTotalWeeklyHours,
-    hoursBudgetTolerance,
-    enaFloor,
-    undefined,
-    backlogParams
+    inputs.arrivals,
+    result.hourlyRequirement,
+    result.floorWhppv
   );
 
   const { totalBacklogHours, totalSeverity, peakSeverity } = summarizeBacklogSeverity(
     grid,
+    inputs.arrivals,
     result.hourlyRequirement,
     inputs.shiftMenu,
-    backlogParams
+    result.floorWhppv
   );
 
   return {
     grid,
-    weeklyScheduledHours,
+    weeklyScheduledHours: currentTotalWeeklyHours,
     currentTotalWeeklyHours,
     totalBacklogHours,
     totalSeverity,
     peakSeverity,
     isFullCoverage: currentTotalWeeklyHours >= result.fullCoverage.weeklyHours,
-    overageFromFloor: Math.max(0, weeklyScheduledHours - currentTotalWeeklyHours),
+    overageFromFloor: 0,
   };
 }
 
