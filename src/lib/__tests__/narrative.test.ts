@@ -94,7 +94,7 @@ describe('narrative.ts — pure headline functions', () => {
     };
     const s1 = shiftDiagnosticSentence(understaffedSingle);
     expect(s1).toContain('On average, Night shift is understaffed for arrivals');
-    expect(s1).toContain("doesn't have enough nursing hours left over to also cover its boarding load");
+    expect(s1).toContain("doesn't have enough nursing hours left over to also cover its boarding demand");
 
     const understaffedNoBoarding: ShiftDiagnosticGroup = { ...understaffedSingle, boardingNeedHours: null, boardingCovered: null };
     const s2 = shiftDiagnosticSentence(understaffedNoBoarding);
@@ -112,12 +112,12 @@ describe('narrative.ts — pure headline functions', () => {
     };
     const s3 = shiftDiagnosticSentence(overstaffedPluralNotCovered);
     expect(s3).toContain('On average, Day and Evening shifts are overstaffed for arrivals');
-    expect(s3).toContain("but don't have enough nursing hours left over to also cover their boarding load");
+    expect(s3).toContain("but don't have enough nursing hours left over to also cover their boarding demand");
     expect(s3).toContain("The extra 200 hours they carry don't fully close the 350 hours of boarding demand there.");
 
     const overstaffedCovered: ShiftDiagnosticGroup = { ...overstaffedPluralNotCovered, boardingNeedHours: 50, boardingCovered: true };
     const s4 = shiftDiagnosticSentence(overstaffedCovered);
-    expect(s4).toContain('and do have enough nursing hours left over to also cover their boarding load, and those extra hours are enough to cover it.');
+    expect(s4).toBe('On average, Day and Evening shifts are overstaffed for arrivals, and do have enough nursing hours left over to also cover their boarding demand.');
 
     const threeShifts: ShiftDiagnosticGroup = {
       ...understaffedSingle,

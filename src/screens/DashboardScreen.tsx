@@ -6,19 +6,16 @@ import { Panel2 } from './dashboard/Panel2';
 import { Panel3 } from './dashboard/Panel3';
 import { Panel4 } from './dashboard/Panel4';
 import { Panel5 } from './dashboard/Panel5';
-import { EvidenceSurfaceSection } from './dashboard/EvidenceSurfaceSection';
 
 // PR G (RESULTS_PAGE_V2_SPEC_2026-07-27.md §8) — Panel 5 (the sandbox) lands, completing the
-// five-panel architecture (§4) in full. `EvidenceSurfaceSection` stays exactly where it is,
-// unmodified — off the main arc, below everything, protecting the tool when a number is
-// challenged. See .claude/rules/results-redesign.md's "Results Page V2" PR G section.
+// five-panel architecture (§4) in full. `EvidenceSurfaceSection` (the old "How this works"
+// chapter) was REMOVED 2026-08-05 — see .claude/rules/results-redesign.md's dated entry.
 const CHAPTERS: StepBarEntry[] = [
   { id: 'ch-current-staffing', label: 'Your current staffing' },
   { id: 'ch-scenario-b', label: 'Could moving hours fix it?' },
   { id: 'ch-full-coverage', label: 'What would full coverage take?' },
-  { id: 'ch-recommended', label: 'ShiftLens Idealized Staffing' },
+  { id: 'ch-recommended', label: 'ShiftLens Solver Staffing' },
   { id: 'ch-sandbox', label: 'Test it yourself' },
-  { id: 'ch-evidence', label: 'How this works' },
 ];
 
 /**
@@ -124,10 +121,6 @@ export function DashboardScreen() {
           <button className="btn-secondary" onClick={handleExport} disabled={exporting}>
             {exporting ? 'Exporting…' : 'Export to PPTX'}
           </button>
-        </div>
-
-        <div id="ch-evidence">
-          <EvidenceSurfaceSection />
         </div>
       </div>
     </div>

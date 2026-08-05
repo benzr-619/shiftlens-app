@@ -501,29 +501,6 @@ h1 {
   color: var(--error);
 }
 
-/* PR I — Chapter 9, "How this works." Visually set apart from the narrative chapters above it
-   (spec §8's own instruction: branches are set apart, not styled like another narrative card). */
-.evidence-surface {
-  background: var(--bg-card-muted);
-  border-top: 3px solid var(--border);
-}
-.evidence-surface-body h3 {
-  margin-top: 20px;
-}
-.evidence-surface-body h3:first-child {
-  margin-top: 8px;
-}
-.pipeline-walkthrough li,
-.evidence-surface-body ul li {
-  margin-bottom: 10px;
-  line-height: 1.5;
-}
-.constants-table td,
-.provenance-table td {
-  font-size: 13px;
-  vertical-align: top;
-}
-
 /* PR H (§6.1/§8), 5th revision, 2026-07-27 — the welcome/orientation section at the top of
    the results page. Deliberately NOT `.card`/`.banner`: no border, a plain/lightly-tinted
    background, and generous bottom margin so it reads as a distinct welcome rather than
@@ -875,6 +852,11 @@ h1 {
   font-size: 0.85em;
   min-width: 2em;
   text-align: left;
+}
+
+.staffing-table-label {
+  font-size: 15px;
+  margin: 20px 0 4px;
 }
 
 /* §2.2 comparison unit: idealized grid + current grid + diff + budget/shape reconciliation,
@@ -1360,15 +1342,61 @@ h1 {
   line-height: 1.6;
 }
 
-/* PR F (RESULTS_PAGE_V2_SPEC_2026-07-27.md §4) — Panel 3's two-bar comparison. */
-.two-bar-wrap {
+/* PR F (RESULTS_PAGE_V2_SPEC_2026-07-27.md §4) — Panel 3's three-bar comparison (2026-08-05:
+   grew from two bars to three — staffed today / total demand / fully covered — see Panel3.tsx). */
+.three-bar-wrap {
   margin-top: 16px;
-  max-width: 320px;
+  max-width: 420px;
 }
-.two-bar-chart {
+.three-bar-chart {
   width: 100%;
   height: auto;
   display: block;
+}
+
+/* 2026-07-30 — Panel 4's diminishing-returns curve (total shifts vs. % demand covered, with a
+   peer-typical band + current-staffing/ShiftLens-Solver reference points). Fills the prose
+   column's own width (no artificial cap) — a wider chart also means a bigger, easier-to-hover
+   dot hit-area, not just better legibility. */
+.marginal-curve-wrap {
+  margin-top: 16px;
+  max-width: 100%;
+}
+.marginal-curve-chart {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+.marginal-curve-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.marginal-curve-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.marginal-curve-legend-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 3px;
+  border-radius: 1px;
+}
+.marginal-curve-legend-swatch-band {
+  width: 14px;
+  height: 10px;
+  background: var(--text-muted);
+  opacity: 0.3;
+  border-radius: 2px;
+}
+.marginal-curve-legend-swatch-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
 }
 
 /* PR G (RESULTS_PAGE_V2_SPEC_2026-07-27.md §4) — Panel 5's two editable sandbox grids. */

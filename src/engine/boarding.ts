@@ -475,6 +475,47 @@ export function annualStaffingHoursForWeeklyGrid(
 }
 
 /**
+ * Weekly spare capacity, per (day, shift) cell, already scheduled by an ED-nurse grid (e.g.
+ * the arrivals-only recommendation) beyond what that cell's own covering hours need for
+ * arrivals — "how much of this cell's headcount is already free to help with boarding, for
+ * free, before asking for a single additional nurse." Keyed "day::shiftId", same convention
+ * `weeklyBoardingDemandByCell` uses so the two maps net directly against each other.
+ *
+ * `scheduled` is the cell's own headcount × shift length (a per-cell number, no hour-splitting
+ * needed — headcount is already attributed to one cell). `required` is `hourlyRequirement168`
+ * split evenly across every (day, shift) cell that structurally covers each global hour (the
+ * same `coveringCellsByGlobalHour` attribution `weeklyBoardingDemandByCell`'s measured path and
+ * `hiddenBoarding.ts`'s per-shift diagnostic both already use) — this is the same "spare =
+ * capacity beyond the point target" idea Panel 1 already applies at per-hour grain (`max(0,
+ * currentCapacity - hourlyRequirement)`), just attributed per shift-cell here instead.
+ */
+export function weeklyArrivalsSpareByCell(
+  arrivalsGrid: Grid,
+  hourlyRequirement168: Cell168,
+  shiftMenu: ShiftDef[]
+): Map<string, number> {
+  const coveringCells = coveringCellsByGlobalHour(shiftMenu);
+  const lenById = new Map(shiftMenu.map((s) => [s.id, s.lengthHours]));
+  const requiredByCell = new Map<string, number>();
+  for (let g = 0; g < 168; g++) {
+    const cells = coveringCells[g];
+    if (cells.length === 0) continue;
+    const share = hourlyRequirement168[g] / cells.length;
+    for (const { day, shiftId } of cells) {
+      const key = `${day}::${shiftId}`;
+      requiredByCell.set(key, (requiredByCell.get(key) ?? 0) + share);
+    }
+  }
+  const spareByCell = new Map<string, number>();
+  for (const [key, required] of requiredByCell) {
+    const [dayStr, shiftId] = key.split('::');
+    const scheduled = (arrivalsGrid[Number(dayStr)]?.[shiftId] ?? 0) * (lenById.get(shiftId) ?? 0);
+    spareByCell.set(key, Math.max(0, scheduled - required));
+  }
+  return spareByCell;
+}
+
+/**
  * Default single representative-week coverage grid: funds the highest-value weekly +1 units
  * (stacking within a cell, up to that cell's weekly demand) until effective ED wHPPV clears
  * `targetWhppv` at FULL month scope — a recommended starting point (spec §2.6), not a floor or
@@ -482,21 +523,39 @@ export function annualStaffingHoursForWeeklyGrid(
  * least the top unit so the recommendation is never a fully empty grid (mirroring the removed
  * `fundedCountToReachWhppv`'s never-returns-0 behavior). Returns the full-demand grid if even
  * 100% coverage can't reach `targetWhppv` (e.g. `wHppvTarget` is itself below the band).
+ *
+ * `arrivalsSpareByCell` (optional, 2026-07-30, Panel 4's "reasonable ask" framing — see
+ * `.claude/rules/boarding-seasonality.md`): when supplied (`weeklyArrivalsSpareByCell` above),
+ * each cell's demand is first credited with whatever ED-nurse spare capacity is already
+ * scheduled there (capped at that cell's own demand — a cell can't be "more than covered"),
+ * and the funding loop's starting `weeklyCovered` is seeded with that credit — so the search
+ * for additional headcount starts from the coverage the existing arrivals grid already
+ * provides for free, rather than re-asking for it. Omitting it (every other caller) preserves
+ * the original "boarding coverage in isolation" behavior exactly.
  */
 export function recommendWeeklyBoardingGrid(
   boarding: BoardingResult,
   shiftMenu: ShiftDef[],
   wHppvTarget: number,
   targetWhppv: number,
-  wHppvConsumedByBoarding: number
+  wHppvConsumedByBoarding: number,
+  arrivalsSpareByCell?: Map<string, number>
 ): Grid {
-  const demandByCell = weeklyBoardingDemandByCell(boarding, shiftMenu);
+  const rawDemandByCell = weeklyBoardingDemandByCell(boarding, shiftMenu);
   const lenById = new Map(shiftMenu.map((s) => [s.id, s.lengthHours]));
   const scopeAll = scopeWeeks(boarding.monthFactors, null);
   const denom = boarding.annualBoardingHours;
 
-  // Break each cell's weekly demand into stackable +1 units, each worth the marginal hours it
-  // would cover, then fund highest-value-first.
+  let seededCovered = 0;
+  const demandByCell = new Map<string, number>();
+  for (const [key, demand] of rawDemandByCell) {
+    const spare = Math.min(demand, arrivalsSpareByCell?.get(key) ?? 0);
+    seededCovered += spare;
+    demandByCell.set(key, demand - spare);
+  }
+
+  // Break each cell's remaining (post-spare-credit) weekly demand into stackable +1 units,
+  // each worth the marginal hours it would cover, then fund highest-value-first.
   const units: Array<{ day: number; shiftId: string; hours: number }> = [];
   for (const [key, demand] of demandByCell) {
     const [dayStr, shiftId] = key.split('::');
@@ -510,7 +569,11 @@ export function recommendWeeklyBoardingGrid(
   units.sort((a, b) => b.hours - a.hours);
 
   const grid: Grid = {};
-  let weeklyCovered = 0;
+  let weeklyCovered = seededCovered;
+  {
+    const coveredFraction = denom > 0 ? (weeklyCovered * scopeAll) / denom : 0;
+    if (effectiveEdWhppvAtCoverage(wHppvTarget, wHppvConsumedByBoarding, coveredFraction) >= targetWhppv) return grid;
+  }
   for (const unit of units) {
     weeklyCovered += unit.hours;
     grid[unit.day] = { ...(grid[unit.day] ?? {}), [unit.shiftId]: (grid[unit.day]?.[unit.shiftId] ?? 0) + 1 };

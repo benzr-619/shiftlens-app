@@ -142,15 +142,11 @@ export function shiftDiagnosticSentence(group: ShiftDiagnosticGroup): string {
   const doesDoesnt = covered ? (plural ? 'do' : 'does') : plural ? "don't" : "doesn't";
   const itsTheir = plural ? 'their' : 'its';
 
-  let sentence = `On average, ${names} ${shiftWord} ${isAre} ${verdict} for arrivals, ${conjunction} ${doesDoesnt} have enough nursing hours left over to also cover ${itsTheir} boarding load.`;
+  let sentence = `On average, ${names} ${shiftWord} ${isAre} ${verdict} for arrivals, ${conjunction} ${doesDoesnt} have enough nursing hours left over to also cover ${itsTheir} boarding demand.`;
 
-  if (group.arrivalsStatus === 'overstaffed') {
-    if (covered) {
-      sentence = `${sentence.replace(/\.$/, '')}, and those extra hours are enough to cover it.`;
-    } else {
-      const itThey = plural ? 'they carry' : 'it carries';
-      sentence += ` The extra ${group.surplus.toFixed(0)} hours ${itThey} don't fully close the ${(group.boardingNeedHours ?? 0).toFixed(0)} hours of boarding demand there.`;
-    }
+  if (group.arrivalsStatus === 'overstaffed' && !covered) {
+    const itThey = plural ? 'they carry' : 'it carries';
+    sentence += ` The extra ${group.surplus.toFixed(0)} hours ${itThey} don't fully close the ${(group.boardingNeedHours ?? 0).toFixed(0)} hours of boarding demand there.`;
   }
   return sentence;
 }

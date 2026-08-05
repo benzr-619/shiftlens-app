@@ -2058,3 +2058,374 @@ dropped from `Panel1.tsx`'s store destructure as dead code. The ratios themselve
 set and visible on `ShiftMenuStep.tsx`'s boarding-ratio card (unchanged) — this is a Panel-1-
 display-only removal, not a data/config change. `npm run build`/`npm test`/`oxlint`/`npm run
 test:e2e` all clean after the removal.
+
+## Panel 4 diminishing-returns curve rebuilt (2026-08-05) — toggle-aware, starts at true 0 shifts
+
+Ben corrected the original build of this curve (the same session it shipped) twice: (1) Y axis
+should be % of demand covered (nursing-hours, not severity), toggle-aware for both "Arrivals"
+and "Arrivals and Boarding"; (2) more fundamentally, the curve must start from a literal 0
+shifts scheduled, adding one at a time — the previously-used data source
+(`result.marginalCurve`, from `trimWeekToBudgetWithTrajectory`) only ever spans
+`[capped/budget state, full coverage]`, since it's produced by the TRIM walking DOWN from full
+coverage, not a fill-up walking UP from zero. No amount of axis relabeling could fix that; a
+genuinely different engine primitive was needed.
+
+**New `engine/solver.ts` export: `solveFullCoverageWeekWithTrajectory(demand168, shifts)` →
+`{ grid, trajectory: FullCoverageTrajectoryPoint[] }`.** A parallel function to
+`solveFullCoverageWeek` (NOT a modification of it — that function is a hot upper-bound step
+every solve path calls; this one is advisory-only, never called from `compute()`'s own
+pipeline) — identical greedy loop (start at an empty grid, each iteration bump whichever
+(day, shift) candidate relieves the most currently-deficient global hours against the passed-in
+`demand168` curve), but records `{ cumulativeShifts, hoursCovered }` after every shift-unit
+added. `hoursCovered = sum(min(capacity[g], demand168[g]))` at that point — naturally
+monotonic/diminishing BY CONSTRUCTION (greedy always picks the most-deficit-relieving candidate
+first), so unlike the old severity-based curve, no "best achievable so far" running-max
+envelope hack is needed to make it look sane.
+
+**Panel4.tsx wiring:** `marginalCurvePoints` is now computed by calling
+`solveFullCoverageWeekWithTrajectory` against the ACTIVE toggle's own demand curve
+(`result.hourlyRequirement` for Arrivals, `combinedRequirement` for Arrivals and Boarding) —
+a genuinely fresh solve per toggle, re-run on every render (cheap enough for this UI; not
+memoized). Y = `(hoursCovered / totalDemandHours) * 100`, prepended with an explicit `{x:0,
+y:0}` point so the line always starts at true zero. X is `cumulativeShifts` directly from the
+trajectory (a literal shift-unit count), while the three reference markers (target-implied
+hours / current staffing / recommended) are still positioned via the pre-existing
+`weeklyHours / typicalShiftLength` approximation (assumes uniform shift length — an existing,
+disclosed approximation pattern in this codebase, not new). The "Recommended" marker now uses
+`activeWeeklyHours` (toggles between `result.weeklyScheduledHours` and `combinedWeeklyHours`)
+instead of always `result.weeklyScheduledHours`, so it lines up correctly under the Combined
+toggle too.
+
+**What did NOT change:** the "Each additional N-hour shift removes roughly X hours..." prose
+paragraph above the curve — still driven by `result.marginalCurve`/`marginalKneePoint` (the
+trim-based severity curve), unchanged, since that paragraph is about the KNEE point specifically
+(a different question the new curve doesn't answer) and Ben's asks were scoped to the CURVE's
+own data source, not that paragraph. `hasMeaningfulMarginalCurve`'s gating logic (based on
+`approxHoursRemoved`) is also unchanged. This is a live inconsistency worth knowing: the prose
+paragraph and the curve below it now come from two different engine computations
+(trim-trajectory severity vs. fill-up-trajectory hours-covered) — not reconciled in this pass,
+flagged rather than silently glossed over.
+
+**Verified visually** (Playwright screenshots, `underTargetDayShort` profile, both toggles): the
+curve now genuinely starts at (0, 0%), rises with visible diminishing returns, and the three
+reference markers land near the top of the curve where coverage saturates — confirmed distinct,
+correctly-shaped curves for the Arrivals and Arrivals+Boarding toggles (the combined curve is
+visibly wider/shallower, reflecting the larger combined demand). `npm run build`/`npm test`
+(242 vitest tests)/`oxlint` all clean; `npm run test:e2e` clean except the pre-existing,
+unrelated `panel1-2.spec.ts` Panel 2 "Current" tab failure (documented above, in the
+2026-07-29 exact-hours-reallocation entry — not touched or caused by this change).
+
+### Follow-up, same day — reference marks reworked: dots for real grids, a band for the peer range
+
+Ben's own design critique of the just-shipped curve: the three reference marks were rendered as
+identical full-height dashed vertical LINES, which visually implies all three sit ON the curve
+at that X — false for "Current staffing" (a real, independently-solved grid whose actual %
+demand covered can differ from what the curve's own greedy fill-up would achieve with the same
+shift count) and arguably false for "Recommended" too (solved by `solveShiftFitWithBacklogFeedback`'s
+backlog-minimizing trim, not this curve's plain greedy-hours-covered fill-up).
+
+**Two changes, both in `Panel4.tsx`/`App.css`, no engine changes beyond reusing the existing
+`solveFullCoverageWeekWithTrajectory` output:**
+
+1. **"Current staffing" and "Recommended" are now DOTS, not lines** — each plotted at its own
+   real `(shiftCount, actualPctDemandCovered)`, computed via a new `pctDemandCovered(capacity168,
+   demand168)` helper (same `sum(min(capacity,demand))/sum(demand)` arithmetic the curve's own Y
+   already uses, so the dot lands on a directly comparable scale) — deliberately NOT constrained
+   to sit on the curve's line. `MarginalReturnsCurve`'s prop changed from `markers: Array<{x,
+   label, color}>` (full-height dashed lines) to `markerPoints: Array<{x, y, label, color}>`
+   (small filled circles at their own y).
+   - **New gap-disclosure paragraph** when "Recommended" sits materially off the curve at its
+     own shift count (`GAP_DISCLOSURE_THRESHOLD_PCT = 5` percentage points, a tunable display
+     heuristic — not load-bearing) — via a new `curveValueAt(points, x)` linear-interpolation
+     helper. States plainly that this is expected, not a bug: the recommendation minimizes
+     weighted backlog/severity, this curve maximizes raw hours covered, and those are different
+     objectives that can rank grids differently. Verified rendering by temporarily lowering the
+     threshold to force the paragraph on (screenshot reviewed, then reverted) — none of the
+     eight named synthetic profiles happened to trigger it naturally at the real threshold
+     (their recommendations all land close to full-hours-coverage for their own shift count), so
+     this is a real, working, but currently rarely-firing disclosure — not verified against a
+     genuinely large real-world gap this session.
+2. **"Target-implied hours" (a single dashed line) is GONE, replaced by a shaded vertical BAND**
+   spanning the peer cohort's p25-to-p75 wHPPV range (`lookupWhppvBand`, already computed as
+   `band` for other Panel 4 stats), converted to a shift-count span via `weeklyVisits =
+   annualVisits/52` → `wHppv × weeklyVisits` = implied weekly hours → the same `totalShiftsAt`
+   conversion every other marker already uses. Rationale: the target-implied figure is a POLICY
+   CHOICE with no grid shape of its own (nothing to plot a dot against), while a peer range reads
+   as "what a typical department would need" — a genuinely different, arguably more useful
+   reference than a single line tied to this department's own chosen target. Rendered as a
+   translucent `<rect>` behind the curve/dots (`opacity: 0.14`), not a line.
+
+**Verified visually** (Playwright screenshots, `underTargetDayShort` and
+`adequatelyStaffedBadlyShaped`/`nightShort`/`lowVolumeFloorBinds`/`shortDurationBoarding`/
+`alreadyFine` profiles): "Current staffing" dot correctly renders BELOW the curve (an
+under-target department's real staffing covers less than the curve says is achievable with that
+many shifts); "Recommended" dot renders very close to/on the curve at ~100% for every profile
+checked (none triggered the gap disclosure at the real 5-point threshold — confirmed the
+disclosure mechanism itself works via a forced-threshold screenshot, see above); the peer band
+renders as a soft gray rectangle near the top of the axis. `npm run build`/`npm test` (242
+vitest tests, unchanged — no new engine functions, only new pure-display helpers in
+`Panel4.tsx`)/`oxlint` clean.
+
+### Follow-up, same day — hover tooltips on the dots; "Recommended" renamed "ShiftLens Solver"
+
+Two more scoped changes, both `Panel4.tsx`-only, no engine/store impact:
+
+1. **Hover tooltips on the two marker dots.** Each `<circle>` in `MarginalReturnsCurve` now
+   carries a native SVG `<title>` child stating `"{label}: {shifts} shifts/week, {pct}% demand
+   covered"` — plain units already printed on the chart's own axes (shifts/week, % demand
+   covered), deliberately NOT a raw `"(x, y)"` coordinate pair, matching this app's established
+   convention of plain-language hover/tooltip text (e.g. the heatmap's own `cellTitle`) over
+   anything that reads as debug output. Shift counts round to whole numbers (`toFixed(0)`) —
+   these are already an approximation (`weeklyHours ÷ typicalShiftLength`, assumes uniform shift
+   length), so a decimal place would imply false precision.
+2. **"Recommended" renamed "ShiftLens Solver" — this marker/label ONLY, not a repo-wide
+   reversal of R11.** Ben's framing: this panel models and explains, it isn't issuing a
+   directive — "Recommended" reads as advice; naming the mechanism instead ("ShiftLens Solver")
+   keeps the panel in teaching/decision-support voice. **Scope, deliberately narrow:** only the
+   diminishing-returns curve's marker label + its own gap-disclosure paragraph
+   (`Panel4.tsx`'s `marginalCurveMarkerPoints`/`showRecommendedGapDisclosure` block) were
+   touched — NOT the panel's `<h2>ShiftLens Idealized Staffing</h2>` title, NOT the "Where the
+   extra hours land"/staffing-table copy, NOT any other panel's "recommended"/"recommendation"
+   language. A broader sweep renaming "recommended" everywhere R11 (2026-07-26 PR F,
+   `copyLayer.test.ts`) originally touched would be a real, separate reversal of that rule and
+   needs its own explicit ask — this wasn't it. **Also deliberately did NOT use "Idealized"**
+   (Ben's other suggested option) — `copyLayer.test.ts`'s R11 rule still bans the bare word
+   "idealized" in `src/screens`/`src/components` repo-wide (with one narrow, pre-existing
+   allowlist entry for the exact phrase `"ShiftLens Idealized Staffing"`, the panel's own H2) —
+   reusing "Idealized" for this marker would have needed a second allowlist entry and read as
+   quietly re-opening R11 rather than a scoped, separate word choice; "ShiftLens Solver" sidesteps
+   that collision entirely and needed no `copyLayer.test.ts` changes.
+
+**Verified visually** (Playwright, `underTargetDayShort` profile): legend now reads "ShiftLens
+Solver" instead of "Recommended"; tooltip text reads e.g. `"Current staffing: 112 shifts/week,
+49% demand covered"` / `"ShiftLens Solver: 137 shifts/week, 92% demand covered"` (read via
+Playwright's `allTextContents()` against the `<title>` elements, not just eyeballed — SVG
+`<title>` hover text doesn't screenshot). `npm run build`/`npm test` (242 vitest tests, all
+unchanged — copy-only)/`oxlint` clean.
+
+### Follow-up, same day — chart enlarged; dots given a much bigger hover hit-area
+
+Ben reported the hover tooltips "aren't working" and the chart itself "feels unnecessarily
+small." Root cause for both: `.marginal-curve-wrap` was capped at `max-width: 320px` (a leftover
+from the chart's very first build, before the peer-band/dot rework), while the prose column
+(`.panel-words`) is `flex: 1 1 380px` and typically renders far wider than that on a real
+screen — so the whole chart, including each marker dot (`r=4` in a 320-wide viewBox), rendered
+noticeably smaller than the column it sat in, and the dot's actual on-screen hit-area was only
+a few CSS pixels across — genuinely too small to hover reliably, not a broken hover mechanism.
+
+**Fix, both in `Panel4.tsx`/`App.css`, no data/logic changes:**
+- `.marginal-curve-wrap`'s `max-width: 320px` → `max-width: 100%` — the chart now fills
+  `.panel-words`'s actual width, whatever that is at the current viewport (same pattern
+  `VisualFrame`'s own chart already uses — `width: 100%; height: auto`, SVG `viewBox` aspect
+  ratio preserved automatically).
+- `MarginalReturnsCurve`'s internal `viewBox` grew from `320×190` to `480×260` (padding/font
+  sizes scaled up to match) — a bigger internal coordinate system so text/dots read clearly once
+  stretched to the column's real width, not just a raw CSS stretch of the old cramped layout.
+- **Each marker dot is now TWO circles, not one**: a small visible circle (`r=6`, up from `r=4`)
+  for the aesthetic, plus a separate, invisible (`fill="transparent"`) circle at `r=14` layered
+  underneath it that actually CARRIES the `<title>` and receives the hover — `pointerEvents:
+  'none'` on the visible circle so only the big invisible one handles the mouse. This is the
+  standard small-target hover-forgiveness pattern (a generous invisible hit-zone around a small
+  visible mark) — confirmed via Playwright's `boundingBox()` that the hit-circle now renders at
+  roughly 27×27 CSS px on a real column width (previously well under half that).
+
+**Verified visually** (Playwright screenshots, both toggles, `underTargetDayShort` profile): the
+chart now visibly fills the prose column's width, dots and axis text are clearly bigger, and the
+measured hit-circle bounding box confirms the larger hover target — the native OS/browser
+tooltip box itself doesn't reliably paint into a headless screenshot (a known Playwright
+limitation, not something this session could visually confirm further), so the actual "does the
+tooltip pop up" behavior should be spot-checked in a real browser if it's still ever in doubt.
+`npm run build`/`npm test` (242 vitest tests, unchanged)/`oxlint` clean.
+
+## Peer-range stat made below-floor-only; evidence surface removed; Panel 4 gets a consolidated solver explainer (2026-08-05)
+
+Ben's finding: Panel 4's "wHPPV range / % outside peer range / % variance vs current" stats can
+read as regressions after the solver adds hours, because the solver (per every reversal
+documented in `.claude/rules/engine-solver.md`) optimizes for minimizing queue cost/backlog, not
+for hugging the peer-typical wHPPV band — it can legitimately push some hours ABOVE p75 while
+fixing a worse hour elsewhere, in whole shift blocks that overshoot nearby quiet hours. Reporting
+that as "% outside range" made a correct, safer schedule look worse than it is. Three changes,
+all display/copy-only — no engine changes.
+
+**1. The peer-range stat is now below-floor-only, in all three places it's computed.**
+`pctHoursOutsideBand`-style helpers in `Panel1.tsx` (inline, not a named function),
+`Panel2.tsx`, and `Panel4.tsx` (both module-level `pctHoursOutsideBand` functions) all counted
+`value < p25 || value > p75`. Now each counts `value < p25` only — renamed
+`pctHoursBelowFloor`/`hoursBelowFloor`/`pctBelowFloor` throughout (Panel2/Panel4's functions
+dropped the now-unused `p75` parameter entirely rather than declaring an ignored one, per this
+repo's `noUnusedParameters` convention). Display copy changed to match: "X% of hours fall
+**below your peer-typical floor**" everywhere it used to say "fall outside your peer-typical
+range." The three copies are independent (each file computes its own stat over its own capacity
+curve — Panel 1's current grid, Panel 2's reallocated grid, Panel 4's recommended grid), so this
+is three coordinated edits, not one shared function — matches the pre-existing pattern (the three
+`pctHoursOutsideBand` implementations were already near-duplicates of each other before this
+change).
+
+**Checked for duplication with `computeBandFloorViolations`'s "Hours below the peer
+25th-percentile staffing floor" stat, per the ask — found it's not currently rendered
+anywhere.** `engine/bandFloor.ts`'s `computeBandFloorViolations` is still exported from
+`engine/index.ts` and still computed nowhere dead (it's simply unconsumed) — it was a stat on
+the old, now-deleted `CoreGridTab.tsx` (pre-Results-Page-V2), and no Panel component calls it.
+So there is currently no UI duplication to reconcile language with. If a future session wires
+that function back into a panel, it should reuse "below your peer-typical floor" as its label
+convention (or an equivalent below-only framing) rather than reintroducing "outside your typical
+staffing range" — the two stats would then be asking a near-identical question (hours below the
+peer floor) and should read consistently.
+
+**Peer-range "why" toggle bodies were NOT touched in Panel 1 or Panel 2** — their standalone
+"What is my peer-typical range?" `<details>` blocks still describe the full p25-p75 band (they're
+legitimate background for the heatmap's per-hour band coloring and the stat's own definition,
+which still reference p75 as the band's ceiling even though this ONE stat no longer flags
+above-p75 hours). Only Panel 4's copy of that toggle was removed — folded into the new explainer
+below.
+
+**2. `src/screens/dashboard/EvidenceSurfaceSection.tsx` — DELETED entirely, along with its
+`ch-evidence` chapter-rail entry.** This was Chapter 9, "How this works (for analysts)" — the
+pipeline walkthrough, the `constantsMetadata.ts`-generated constants table, data provenance,
+known approximations, the live reconciliation-invariant display, and decisions/rejected
+alternatives (built PR I, `RESULTS_COMPREHENSION_SPEC_2026-07-26.md` §8). Per Ben's ask, this
+content is **no longer surfaced anywhere in the UI** — removing it was a straight deletion, not
+a relocation.
+
+- `DashboardScreen.tsx`: removed the `EvidenceSurfaceSection` import, the `ch-evidence` entry
+  from the `CHAPTERS` array passed to `StepBar`, and the `<div id="ch-evidence">` wrapper +
+  `<EvidenceSurfaceSection />` render call. The file's own header comment (previously "PR G ...
+  `EvidenceSurfaceSection` stays exactly where it is, unmodified") was updated to say it was
+  removed 2026-08-05, pointing here.
+- **Confirmed nothing else imports it before deleting** — grepped the whole repo; only
+  `DashboardScreen.tsx` imported the component. **`lib/pptxExport.ts` is unaffected** — verified
+  directly: it imports `buildConstantsTable` from `lib/constantsMetadata.ts` (the same
+  generated-from-`DEFAULTS` table function `EvidenceSurfaceSection` also used) DIRECTLY, not
+  through the now-deleted component, so the PPTX deck's Method & Limitations slide is untouched.
+  `lib/constantsMetadata.ts` itself is UNCHANGED and still exported/tested
+  (`lib/__tests__/constantsMetadata.test.ts` still passes) — only its one UI consumer is gone.
+- Orphaned CSS removed from `App.css`: `.evidence-surface`, `.evidence-surface-body h3`
+  (+ `:first-child`), `.pipeline-walkthrough li`/`.evidence-surface-body ul li`, and
+  `.constants-table td`/`.provenance-table td` — grepped first to confirm no other component
+  referenced any of these class names before removing.
+- No dedicated test file existed for `EvidenceSurfaceSection.tsx` (this repo has no component-
+  level test tier below full-page e2e, per CLAUDE.md's Feature Status "Not yet built" note) and
+  no e2e spec referenced `ch-evidence`/`EvidenceSurfaceSection`/`evidence-surface`/"How this
+  works" — grepped `e2e/` to confirm before running the suite, and the full e2e run (21 tests)
+  came back clean aside from the pre-existing, unrelated `panel1-2.spec.ts` Panel 2 "Current"
+  tab failure (documented in the 2026-07-29 exact-hours-reallocation entry above).
+
+**3. New consolidated "How does the solver decide this?" explainer added to `Panel4.tsx`**, a
+collapsed-by-default `why-toggle`/`why-explainer` block (the same pattern `ConceptCallout.tsx`
+and every other collapsed explainer in this app uses — CLAUDE.md Section 6), placed directly
+below `<h2>ShiftLens Solver Staffing</h2>` and above the "This staffing realizes..." headline
+paragraph. Four short paragraphs, a plain-language distillation of `EvidenceSurfaceSection`'s
+old pipeline walkthrough (Steps 1-3) plus the deleted "What is my peer-typical range?" toggle
+that used to sit lower in this same file — not a transcription of either:
+1. How hourly nurse-need is worked out — nursing work lands mostly at arrival, tracked to when
+   patients show up, smoothed to be staffable, with extra protection at historically volatile
+   hours.
+2. Boarding as a second, separate demand (rendered only `{boarding && ...}` — omitted entirely
+   when boarding data is absent, matching this app's established graceful-degradation
+   convention rather than a stale/hardcoded claim).
+3. How the solver fits the actual shift menu to that demand — full coverage first, then trims
+   wherever safest, always above the peer-benchmark floor (states the actual
+   `{band.p25Whppv}–{band.p75Whppv} wHPPV` figures inline — this is where the deleted standalone
+   toggle's band-definition content was folded in, so that information isn't lost, just
+   relocated and shortened).
+4. The key point motivating this whole change: the solver minimizes backlog/queued-work over
+   the week, not closeness to the peer-typical band — so it can legitimately push some hours
+   further from that range while still producing a safer schedule overall (this paragraph is
+   the direct answer to Ben's original finding).
+
+**The old standalone "What is my peer-typical range?" `why-toggle` in `Panel4.tsx` was deleted**
+(folded into paragraph 3 above) — the file's other two existing toggles (the shift-menu-
+flexibility `<details>` and "Why might day-to-day numbers look uneven?") were left untouched, as
+asked. Panel 1's and Panel 2's own standalone "What is my peer-typical range?" toggles are
+UNCHANGED — this fold-in was scoped to Panel 4 only, per the ask.
+
+**Copy-layer guardrail:** `src/lib/__tests__/copyLayer.test.ts` (bans bare "budget"/"severity"/
+"idealized" in `src/screens`/`src/components`) still passes — the new explainer text uses
+"queue cost"/"backlog" and "peer-benchmark floor," never the banned words.
+
+**Invariants:** no engine/`compute()` changes anywhere in this pass — confirmed via
+`git diff --stat src/engine/` showing no files touched by this session.
+`engine/__tests__/reconcile.test.ts` itself was not modified and the full suite still passes
+(242 vitest tests unchanged in count — this pass added no new tests, since nothing here is
+new engine behavior to test, only renamed/relocated display logic). `npm run build`/`npm test`/
+`oxlint` clean (only the pre-existing `StepIndicator.tsx` warning); `npm run test:e2e` clean
+except the pre-existing, unrelated `panel1-2.spec.ts` Panel 2 "Current"-tab failure.
+
+## Panel 4 flex-menu toggle: renamed, moved, overlay-length gated, sentence/table reworked (2026-08-05)
+
+Four scoped changes to `Panel4.tsx`'s shift-menu-flexibility `<details>`, plus one real engine
+fix in `engine/flexMenu.ts`. All confirmed with Ben before building.
+
+**1. Renamed.** "And here is whether a different shift menu gets you closer for the same hours"
+-> "Could different shifts be more efficient?" (summary text only).
+
+**2. Moved to the bottom of the panel's prose column** — was between the marginal-returns curve
+and the "Where the extra hours land" staffing table; now sits after "Why might day-to-day
+numbers look uneven?", the last item before `.panel-frame`.
+
+**3. Real bug fix, `engine/flexMenu.ts` — overlay shift length is now gated on
+`axes.shiftLengths`, matching the regular-tiling family's own convention.** Found via Ben's
+report: enabling any single flex axis (e.g. "different start times" alone) could still surface
+a 4h swing-overlay shift, because `OVERLAY_LENGTHS = [4, 6, 8]` was applied whenever `anyAxis`
+was true — the overlay family's own length choice was never actually gated on the
+shift-LENGTHS axis specifically, unlike the regular tiling family's `lengths = axes.shiftLengths
+? CANDIDATE_LENGTHS : [curLength]`. Fixed the same way: `searchFlexibleMenus`'s overlay loop now
+computes `const overlayLengths = axes.shiftLengths ? OVERLAY_LENGTHS : [curLength]` — with that
+axis off, every candidate (tiling AND overlay) sticks to the user's own current shift length;
+the 4h/6h/8h overlay set is reachable only once shift-lengths is explicitly enabled.
+`OVERLAY_LENGTHS` itself is UNCHANGED (`[4, 6, 8]`) — the fix is entirely in when it's consulted,
+not what it contains. `flexMenu.test.ts`'s existing overlay tests (using `AXES({ shiftCount:
+true })`, i.e. shiftLengths off) still pass unmodified — with `curLength` typically 12h for
+those fixtures, the overlay candidate they check for now uses a 12h overlay instead of whatever
+`OVERLAY_LENGTHS` would have produced, but the test only asserts an overlay candidate exists
+(day/night ids present + length 3), not its specific length, so no test change was needed.
+
+**4. Result sentence rewritten + a staffing table added.** Old copy reported `totalShortfall`
+("reduces hours below need to N") and ended "— advisory only, never auto-adopted." New copy
+reports the candidate's own **% of hours below your peer-typical floor** — reusing this panel's
+existing `pctHoursBelowFloor(capacity168, arrivals168, p25)` helper (same formula/wording as the
+panel's headline stat), run against `fullWeekCapacity(bestCandidate.solve.grid,
+bestCandidate.menu)` — new locals `bestCandidateSortedMenu`/`bestCandidatePctBelowFloor`,
+computed alongside `bestCandidate` itself. Weekly hours is KEPT (confirmed with Ben this is a
+genuinely different number from the panel's headline hours — the flex-menu comparison runs
+through the plain one-shot `solveShiftFit`, not the primary grid's 8-pass
+`solveShiftFitWithBacklogFeedback` relaxation loop, PER PR C's documented fairness fix in
+`.claude/rules/engine-solver.md`, so even the CURRENT menu's own comparison number can differ
+from the headline — and different shift-block granularity can shift the total further still).
+"advisory only, never auto-adopted" was dropped (redundant with the panel's own framing
+elsewhere — nothing on this page auto-adopts anything). A day × shift staffing table for
+`bestCandidate.solve.grid` (same `staffing-grid diff-grid` shape as "Where the extra hours
+land," but plain headcounts, no diff — there is no "current" to diff a hypothetical alternate
+menu against) now renders directly below the sentence, sorted by the candidate menu's own
+`startHour` (`bestCandidateSortedMenu`, reusing this file's existing `sortByStartHour`).
+
+**Copy-layer guardrail unaffected** — no "budget"/"severity"/"idealized" introduced.
+
+**Invariants:** `reconcile.test.ts` untouched; `flexMenu.test.ts`'s 9 tests still pass unmodified
+(242 vitest tests total, unchanged in count — no new engine behavior, only a gating condition on
+an existing candidate family plus display logic). `npm run build`/`npm test`/`oxlint` clean
+(only the pre-existing `StepIndicator.tsx` warning); `npm run test:e2e` clean (21 tests) except
+the pre-existing, unrelated `panel1-2.spec.ts` Panel 2 "Current"-tab failure.
+
+**Follow-up, same day — the overlay family's gate itself was still wrong (found by Ben live,
+after the length fix above shipped): a 3-shift menu with ONLY "different start times" checked
+still surfaced a 4-shift candidate.** Root cause: the swing-overlay family's LENGTH is gated on
+`axes.shiftLengths` (the fix above), but the overlay family's very existence was still gated on
+`anyAxis` (any axis at all) rather than on `axes.shiftCount` — and an overlay candidate ALWAYS
+adds one shift on top of the current menu, by construction, regardless of what length it uses.
+So enabling `startTimes` alone was enough to unlock a count-changing candidate, even though "a
+different number of shifts" was explicitly left unchecked. Fixed in `searchFlexibleMenus`: the
+overlay loop's gate changed from `if (anyAxis)` to `if (axes.shiftCount)` — an overlay candidate
+is now unreachable unless the user opts into shift-count flexibility specifically, same as every
+other count-changing candidate in the regular tiling family. The header doc comment above
+`searchFlexibleMenus` was updated to match (the old "not gated behind any ONE specific axis...
+but gated on anyAxis" framing is superseded — an overlay is now explicitly gated on the ONE axis
+that actually describes what it does).
+
+New regression test in `flexMenu.test.ts` (10th test, "gated specifically on axes.shiftCount, not
+on any axis") reproduces the exact bug report — `AXES({ startTimes: true })` on a 3-shift menu,
+asserts every returned candidate's `menu.length` equals the current menu's own length. The
+pre-existing overlay-reachability test's `AXES({ shiftCount: true })` fixture already happened to
+use the correct axis (its own comment claiming "any single axis is enough" was stale/misleading
+even before this fix — corrected). `reconcile.test.ts` untouched. 243 vitest tests (was 242).
+`npm run build`/`npm test`/`oxlint` clean (only the pre-existing `StepIndicator.tsx` warning).

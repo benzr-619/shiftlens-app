@@ -38,6 +38,11 @@ const ALLOWED_BUDGET_SUBSTRINGS = [
 // uses the bare name again, but that one import line is allowlisted below by exact substring,
 // the same technique the "budget" rule already uses for its one legitimate exception.
 const ALLOWED_SEVERITY_SUBSTRINGS = ["import { severity as computeQueueCost } from '../engine/solver';"];
+// 2026-08-05: Panel 4's chapter-rail label and heading, previously "ShiftLens Idealized
+// Staffing" (a branding-choice R11 exception), were renamed again to "ShiftLens Solver
+// Staffing" — no more bare "idealized" left in rendered UI code, so this allowlist is
+// currently empty rather than removed outright (keeps the mechanism in place if a future
+// branding choice needs it again).
 const ALLOWED_IDEALIZED_SUBSTRINGS: string[] = [];
 
 import { describe, expect, it } from 'vitest';

@@ -125,14 +125,14 @@ describe('§2.3 shift-menu flexibility search (bounded, opt-in, advisory)', () =
   });
 
   describe('2026-07-26 PR D change 6 — swing-shift overlay family (SOLVER_REALISM_SPEC_2026-07-26.md)', () => {
-    it('a mid/swing shift layered over the current menu is reachable when any axis is enabled — unreachable via regular tilings alone', () => {
+    it('a mid/swing shift layered over the current menu is reachable when shiftCount is enabled — unreachable via regular tilings alone', () => {
       const cands = searchFlexibleMenus(
         threeBlockRequirement(),
         threeBlockBandFloor(),
         noVolatility(),
         threeBlockRequirement(), 1,
         currentMenu,
-        AXES({ shiftCount: true }), // any single axis is enough to unlock the overlay family
+        AXES({ shiftCount: true }),
         budget,
         0.1,
         2
@@ -148,6 +148,27 @@ describe('§2.3 shift-menu flexibility search (bounded, opt-in, advisory)', () =
     it('is gated on anyAxis: with NOTHING enabled, no overlay candidates appear (the "static = no search" contract holds)', () => {
       const cands = searchFlexibleMenus(threeBlockRequirement(), threeBlockBandFloor(), noVolatility(), threeBlockRequirement(), 1, currentMenu, AXES({}), budget, 0.1, 2);
       expect(cands).toHaveLength(1); // unchanged from the pre-PR-D contract
+    });
+
+    it('2026-08-05: gated specifically on axes.shiftCount, not on any axis — startTimes alone must never add a shift', () => {
+      // The regression Ben reported: enabling ONLY "different start times" on a 3-shift menu
+      // surfaced a 4-shift candidate (an overlay swing shift), even though "a different number
+      // of shifts" was left unchecked. An overlay always changes shift count by construction,
+      // so it must respect that axis specifically, same as every other count-changing candidate.
+      const cands = searchFlexibleMenus(
+        threeBlockRequirement(),
+        threeBlockBandFloor(),
+        noVolatility(),
+        threeBlockRequirement(), 1,
+        currentMenu,
+        AXES({ startTimes: true }),
+        budget,
+        0.1,
+        2
+      );
+      for (const c of cands) {
+        expect(c.menu.length).toBe(currentMenu.length);
+      }
     });
   });
 });

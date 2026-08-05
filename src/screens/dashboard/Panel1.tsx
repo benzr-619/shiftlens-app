@@ -155,6 +155,12 @@ export function Panel1() {
   // Zero-arrival cells are skipped (no meaningful per-visit ratio there).
   let minHourlyWhppv: { value: number; day: number; hour: number } | null = null;
   let maxHourlyWhppv: { value: number; day: number; hour: number } | null = null;
+  let hoursWithValidRatio = 0;
+  // Below-floor only (2026-08-05) — the solver optimizes for minimizing queue cost, not for
+  // hugging the peer-typical band, so it can legitimately push some hours above p75 (whole
+  // shift blocks overshooting a quiet hour while fixing a worse one elsewhere). That's not a
+  // problem this stat should flag; only understaffing (below p25) is.
+  let hoursBelowFloor = 0;
   for (let g = 0; g < 168; g++) {
     const cellArrivals = arrivals[g] ?? 0;
     if (cellArrivals <= 0) continue;
@@ -163,7 +169,10 @@ export function Panel1() {
     const hour = g % 24;
     if (!minHourlyWhppv || value < minHourlyWhppv.value) minHourlyWhppv = { value, day, hour };
     if (!maxHourlyWhppv || value > maxHourlyWhppv.value) maxHourlyWhppv = { value, day, hour };
+    hoursWithValidRatio++;
+    if (value < band.p25Whppv) hoursBelowFloor++;
   }
+  const pctBelowFloor = hoursWithValidRatio > 0 ? (hoursBelowFloor / hoursWithValidRatio) * 100 : 0;
 
   const effectiveWhppv = realized - (result.lostProductivity?.wHppvConsumedByBoarding ?? 0);
   const effectivePosition =
@@ -286,12 +295,32 @@ export function Panel1() {
           </p>
 
           {minHourlyWhppv && maxHourlyWhppv && (
-            <p>
-              Hour to hour, wHPPV ranges from <strong>{minHourlyWhppv.value.toFixed(2)}</strong> (
-              {DAY_LABELS[minHourlyWhppv.day]} {fmtHour(minHourlyWhppv.hour)}) up to{' '}
-              <strong>{maxHourlyWhppv.value.toFixed(2)}</strong> ({DAY_LABELS[maxHourlyWhppv.day]}{' '}
-              {fmtHour(maxHourlyWhppv.hour)})
-            </p>
+            <>
+              <p>
+                Hour to hour, wHPPV ranges from <strong>{minHourlyWhppv.value.toFixed(2)}</strong> (
+                {DAY_LABELS[minHourlyWhppv.day]} {fmtHour(minHourlyWhppv.hour)}) up to{' '}
+                <strong>{maxHourlyWhppv.value.toFixed(2)}</strong> ({DAY_LABELS[maxHourlyWhppv.day]}{' '}
+                {fmtHour(maxHourlyWhppv.hour)}). <strong>{pctBelowFloor.toFixed(0)}%</strong> of hours fall
+                below your peer-typical floor.
+              </p>
+              <details className="why-toggle-wrap">
+                <summary className="btn-link why-toggle">What is my peer-typical range?</summary>
+                <div className="why-explainer">
+                  <p>
+                    Your peer-typical range is{' '}
+                    <strong>
+                      {band.p25Whppv.toFixed(2)}–{band.p75Whppv.toFixed(2)} wHPPV
+                    </strong>{' '}
+                    — the 25th–75th percentile wHPPV reported by EDs of a similar annual volume to yours,
+                    each measured as a single year-round average, not hour by hour. It's normal for individual
+                    hours to fall outside this range even when your average staffing is appropriate — that's
+                    expected, not a problem on its own. Think of it as a rough gauge of how over- or
+                    understaffed a given hour would feel to the staff working it, not a target every hour needs
+                    to hit.
+                  </p>
+                </div>
+              </details>
+            </>
           )}
 
           {result.boarding && (
@@ -315,12 +344,17 @@ export function Panel1() {
             <p key={group.shiftIds.join('-')}>{shiftDiagnosticSentence(group)}</p>
           ))}
 
-          <p>
-            This treats boarding as drawing only on whatever nursing capacity arrivals leave
-            over. In reality, boarding patients compete for nursing time concurrently with
-            arrivals. The diagnostic isn't trying to model that real-time competition; it's
-            showing that both draw from the same finite pool of nurse-hours.
-          </p>
+          <details className="why-toggle-wrap">
+            <summary className="btn-link why-toggle">Why does this treat boarding as only using leftover nursing hours?</summary>
+            <div className="why-explainer">
+              <p>
+                This treats boarding as drawing only on whatever nursing capacity arrivals leave
+                over. In reality, boarding patients compete for nursing time concurrently with
+                arrivals. The diagnostic isn't trying to model that real-time competition; it's
+                showing that both draw from the same finite pool of nurse-hours.
+              </p>
+            </div>
+          </details>
 
           <p>
             On an average day, demand peaks around <strong>{fmtHour(peakDemandHour)}</strong>, but your staffing

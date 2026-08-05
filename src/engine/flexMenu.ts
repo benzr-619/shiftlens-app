@@ -113,12 +113,16 @@ function menuKey(menu: ShiftDef[]): string {
  *
  * 2026-07-26 PR D (change 6): ALSO tries the bounded "current menu + one overlay shift" swing
  * family (`OVERLAY_LENGTHS` × `OVERLAY_OFFSETS`, ≤ 12 candidates) alongside whichever regular
- * tilings the enabled axes produce — this is what lets a mid/swing shift ever be reachable. Not
- * gated behind any ONE specific axis (a swing shift is a distinct idea from "resize/re-anchor
- * the existing tiling"), but gated on `anyAxis` (at least one axis enabled) same as the tiling
- * family — with NOTHING enabled the search still returns exactly the one regularized candidate
- * (the existing "static = no search at all" contract, unchanged). Still bounded and still
- * deduped against the same `seen` set.
+ * tilings the enabled axes produce — this is what lets a mid/swing shift ever be reachable.
+ * **2026-08-05 (was gated on `anyAxis`, now gated on `axes.shiftCount` specifically):** an
+ * overlay candidate adds one shift on top of the current menu, i.e. it always changes the
+ * shift COUNT — gating it on "any axis enabled" meant enabling `startTimes` or `shiftLengths`
+ * alone could still surface a menu with one more shift than the user's own, even though
+ * "a different number of shifts" was left unchecked. Now it only fires when that axis is on,
+ * same as every other count-changing candidate in the regular tiling family — with NOTHING
+ * enabled (or only startTimes/shiftLengths) the search returns exactly the one regularized
+ * candidate at the user's own shift count (the existing "static = no search at all" contract,
+ * unchanged). Still bounded and still deduped against the same `seen` set.
  */
 export function searchFlexibleMenus(
   hourlyRequirement: number[],
@@ -186,11 +190,16 @@ export function searchFlexibleMenus(
     }
   }
 
-  // PR D change 6: swing-shift overlay family — see the header note above. Gated on `anyAxis`
-  // so an all-off FlexAxes still returns exactly the one regularized candidate, unchanged.
-  const anyAxis = axes.startTimes || axes.shiftCount || axes.shiftLengths;
-  if (anyAxis) {
-    for (const length of OVERLAY_LENGTHS) {
+  // PR D change 6: swing-shift overlay family — see the header note above.
+  // 2026-08-05: gated on `axes.shiftCount` (was `anyAxis`) — an overlay always adds one shift,
+  // so it must respect the same "a different number of shifts" opt-in every other count-
+  // changing candidate respects. Overlay LENGTH is separately gated on axes.shiftLengths, same
+  // convention as the regular tiling family's own `lengths` above — with that axis off, an
+  // overlay can only ever use the user's OWN current shift length (never a shorter/longer
+  // length they didn't opt into).
+  if (axes.shiftCount) {
+    const overlayLengths = axes.shiftLengths ? OVERLAY_LENGTHS : [curLength];
+    for (const length of overlayLengths) {
       for (const offset of OVERLAY_OFFSETS) trySolve(buildOverlayMenu(currentMenu, length, offset));
     }
   }

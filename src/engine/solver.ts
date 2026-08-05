@@ -128,6 +128,77 @@ function solveFullCoverageWeek(hourlyRequirement168: number[], shifts: ShiftDef[
   return grid;
 }
 
+/**
+ * One point on a from-zero, one-shift-at-a-time full-coverage trajectory: after
+ * `cumulativeShifts` shift-units have been greedily added (via the same candidate-selection
+ * rule as `solveFullCoverageWeek`), `hoursCovered` is the total nurse-hours of demand
+ * actually met (`sum(min(capacity[g], demand168[g]))`) against the given demand curve.
+ * Naturally monotonic non-decreasing and diminishing-returns by construction (the greedy
+ * search always picks the currently-most-deficit-relieving candidate first) — no envelope/
+ * smoothing needed downstream, unlike the trim-based `MarginalCurvePoint` trajectory (which
+ * only spans `[capped, full-coverage]` and is not what this function is for).
+ */
+interface FullCoverageTrajectoryPoint {
+  cumulativeShifts: number;
+  hoursCovered: number;
+}
+
+/**
+ * Same greedy full-coverage search as `solveFullCoverageWeek`, but starting from an EMPTY
+ * grid and recording one `FullCoverageTrajectoryPoint` after each shift-unit is added — a
+ * genuine 0-to-full-coverage curve, for UI consumers that want "how much does the Nth added
+ * shift buy" against an arbitrary 168-hour demand curve (e.g. Panel 4's diminishing-returns
+ * chart, run once per toggle's own demand curve). Deliberately a SEPARATE function rather
+ * than adding a recording hook to `solveFullCoverageWeek` itself — that function is a hot
+ * upper-bound step every solve path calls; this one is only for advisory display and is
+ * never called from `compute()`'s own pipeline.
+ */
+function solveFullCoverageWeekWithTrajectory(
+  demand168: number[],
+  shifts: ShiftDef[],
+): { grid: Grid; trajectory: FullCoverageTrajectoryPoint[] } {
+  const grid: Grid = {};
+  for (let day = 0; day < 7; day++) {
+    grid[day] = {};
+    for (const s of shifts) grid[day][s.id] = 0;
+  }
+  const trajectory: FullCoverageTrajectoryPoint[] = [];
+  if (shifts.length === 0) return { grid, trajectory };
+
+  let cumulativeShifts = 0;
+  let guard = 0;
+  while (guard++ < 700000) {
+    const capacity = fullWeekCapacity(grid, shifts);
+    let deficitHours = 0;
+    for (let g = 0; g < 168; g++) if (capacity[g] < demand168[g]) deficitHours++;
+    if (deficitHours === 0) break;
+
+    let bestDay = -1;
+    let bestShiftId: string | null = null;
+    let bestScore = -1;
+    for (let day = 0; day < 7; day++) {
+      for (const s of shifts) {
+        const hours = shiftGlobalHours(day, s);
+        const score = hours.filter((g) => capacity[g] < demand168[g]).length;
+        if (score > bestScore) {
+          bestScore = score;
+          bestDay = day;
+          bestShiftId = s.id;
+        }
+      }
+    }
+    if (bestShiftId === null || bestScore <= 0) break;
+    grid[bestDay][bestShiftId] += 1;
+    cumulativeShifts += 1;
+
+    const newCapacity = fullWeekCapacity(grid, shifts);
+    let hoursCovered = 0;
+    for (let g = 0; g < 168; g++) hoursCovered += Math.min(newCapacity[g], demand168[g]);
+    trajectory.push({ cumulativeShifts, hoursCovered });
+  }
+  return { grid, trajectory };
+}
+
 // ---------------------------------------------------------------------------------------
 // 2026-07-26 REVERSAL — Step 3's budget trim now actively MINIMIZES BACKLOG, reversing the
 // "backlog is diagnostic-only, never feeds the solver" rule (see .claude/rules/
@@ -757,5 +828,7 @@ export {
   coveringCellsByGlobalHour,
   findDepartmentFloorViolations,
   solveFullCoverageWeek,
+  solveFullCoverageWeekWithTrajectory,
   enforceDepartmentFloor,
 };
+export type { FullCoverageTrajectoryPoint };

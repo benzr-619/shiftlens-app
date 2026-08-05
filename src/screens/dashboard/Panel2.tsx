@@ -4,6 +4,7 @@ import { DAY_LABELS } from '../../engine/types';
 import type { Grid, ShiftDef } from '../../engine/types';
 import { computeBacklog, computeScenarioB, computeCombinedReallocation, NO_COMPRESSION_FLOOR_WHPPV } from '../../engine';
 import { fullWeekCapacity } from '../../engine/solver';
+import { lookupWhppvBand } from '../../lib/edbaLookup';
 import { VisualFrame, type VisualFrameView } from '../../components/VisualFrame';
 import type { WhppvHeatmapCell } from '../../components/WhppvHeatmap';
 import { averageDay } from '../../lib/averageDay';
@@ -97,6 +98,25 @@ function hourlyWhppvRange(
     if (!max || value > max.value) max = { value, day, hour };
   }
   return { min, max };
+}
+
+/** % of hours (arrivals > 0 only, same denominator as hourlyWhppvRange) whose realized wHPPV
+ * falls below the peer cohort's p25 floor — deliberately one-sided (2026-08-05): the solver
+ * optimizes for minimizing queue cost, not for hugging the peer-typical band, so it can
+ * legitimately push some hours ABOVE p75 (whole shift blocks overshooting a quiet hour while
+ * fixing a worse one elsewhere) — that's not a problem this stat should flag. Same formula
+ * Panel 1/Panel 4 use for their own "X% of hours fall below your peer-typical floor" line. */
+function pctHoursBelowFloor(capacity168: number[], arrivals168: number[], p25: number): number {
+  let total = 0;
+  let below = 0;
+  for (let g = 0; g < 168; g++) {
+    const cellArrivals = arrivals168[g] ?? 0;
+    if (cellArrivals <= 0) continue;
+    total++;
+    const value = (capacity168[g] ?? 0) / cellArrivals;
+    if (value < p25) below++;
+  }
+  return total > 0 ? (below / total) * 100 : 0;
 }
 
 /**
@@ -203,6 +223,8 @@ export function Panel2() {
   const reallocatedRealizedWhppv = result.annualVisits > 0 ? (reallocatedWeeklyHours * 52) / result.annualVisits : 0;
   const reallocatedWhppvRange = hourlyWhppvRange(activeState.capacity, arrivals);
   const currentWhppvRange = hourlyWhppvRange(currentCapacity, arrivals);
+  const band = lookupWhppvBand(result.annualVisits);
+  const pctBelowFloor = pctHoursBelowFloor(activeState.capacity, arrivals, band.p25Whppv);
 
   const views: VisualFrameView[] = (['arrivals', 'combined'] as const)
     .filter((key) => key !== 'combined' || combinedRealloc)
@@ -262,7 +284,7 @@ export function Panel2() {
             </tbody>
           </table>
           <details className="why-toggle-wrap">
-            <summary className="btn-link why-toggle">Why do day-to-day numbers look uneven?</summary>
+            <summary className="btn-link why-toggle">Why might day-to-day numbers look uneven?</summary>
             <div className="why-explainer">
               <p>
                 The model is trying to match staffing to demand each day, not aiming for a steady pattern across the
@@ -277,24 +299,44 @@ export function Panel2() {
           </p>
 
           {reallocatedWhppvRange.min && reallocatedWhppvRange.max && (
-            <p>
-              Hour to hour, wHPPV now ranges from <strong>{reallocatedWhppvRange.min.value.toFixed(2)}</strong> (
-              {DAY_LABELS[reallocatedWhppvRange.min.day]} {fmtHour(reallocatedWhppvRange.min.hour)}) up to{' '}
-              <strong>{reallocatedWhppvRange.max.value.toFixed(2)}</strong> ({DAY_LABELS[reallocatedWhppvRange.max.day]}{' '}
-              {fmtHour(reallocatedWhppvRange.max.hour)}).{' '}
-              {currentWhppvRange.min && currentWhppvRange.max && (() => {
-                const reallocatedWidth = reallocatedWhppvRange.max!.value - reallocatedWhppvRange.min!.value;
-                const currentWidth = currentWhppvRange.max!.value - currentWhppvRange.min!.value;
-                if (currentWidth <= 0) return null;
-                const variancePct = ((reallocatedWidth - currentWidth) / currentWidth) * 100;
-                const direction = variancePct >= 0 ? 'more' : 'less';
-                return (
-                  <>
-                    <strong>{Math.abs(variancePct).toFixed(0)}% {direction}</strong> variance compared to current staffing.
-                  </>
-                );
-              })()}
-            </p>
+            <>
+              <p>
+                Hour to hour, wHPPV now ranges from <strong>{reallocatedWhppvRange.min.value.toFixed(2)}</strong> (
+                {DAY_LABELS[reallocatedWhppvRange.min.day]} {fmtHour(reallocatedWhppvRange.min.hour)}) up to{' '}
+                <strong>{reallocatedWhppvRange.max.value.toFixed(2)}</strong> ({DAY_LABELS[reallocatedWhppvRange.max.day]}{' '}
+                {fmtHour(reallocatedWhppvRange.max.hour)}). <strong>{pctBelowFloor.toFixed(0)}%</strong> of hours fall
+                below your peer-typical floor.{' '}
+                {currentWhppvRange.min && currentWhppvRange.max && (() => {
+                  const reallocatedWidth = reallocatedWhppvRange.max!.value - reallocatedWhppvRange.min!.value;
+                  const currentWidth = currentWhppvRange.max!.value - currentWhppvRange.min!.value;
+                  if (currentWidth <= 0) return null;
+                  const variancePct = ((reallocatedWidth - currentWidth) / currentWidth) * 100;
+                  const direction = variancePct >= 0 ? 'more' : 'less';
+                  return (
+                    <>
+                      <strong>{Math.abs(variancePct).toFixed(0)}% {direction}</strong> variance compared to current staffing.
+                    </>
+                  );
+                })()}
+              </p>
+              <details className="why-toggle-wrap">
+                <summary className="btn-link why-toggle">What is my peer-typical range?</summary>
+                <div className="why-explainer">
+                  <p>
+                    Your peer-typical range is{' '}
+                    <strong>
+                      {band.p25Whppv.toFixed(2)}–{band.p75Whppv.toFixed(2)} wHPPV
+                    </strong>{' '}
+                    — the 25th–75th percentile wHPPV reported by EDs of a similar annual volume to yours,
+                    each measured as a single year-round average, not hour by hour. It's normal for individual
+                    hours to fall outside this range even when your average staffing is appropriate — that's
+                    expected, not a problem on its own. Think of it as a rough gauge of how over- or
+                    understaffed a given hour would feel to the staff working it, not a target every hour needs
+                    to hit.
+                  </p>
+                </div>
+              </details>
+            </>
           )}
 
           {(rampGapBefore > 0 || rampGapAfter > 0) && (

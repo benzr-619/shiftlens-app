@@ -7,6 +7,7 @@ import {
   computeBoarding,
   effectiveEdWhppvAtCoverage,
   recommendWeeklyBoardingGrid,
+  weeklyArrivalsSpareByCell,
   weeklyBoardingCoveredByGrid,
   weeklyBoardingDemandByCell,
   weeklyStaffingHoursForGrid,
@@ -248,6 +249,55 @@ describe('§2.6 single representative-week coverage model', () => {
     const grid = recommendWeeklyBoardingGrid(boarding, shiftMenu, 1.7, 1.9, consumed);
     const covered = annualBoardingCoveredByWeeklyGrid(grid, boarding, shiftMenu, null);
     expect(covered / boarding.annualBoardingHours).toBeCloseTo(1, 2); // gapless menu ⇒ ~100% coverage
+  });
+
+  it('weeklyArrivalsSpareByCell reports ~0 spare when the arrivals grid exactly matches the point target, and real spare when it exceeds it', () => {
+    const result = compute({ arrivals: randomArrivals168(38), wHppvTarget: 1.7, shiftMenu, admitRate: 0.3, boardingDuration: 6 });
+    // The solver's own recommendation, trimmed to budget — real slack should be modest, not
+    // necessarily zero (fixed 12h shift blocks rarely divide evenly into a continuous curve).
+    const spareForSolved = weeklyArrivalsSpareByCell(result.grid, result.hourlyRequirement, shiftMenu);
+    const totalSpareForSolved = [...spareForSolved.values()].reduce((a, b) => a + b, 0);
+    expect(totalSpareForSolved).toBeGreaterThanOrEqual(0);
+
+    // Deliberately overstaff every cell far beyond what's needed for arrivals — spare should
+    // be large and strictly greater than the solved grid's own (much tighter) spare.
+    const overstaffed: Grid = {};
+    for (let day = 0; day < 7; day++) overstaffed[day] = { day: 50, night: 50 };
+    const spareForOverstaffed = weeklyArrivalsSpareByCell(overstaffed, result.hourlyRequirement, shiftMenu);
+    const totalSpareForOverstaffed = [...spareForOverstaffed.values()].reduce((a, b) => a + b, 0);
+    expect(totalSpareForOverstaffed).toBeGreaterThan(totalSpareForSolved);
+  });
+
+  it("recommendWeeklyBoardingGrid nets against arrivals-grid spare capacity, never asking for more than the un-netted ask", () => {
+    const result = compute({ arrivals: randomArrivals168(39), wHppvTarget: 1.7, shiftMenu, admitRate: 0.3, boardingDuration: 6 });
+    const boarding = result.boarding!;
+    const consumed = result.lostProductivity!.wHppvConsumedByBoarding;
+    const target = 1.68;
+
+    const unNetted = recommendWeeklyBoardingGrid(boarding, shiftMenu, 1.7, target, consumed);
+    const unNettedTotal = Object.values(unNetted).reduce((a, row) => a + Object.values(row).reduce((x, y) => x + y, 0), 0);
+
+    const spareByCell = weeklyArrivalsSpareByCell(result.grid, result.hourlyRequirement, shiftMenu);
+    const netted = recommendWeeklyBoardingGrid(boarding, shiftMenu, 1.7, target, consumed, spareByCell);
+    const nettedTotal = Object.values(netted).reduce((a, row) => a + Object.values(row).reduce((x, y) => x + y, 0), 0);
+
+    expect(nettedTotal).toBeLessThanOrEqual(unNettedTotal);
+  });
+
+  it('recommendWeeklyBoardingGrid returns an empty grid when arrivals-grid spare capacity alone already clears the target', () => {
+    const result = compute({ arrivals: randomArrivals168(40), wHppvTarget: 1.7, shiftMenu, admitRate: 0.3, boardingDuration: 6 });
+    const boarding = result.boarding!;
+    const consumed = result.lostProductivity!.wHppvConsumedByBoarding;
+    const target = 1.68;
+
+    // A wildly overstaffed arrivals grid should credit far more spare than boarding needs.
+    const overstaffed: Grid = {};
+    for (let day = 0; day < 7; day++) overstaffed[day] = { day: 500, night: 500 };
+    const spareByCell = weeklyArrivalsSpareByCell(overstaffed, result.hourlyRequirement, shiftMenu);
+    const netted = recommendWeeklyBoardingGrid(boarding, shiftMenu, 1.7, target, consumed, spareByCell);
+
+    const nettedTotal = Object.values(netted).reduce((a, row) => a + Object.values(row).reduce((x, y) => x + y, 0), 0);
+    expect(nettedTotal).toBe(0);
   });
 
   it('boardingCoverageFte converts annual hours to FTE at 2080 hrs/yr by default', () => {

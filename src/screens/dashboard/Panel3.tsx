@@ -34,67 +34,72 @@ function buildCells(onDuty168: number[], requirement168: number[], bandFloor168:
   return cells;
 }
 
-/** Two vertical bars: total weekly demand (arrivals + boarding, stacked when boarding is
- * present) vs. hours actually staffed today. §10 open item 3's degraded state, resolved here:
- * when boarding is absent, the demand bar is a single (arrivals-only) segment — a smaller,
- * still-correctly-scaled total, not a half-empty chart. */
-function TwoBarComparison({
+/** Three vertical bars, left to right: hours staffed today (yellow), total weekly demand
+ * (red — arrivals alone, or arrivals+boarding combined when the boarding toggle is active;
+ * always one shade, just taller when boarding is added — no stacked breakdown), and the
+ * hours it would take to fully cover the department with zero shortfall anywhere (blue/
+ * purple). §10 open item 3's degraded state still holds for the demand bar: with no boarding
+ * data it's simply the (smaller) arrivals-only total, not a half-empty chart. */
+function ThreeBarComparison({
+  staffedHours,
   arrivalsHours,
   boardingHours,
-  staffedHours,
+  fullyCoveredHours,
 }: {
+  staffedHours: number;
   arrivalsHours: number;
   boardingHours: number | null;
-  staffedHours: number;
+  fullyCoveredHours: number;
 }) {
-  const width = 320;
+  const width = 420;
   const height = 200;
   const pad = 32;
-  const barWidth = 70;
+  const barWidth = 64;
+  const gap = 28;
   const totalDemand = arrivalsHours + (boardingHours ?? 0);
-  const max = Math.max(totalDemand, staffedHours, 1e-9) * 1.1;
+  const max = Math.max(totalDemand, staffedHours, fullyCoveredHours, 1e-9) * 1.1;
   const scale = (v: number) => (v / max) * (height - 2 * pad);
-  const arrivalsH = scale(arrivalsHours);
-  const boardingH = boardingHours !== null ? scale(boardingHours) : 0;
   const staffedH = scale(staffedHours);
-  const x1 = width / 2 - barWidth - 16;
-  const x2 = width / 2 + 16;
+  const demandH = scale(totalDemand);
+  const fullyCoveredH = scale(fullyCoveredHours);
+  const groupWidth = barWidth * 3 + gap * 2;
+  const x1 = (width - groupWidth) / 2;
+  const x2 = x1 + barWidth + gap;
+  const x3 = x2 + barWidth + gap;
 
   return (
-    <>
-      <svg viewBox={`0 0 ${width} ${height}`} className="two-bar-chart" role="img" aria-label="Total demand versus hours staffed today">
-        <line x1={pad - 8} y1={height - pad} x2={width - pad + 8} y2={height - pad} stroke="var(--border)" strokeWidth={1} />
-        {/* Demand bar — boarding stacked on top of arrivals when present. */}
-        <rect x={x1} y={height - pad - arrivalsH} width={barWidth} height={arrivalsH} fill="var(--error)" opacity={0.75} />
-        {boardingHours !== null && (
-          <rect x={x1} y={height - pad - arrivalsH - boardingH} width={barWidth} height={boardingH} fill="var(--warning)" opacity={0.75} />
-        )}
-        <text x={x1 + barWidth / 2} y={height - pad + 16} fontSize={11} fill="var(--text-muted)" textAnchor="middle">
-          total demand
-        </text>
-        <text x={x1 + barWidth / 2} y={height - pad - arrivalsH - boardingH - 6} fontSize={11} fill="var(--text)" textAnchor="middle">
-          {totalDemand.toFixed(0)}
-        </text>
-        {/* Staffed-today bar. */}
-        <rect x={x2} y={height - pad - staffedH} width={barWidth} height={staffedH} fill="var(--accent)" opacity={0.75} />
-        <text x={x2 + barWidth / 2} y={height - pad + 16} fontSize={11} fill="var(--text-muted)" textAnchor="middle">
-          staffed today
-        </text>
-        <text x={x2 + barWidth / 2} y={height - pad - staffedH - 6} fontSize={11} fill="var(--text)" textAnchor="middle">
-          {staffedHours.toFixed(0)}
-        </text>
-      </svg>
-      {boardingHours !== null && (
-        <div className="frame-chart-legend">
-          <span className="frame-legend-item">
-            <span className="frame-legend-swatch frame-legend-swatch-demand" /> Arrivals demand
-          </span>
-          <span className="frame-legend-item">
-            <span className="frame-legend-swatch frame-legend-swatch-boarding" /> Boarding demand
-          </span>
-        </div>
-      )}
-    </>
+    <svg
+      viewBox={`0 0 ${width} ${height}`}
+      className="three-bar-chart"
+      role="img"
+      aria-label="Hours staffed today, total demand, and hours to fully cover the department"
+    >
+      <line x1={pad - 8} y1={height - pad} x2={width - pad + 8} y2={height - pad} stroke="var(--border)" strokeWidth={1} />
+      {/* Staffed today. */}
+      <rect x={x1} y={height - pad - staffedH} width={barWidth} height={staffedH} fill="var(--warning)" opacity={0.85} />
+      <text x={x1 + barWidth / 2} y={height - pad + 16} fontSize={11} fill="var(--text-muted)" textAnchor="middle">
+        staffed today
+      </text>
+      <text x={x1 + barWidth / 2} y={height - pad - staffedH - 6} fontSize={11} fill="var(--text)" textAnchor="middle">
+        {staffedHours.toFixed(0)}
+      </text>
+      {/* Total demand — one shade of red, taller when boarding is included. */}
+      <rect x={x2} y={height - pad - demandH} width={barWidth} height={demandH} fill="var(--error)" opacity={0.85} />
+      <text x={x2 + barWidth / 2} y={height - pad + 16} fontSize={11} fill="var(--text-muted)" textAnchor="middle">
+        total demand
+      </text>
+      <text x={x2 + barWidth / 2} y={height - pad - demandH - 6} fontSize={11} fill="var(--text)" textAnchor="middle">
+        {totalDemand.toFixed(0)}
+      </text>
+      {/* Fully covered — zero shortfall anywhere. */}
+      <rect x={x3} y={height - pad - fullyCoveredH} width={barWidth} height={fullyCoveredH} fill="var(--accent)" opacity={0.85} />
+      <text x={x3 + barWidth / 2} y={height - pad + 16} fontSize={11} fill="var(--text-muted)" textAnchor="middle">
+        fully covered
+      </text>
+      <text x={x3 + barWidth / 2} y={height - pad - fullyCoveredH - 6} fontSize={11} fill="var(--text)" textAnchor="middle">
+        {fullyCoveredHours.toFixed(0)}
+      </text>
+    </svg>
   );
 }
 
@@ -161,6 +166,12 @@ export function Panel3() {
   const avgWhppv = (activeState.weeklyHours * 52) / result.annualVisits;
   const peerBand = lookupWhppvBand(result.annualVisits);
   const showTooLargeNote = avgWhppv > peerBand.p75Whppv;
+  // Same delta the wHPPV figure above expresses, converted to hours/week: this ED's own
+  // representative-week visit count (annualVisits/52) times the wHPPV gap above the peer
+  // median — kept as one multiplication of the SAME (avgWhppv - medianWhppv) figure so the
+  // two numbers in the sentence below can never drift apart from each other.
+  const weeklyVisits = result.annualVisits / 52;
+  const hoursAboveTypical = (avgWhppv - peerBand.medianWhppv) * weeklyVisits;
   let minHourlyWhppv: { value: number; day: number; hour: number } | null = null;
   let maxHourlyWhppv: { value: number; day: number; hour: number } | null = null;
   for (let g = 0; g < 168; g++) {
@@ -211,6 +222,7 @@ export function Panel3() {
 
           <p className="comparison-headline">{headline}</p>
 
+          {active === 'combined' && <h3 className="staffing-table-label">Nurses for Arrivals</h3>}
           <table className="staffing-grid diff-grid">
             <thead>
               <tr>
@@ -225,7 +237,8 @@ export function Panel3() {
                 <tr key={s.id}>
                   <td className="hour-col">{s.label || s.id}</td>
                   {DISPLAY_DAY_ORDER.map((day) => {
-                    const newValue = activeState.fullGrid[day]?.[s.id] ?? 0;
+                    const newValue =
+                      (active === 'combined' ? result.fullCoverage.grid : activeState.fullGrid)[day]?.[s.id] ?? 0;
                     const diff = newValue - (grid[day]?.[s.id] ?? 0);
                     return (
                       <td key={day}>
@@ -240,8 +253,44 @@ export function Panel3() {
               ))}
             </tbody>
           </table>
+
+          {active === 'combined' && (
+            <>
+              <h3 className="staffing-table-label">Additional Nurses for Boarding</h3>
+              <table className="staffing-grid diff-grid">
+                <thead>
+                  <tr>
+                    <th className="hour-col">Shift</th>
+                    {DISPLAY_DAY_LABELS.map((d) => (
+                      <th key={d}>{d}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {sortedShiftMenu.map((s) => (
+                    <tr key={s.id}>
+                      <td className="hour-col">{s.label || s.id}</td>
+                      {DISPLAY_DAY_ORDER.map((day) => {
+                        const arrivalsOnly = result.fullCoverage.grid[day]?.[s.id] ?? 0;
+                        const combined = result.fullCoverageCombined.grid[day]?.[s.id] ?? 0;
+                        const additional = Math.max(0, combined - arrivalsOnly);
+                        return (
+                          <td key={day}>
+                            <span className="diff-cell">
+                              <span className="diff-main">+{additional}</span>
+                            </span>
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
+          )}
+
           <details className="why-toggle-wrap">
-            <summary className="btn-link why-toggle">Why do day-to-day numbers look uneven?</summary>
+            <summary className="btn-link why-toggle">Why might day-to-day numbers look uneven?</summary>
             <div className="why-explainer">
               <p>
                 The model is trying to match staffing to demand each day, not aiming for a steady pattern across the
@@ -265,17 +314,19 @@ export function Panel3() {
 
           {showTooLargeNote && (
             <p>
-              This number is <strong>{(avgWhppv - peerBand.medianWhppv).toFixed(2)} wHPPV</strong> larger than
-              typical average staffing since it does not allow a single hour to fall below ideal staffing. The next
-              panel is more rational, accepting the trade-offs of real world budgets.
+              This number is <strong>{Math.max(0, hoursAboveTypical).toFixed(0)} hours/week</strong> and{' '}
+              <strong>{(avgWhppv - peerBand.medianWhppv).toFixed(2)} wHPPV</strong> larger than typical average
+              staffing since it does not allow a single hour to fall below ideal staffing. The next panel is more
+              rational, accepting the trade-offs of real world budgets.
             </p>
           )}
 
-          <div className="two-bar-wrap">
-            <TwoBarComparison
+          <div className="three-bar-wrap">
+            <ThreeBarComparison
+              staffedHours={staffedHours}
               arrivalsHours={arrivalsAnnualHours / 52}
               boardingHours={active === 'combined' && boardingAnnualHours !== null ? boardingAnnualHours / 52 : null}
-              staffedHours={staffedHours}
+              fullyCoveredHours={activeState.weeklyHours}
             />
           </div>
         </div>
