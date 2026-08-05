@@ -117,3 +117,46 @@ test('a heavy-BH profile shows a real, finite result in both toggle states', asy
   expect(before).toMatch(/Hours below need this week: \d/);
   expect(after).toMatch(/Hours below need this week: \d/);
 });
+
+async function sumDiffMain(scope: import('@playwright/test').Locator, tableIndex: number): Promise<number> {
+  const values = await scope.locator('table.diff-grid').nth(tableIndex).locator('.diff-main').allTextContents();
+  return values.reduce((total, text) => total + Number(text.replace('+', '')), 0);
+}
+
+async function sumSandboxGrid(panel5: import('@playwright/test').Locator, gridIndex: number): Promise<number> {
+  const values = await panel5
+    .locator('.sandbox-grid')
+    .nth(gridIndex)
+    .locator('input')
+    .evaluateAll((els) => els.map((el) => Number((el as HTMLInputElement).value)));
+  return values.reduce((a, b) => a + b, 0);
+}
+
+test('"All ED Nurses" is exactly Panel 4\'s two tables added together; "Hold Nurses for Boarding" exactly recreates them split across pools', async ({
+  page,
+}) => {
+  const profile = NAMED_DEPARTMENT_PARAMS.measuredBoardingCensus;
+  await seedAndGoToResults(page, profile);
+
+  const panel4 = page.locator('#ch-recommended');
+  await panel4.getByRole('tab', { name: 'Arrivals and Boarding' }).click();
+  // Table 0 = "Nurses for Arrivals" (result.grid), table 1 = "Additional Nurses for Boarding"
+  // (the arrivals-spare-netted recommendation) — see Panel4.tsx's own render order.
+  const arrivalsTotal = await sumDiffMain(panel4, 0);
+  const boardingTotal = await sumDiffMain(panel4, 1);
+  expect(arrivalsTotal).toBeGreaterThan(0);
+  expect(boardingTotal).toBeGreaterThan(0);
+
+  const panel5 = page.locator('#ch-sandbox');
+  await panel5.getByRole('tab', { name: 'Arrivals + Boarding' }).click();
+
+  await panel5.getByRole('button', { name: 'ShiftLens Solver Staffing (All ED Nurses)' }).click();
+  const allEdTotal = await sumSandboxGrid(panel5, 0);
+  expect(allEdTotal).toBe(arrivalsTotal + boardingTotal);
+
+  await panel5.getByRole('button', { name: 'ShiftLens Solver Staffing (Hold Nurses for Boarding)' }).click();
+  const edTotal = await sumSandboxGrid(panel5, 0);
+  const holdTotal = await sumSandboxGrid(panel5, 1);
+  expect(edTotal).toBe(arrivalsTotal);
+  expect(holdTotal).toBe(boardingTotal);
+});

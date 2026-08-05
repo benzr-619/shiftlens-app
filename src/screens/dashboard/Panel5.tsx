@@ -3,9 +3,8 @@ import { useStore } from '../../store';
 import type { ShiftDef, Grid } from '../../engine/types';
 import { DAY_LABELS } from '../../engine/types';
 import { fullWeekCapacity, solveFullCoverageWeekWithTrajectory, bestUnitToAdd, bestUnitToRemove } from '../../engine/solver';
-import { recommendWeeklyBoardingGrid } from '../../engine/boarding';
+import { recommendWeeklyBoardingGrid, weeklyArrivalsSpareByCell } from '../../engine/boarding';
 import { computeScenarioB, computeCombinedReallocation, NO_COMPRESSION_FLOOR_WHPPV } from '../../engine';
-import { solveEdHoldJointCoverage } from '../../engine/edHoldSolve';
 import { lookupWhppvBand } from '../../lib/edbaLookup';
 import { computeSandbox } from '../../engine/sandbox';
 import { fmtHour } from '../../lib/queuePattern';
@@ -208,10 +207,50 @@ export function Panel5() {
   );
   const activeDemand168 = toggle === 'arrivals' ? result.hourlyRequirement : combinedRequirement;
 
+  // Same arrivals-spare netting Panel4.tsx's own "combined" grid uses (recommendWeeklyBoardingGrid's
+  // optional 6th param) — computed against the FULL, unrestricted shift menu, since ED's own
+  // spare capacity is real regardless of which shifts hold nurses happen to be allowed to work.
+  // Using the identical inputs Panel4 uses is what makes `boardingGridAllEd` below byte-
+  // identical to Panel4's own boarding table, not just an equivalent re-derivation.
+  const arrivalsSpareByCell = useMemo(
+    () => weeklyArrivalsSpareByCell(result.grid, result.hourlyRequirement, sortedShiftMenu),
+    [result.grid, result.hourlyRequirement, sortedShiftMenu]
+  );
   const boardingGridAllEd =
     boarding && result.lostProductivity
-      ? recommendWeeklyBoardingGrid(boarding, sortedShiftMenu, inputs.wHppvTarget, band.p25Whppv, result.lostProductivity.wHppvConsumedByBoarding)
+      ? recommendWeeklyBoardingGrid(
+          boarding,
+          sortedShiftMenu,
+          inputs.wHppvTarget,
+          band.p25Whppv,
+          result.lostProductivity.wHppvConsumedByBoarding,
+          arrivalsSpareByCell
+        )
       : {};
+
+  // The SAME recommended boarding grid, but solved against whichever shift menu hold nurses are
+  // actually allowed to work (§4's restriction checkboxes). When every shift is allowed, this is
+  // the identical call as `boardingGridAllEd` above (same menu, same result) — reusing that
+  // value directly rather than recomputing guarantees byte-identical output, exactly recreating
+  // Panel 4's own two tables (arrivals = result.grid, boarding = this grid) split across pools
+  // instead of summed into one. Only when the allowed set is actually narrower does this produce
+  // a genuinely different recommendation — `recommendWeeklyBoardingGrid` re-solves its own
+  // stackable-unit funding against the smaller menu, per the redesign's own "compute a new
+  // solution" instruction.
+  const allShiftsAllowed = allowedHoldShiftMenu.length === sortedShiftMenu.length;
+  const boardingGridForHold =
+    allShiftsAllowed
+      ? boardingGridAllEd
+      : boarding && result.lostProductivity
+        ? recommendWeeklyBoardingGrid(
+            boarding,
+            allowedHoldShiftMenu,
+            inputs.wHppvTarget,
+            band.p25Whppv,
+            result.lostProductivity.wHppvConsumedByBoarding,
+            arrivalsSpareByCell
+          )
+        : {};
 
   // §1 — the medical/BH boarding split, unchanged from the prior build's own judgment call
   // (see this file's git history / results-redesign.md's PR G section): the engine only
@@ -248,15 +287,17 @@ export function Panel5() {
     setEdGrid(sumGrids(result.grid, boardingGridAllEd, sortedShiftMenu));
     setHoldGrid(emptyGrid(sortedShiftMenu));
   }
+  // ED stays exactly `result.grid` — the SAME budget-trimmed arrivals solve Panel4 shows as its
+  // "Nurses for Arrivals" table, never re-solved from scratch here. When every shift is allowed
+  // for hold, `boardingGridForHold` is the identical `boardingGridAllEd` grid Panel4 shows as
+  // "Additional Nurses for Boarding" — so this exactly recreates Panel4's two tables, just
+  // assigning the boarding one to the hold pool instead of summing it into ED. Only when the
+  // restriction narrows the allowed shifts does `boardingGridForHold` differ, which is exactly
+  // the "compute a new solution" case — recommendWeeklyBoardingGrid re-solves its own funding
+  // order against the smaller menu, not a from-scratch full-coverage fill.
   function prefillSolverHoldSplit() {
-    const { edGrid: solvedEd, holdGrid: solvedHold } = solveEdHoldJointCoverage(
-      combinedRequirement,
-      medBoarding168,
-      sortedShiftMenu,
-      allowedHoldShiftMenu
-    );
-    setEdGrid(solvedEd);
-    setHoldGrid(solvedHold);
+    setEdGrid({ ...result.grid });
+    setHoldGrid({ ...boardingGridForHold });
   }
 
   // §5/§6/§9 — the current sandbox test schedule's own combined ED+hold picture.
