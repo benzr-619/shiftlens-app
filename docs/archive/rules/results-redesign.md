@@ -1,0 +1,2568 @@
+# Results Page & Setup redesign (2026-07-24 spec) — implementation notes
+
+Tracks the root-to-branch Results-dashboard + setup redesign specced in
+`RESULTS_PAGE_REDESIGN_SPEC_2026-07-24.md` (repo root). The spec's Section 0 is the
+governing "why" (understanding + communication); Sections 1–2.6 are one candidate design
+for it, explicitly not sacred. Being built in a few smaller PRs along section boundaries.
+This file accrues per-section implementation detail + spec-to-code gotchas as each lands.
+
+## STALE-DOC WARNING: CLAUDE.md's boarding description is behind the code (found 2026-07-24)
+
+CLAUDE.md's **Screen Map** and **Feature Status** describe the boarding coverage section as
+the **2026-07-22 read-only `+N`-label grid + funding slider + view-toggle-with-month-dropdown**
+version — now **two revisions stale**. The current code is the **§2.6 single-representative-week
+grid + month-SCOPE toggles** (2026-07-24, see below and `.claude/rules/boarding-seasonality.md`'s
+latest section). **For the boarding section's current shape, trust `boarding-seasonality.md`'s
+LAST section + the code, NOT CLAUDE.md's Screen Map/Feature Status.** CLAUDE.md's
+already-documented boarding text still hasn't been rewritten (that needs Ben's confirmation per
+AUTOMATIC MAINTENANCE — flag it if doing a CLAUDE.md refresh pass). Test count is also well
+ahead of CLAUDE.md (62 as of 2026-07-24 after the §2.6 test rewrite; CLAUDE.md says 55).
+
+## Section 1 — current-staffing grid added to setup (built 2026-07-24)
+
+**What was built:** the optional current-staffing grid (previously only on the results page)
+now also appears on the shift-menu setup step (`ShiftMenuStep.tsx`), so it's *introduced* at
+setup but still editable on the results page.
+
+- New shared component `src/components/CurrentStaffingGrid.tsx` — a store-driven editable
+  day × shift-menu grid bound to `currentStaffingGrid` / `setCurrentStaffingCell`. Both
+  entry points (setup step + `CoreGridTab.tsx`) render this SAME component, so they can
+  never drift in shape/interaction and an edit in either place is the same underlying store
+  value. `CoreGridTab.tsx`'s previously-inline current-staffing input grid was replaced by
+  this component (behavior-preserving; the diff grid + stats below it are untouched, since
+  they'll be reworked in spec 2.2). `setCurrentStaffingCell` was dropped from CoreGridTab's
+  store destructure (now unused there — the component owns the write).
+- Grid sorts columns by `startHour` (same convention as CLAUDE.md Section 6 /
+  `sortShiftsByStartHour`), duplicated as a small local `sortByStartHour` in the component.
+- Optional: it does NOT gate the setup "Next" button — `SetupScreen.tsx`'s step-2 gate is
+  still just `shiftMenu.length > 0`. Starts blank (`currentStaffingGrid` stays `null` until
+  the user types), never seeded from `result.grid`.
+- Store already had `currentStaffingGrid`/`setCurrentStaffingCell`/`resetCurrentStaffingGrid`
+  from the 2026-07-22 results-page build — no store changes were needed; setup just reuses
+  them.
+
+**Verified end-to-end (Playwright, headless):** setup grid renders (7×2=14 inputs for the
+default 2-shift menu), a value entered at setup persists into the results-page grid via the
+shared store, the results-page grid stays editable, zero console/page errors. `npm run
+build`, `npm test` (68), `oxlint` (only a pre-existing `StepIndicator.tsx` fast-refresh
+warning) all clean.
+
+**Follow-up, 2026-07-25:** `ShiftMenuStep.tsx` also gained a download-template/upload path
+for current staffing, alongside the direct-entry grid — see `.claude/rules/
+template-parsing.md`'s "Current-staffing template" section for the full detail (why it's a
+second, separate template rather than a fifth consolidated-template tab, and the new
+`lib/parseStaffingUpload.ts` / store `setCurrentStaffingGrid` merge behavior).
+
+**Deliberately DEFERRED from Section 1 this session:** the **shift-menu flexibility-preference
+capture** (static / flexible start times / flexible shift count / flexible shift length),
+which Section 1 also asks to add to the shift-menu setup step. It feeds spec Section 2.3,
+whose solver capability is a documented reversal of CLAUDE.md Section 7's "no auto-optimizing
+shift-menu search" — flagged for Ben's confirmation before building (spec Section 5). Not
+built until that's confirmed, to avoid shipping a setup control wired to a solver path that
+may change shape. `ReviewStep.tsx` was also left as-is (no current-staffing summary line
+added) — optional, out of this PR's scope.
+
+## Section 2.2 — idealized-vs-current comparison unit + budget/shape reconciliation (built 2026-07-24)
+
+**What was built (all in `CoreGridTab.tsx`, no engine changes — pure display arithmetic per
+spec §4.4):**
+
+- The separate `.core-grid-hero` (idealized) card and `.current-staffing-card` (current +
+  diff) card are **collapsed into one `.comparison-unit` card**: templated headline →
+  reconciliation callout → both grids side by side (`.comparison-grids` >
+  `.comparison-grid-block` ×2) → diff grid. The idealized grid is no longer a visual "hero"
+  — it's a peer of the current grid (spec §2.2: "not a standalone hero grid"). Dead CSS
+  removed: `.core-grid-hero`, `.staffing-grid-hero` (no longer referenced). `.current-staffing-card`
+  CSS stays — still used by the **setup** grid (`ShiftMenuStep.tsx`).
+- **Total-hours reconciliation (the genuinely new bit):** classifies the divergence from
+  current as a BUDGET gap (wrong total, right shape) vs. a SHAPE gap (right total, wrong
+  distribution) — because the fix and the boss-ask differ (spec §2.2). Arithmetic over the
+  two grids:
+  - `underHours` = Σ over cells where idealized > current of `(ideal−current)·shiftLength`
+  - `overHours`  = Σ over cells where current > idealized of `(current−ideal)·shiftLength`
+  - `budgetGapHours = underHours − overHours` (net; equals idealized weekly hrs − current
+    weekly hrs by construction) — the budget component.
+  - `shapeGapHours = min(underHours, overHours)` — the offsetting/redistribution component
+    (hours you'd move between shifts even if totals matched).
+  - `gapKind`: `'none'` if total mismatch < 1 hr; else whichever of budget/shape is <20% of
+    the total is "minor" → `'budget'` / `'shape'`; else `'both'`. The 20% threshold is a
+    display heuristic, not load-bearing engine math — safe to tune.
+- **Templated headline** (fixed sentence, numbers interpolated — quotable into a boss-ask,
+  spec §0 communication goal), one variant per `gapKind`. This extends the same
+  templated-headline pattern the `.plain-summary` "What this schedule means" panel already
+  uses (spec §2 design-pattern note).
+- **Empty-state:** when no current staffing has been entered (`hasCurrentStaffing` = any
+  current cell > 0), the callout/headline are replaced by a `.comparison-cta` prompt rather
+  than a misleading verdict against a blank grid — a lightweight stand-in for the fuller
+  §2.1 CTA (not the whole of §2.1, which is still unbuilt). The current grid is always shown
+  (it IS the inline entry point), so entering staffing here or at setup both populate the
+  same `currentStaffingGrid`.
+- The redundant "Hours vs. idealized" stat was dropped (the Budget-gap callout now owns that
+  number); "Hours below ideal coverage (current)" and "ENA floor violations (current)" moved
+  into the reconciliation callout. The `.wHPPV-unit` card below (realized wHPPV / overcoverage
+  / shortfall + heatmap) is untouched — CLAUDE.md §6's never-separable rule still holds.
+
+**Verified end-to-end (Playwright, headless):** comparison unit renders with both grids as
+peers + diff grid; empty current → CTA and no callout; copying idealized→current classifies
+`'none'` ("line up"); one cell over → `'budget'`; the diff grid and classification recompute
+live when EITHER grid is edited; round-trips back to `'none'`; zero console errors. `npm run
+build`, `npm test` (68), `oxlint` (only the pre-existing StepIndicator warning) all clean.
+
+**Not done in this PR (still open in §2.2's neighborhood):** the full §2.1 opening
+current-staffing analysis (realized wHPPV vs. band, lean-hour range feeding the §2.4 backlog
+diagnostic, effective-wHPPV-after-boarding preview) — the empty-state CTA here is only a
+placeholder for §2.1's absent-grid branch. `ReviewStep.tsx` still has no current-staffing
+summary line.
+
+## Section 2.4 — backlog diagnostic ENGINE (built 2026-07-24; UI not yet wired)
+
+The pure engine function §4.1 calls out. `src/engine/backlog.ts`, `computeBacklog(grid,
+hourlyRequirement, shifts, decay?)` → `BacklogResult`. Re-exported from `engine/index.ts`.
+**ASSUMPTION**-tagged. **This specific function is diagnostic-only — never imported by
+`solver.ts`/`compute()`'s solve path; it reads an already-solved/edited grid.** Callable
+against ANY grid (idealized or current), like `recomputeFromGrid`. **2026-07-26 update:** the
+Step 3 trim now DOES feed on this same decay model (a deliberate reversal, see
+`.claude/rules/engine-solver.md`'s "Budget-capped trim" section) — via its own local
+reimplementation of the identical recurrence (`solver.ts` can't import `computeBacklog`
+itself without a circular dependency). So "never feeds the solver" is no longer true of the
+backlog MODEL as a whole, only of this literal exported function.
+
+- Recurrence exactly as resolved: `backlog[h] = max(0, backlog[h-1]·0.85 + (hourlyRequirement[h]
+  − onDutyHeadcount[h]))`, circular over 168h. `DEFAULTS.backlogHourlyDecay = 0.85`
+  (`engine/types.ts`). Capacity via `coverageForDay` (reused, not reimplemented).
+- **Circular-no-reset implementation:** two full passes over the 168h recurrence — the first
+  seeds `backlog[167]` so the Sat→Sun carry into `backlog[0]` is real, not 0. `carriedIn` is
+  captured in the final pass so it stays consistent with `backlog` except at the single
+  wraparound point (residual ~0.85^167 ≈ 1e-12). Tested directly (deficit only at hour 167 →
+  `backlog[0] == 5·0.85`).
+- **Outputs:** `backlog[168]`, `longestStreakHours` + `longestStreakStart` (circular run
+  detection over a doubled index space so a Sat→Sun-wrapping streak isn't missed),
+  `neverClears` (chronic hole → streak 168, no reset hour), `typicalClearHour` (the
+  "overnight reset" — hour-of-day caught up on ≥4/7 days), `peakBacklog`/`peakAt`, and
+  `shiftDiagnostics[]` (per-shift inherited-vs-generated).
+- **Inherited-vs-generated attribution** is a pure PER-HOUR decomposition (carried-in =
+  `min(carriedIn[h], backlog[h])`; generated = `max(0, deficit[h])`), attributed to covering
+  shift(s) split evenly at hand-off hours via `shiftHoursOfDay` — the SAME even-split
+  convention boarding's slot ranking uses. This deliberately avoids any cross-midnight "shift
+  span" ambiguity (overnight shifts cover non-contiguous global hours under the within-day
+  model — see `.claude/rules/engine-solver.md`), so no span/contiguity logic is needed.
+- **Thresholds that are display heuristics, NOT load-bearing math** (safe to tune):
+  `BACKLOG_CAUGHT_UP_THRESHOLD = 0.5` nurse-hours (below this an hour reads as caught up);
+  the ≥4/7-days rule for calling an hour the reliable reset.
+- Tests: `engine/__tests__/backlog.test.ts` (6) — zero-deficit, geometric steady state
+  `1/(1-decay)`, circular no-reset + wrapping streak, active-paydown-beats-passive-decay,
+  shift attribution, lone-hour-vs-compounding-hole. `npm test` 74 total, `build`/`lint` clean.
+
+**§2.4 UI wiring — DONE 2026-07-24 (see the §2.1 entry below).** The diagnostic now surfaces
+in two places: the §2.1 opening analysis (current-grid backlog) and the wHPPV heatmap overlay
+(idealized-grid backlog).
+
+## Section 2.1 — opening current-staffing analysis + heatmap backlog overlay (built 2026-07-24)
+
+New component `src/screens/dashboard/CurrentStaffingAnalysis.tsx`, rendered at the TOP of
+`CoreGridTab.tsx` (after the ESI/reconciliation banners, before `.plain-summary`) so the page
+opens with an analysis of CURRENT staffing, not the idealized grid (spec §2.1). Store-driven;
+computes its own `getCurrentStaffingResult()` + `computeBacklog(currentStaffingGrid, …)`.
+
+- **Two states:** with current staffing entered (`hasCurrentStaffing` = any cell > 0) → full
+  analysis; otherwise → a `.current-analysis-cta` opener ("Start with your current staffing")
+  and the page proceeds to the idealized recommendation. (This is the real §2.1 absent-grid
+  branch; the §2.2 comparison-unit empty-state CTA remains as its own inline prompt lower down
+  — the two are different spots, intentionally.)
+- **Content (templated headline + stat cards, per the §2 design pattern):** realized wHPPV vs.
+  the `lookupWhppvBand` p25–p75 band (below/within/above), weekly realized-wHPPV range
+  (current grid, same scaling math as CoreGridTab's idealized range), the §2.4 backlog
+  "longest lean stretch" + overnight-reset hour, and — when boarding exists — effective wHPPV
+  after boarding (`realized − wHppvConsumedByBoarding`) + `boarding.annualFte` to fully cover
+  it (previews §2.5). A collapsed-by-default `.why-toggle` explains shortfall-feeds-forward +
+  which shift originates vs. inherits the hole (from `backlog.shiftDiagnostics`). ASSUMPTION
+  `EvidenceBadge` on the section header.
+- **Backlog note:** the §2.1 narrative uses the CURRENT grid's backlog; the heatmap overlay
+  (below) uses the IDEALIZED grid's backlog. Two separate `computeBacklog` calls on purpose —
+  they answer different questions ("how is my real schedule doing" vs. "where does even the
+  recommendation run behind").
+
+**Heatmap overlay (`WhppvHeatmap.tsx` + `CoreGridTab.tsx`) — resolved call #3 implemented:**
+the `WhppvHeatmapCell` `atRisk`/single-`riskReasons` flag was split. The **single-hour p25
+red-outline is GONE** (superseded by the backlog overlay); the **ENA on-duty floor flag stays**
+(red inset outline + "!" — a safety check, not a backlog signal). New per-cell fields
+`belowFloor`, `backlog`, `inBacklogStreak` (`= backlog >= BACKLOG_CAUGHT_UP_THRESHOLD`).
+Backlog cells get an amber corner dot + amber bottom-bar (`.heat-cell-backlog` /
+`.heat-backlog-dot`; a `.heat-cell-risk.heat-cell-backlog` combined rule keeps both outlines
+when a cell is both). Legend updated to the two separate items. **Gotcha for future edits:**
+`CoreGridTab` had a now-removed `p25Whppv`/`lookupWhppvBand` usage — don't reintroduce a
+p25-single-hour heatmap flag; that's the exact thing the backlog overlay replaced.
+
+**Verified end-to-end (Playwright, headless):** no-current → CTA opener, full analysis absent;
+with (understaffed) current → analysis heading, headline names realized wHPPV + band position,
+ASSUMPTION badge, realized/lean-stretch stat cards, feed-forward "why" explainer; heatmap
+legend shows ENA-floor + backlog items and no "p25 band" text; 99 backlog dots rendered
+(overlay wiring works). Zero console errors. `npm test` 74, `build`/`lint` clean (only the
+pre-existing StepIndicator warning).
+
+**Follow-up, 2026-07-25 — CURRENT-grid heatmap added to §2.1 (not just the current-grid
+narrative stats):** `CurrentStaffingAnalysis.tsx` renders its own `WhppvHeatmap` (same shared
+`components/WhppvHeatmap.tsx` CoreGridTab uses for the idealized grid — same legend/color
+scale, so the two read as directly comparable), below the stat-card row and above the
+collapsed "why" toggle. Per-cell realized wHPPV is derived the SAME way CoreGridTab derives it
+for the idealized grid — `coverageForDay(currentStaffingGrid?.[day] ?? {}, sortedShiftMenu)` ÷
+cell arrivals × a scale factor centered on the reported weekly `realizedWHppv` — just run
+against `currentStaffingGrid` instead of the solved grid. No second `computeBacklog` call was
+added for the overlay: it reuses the SAME `backlog` (current-grid) result this component
+already computes for the narrative stats above it. The ENA-floor overlay reuses
+`current.enaFloorViolationsRemaining` from the existing `getCurrentStaffingResult()` call —
+also not recomputed. All pure client-side display arithmetic, no engine changes (consistent
+with CLAUDE.md Section 6's heatmap convention, now with a second consumer).
+
+A companion shift/day strengths-weaknesses paragraph (templated rollup of over/understaffed
+hours by shift-type/day, tying the leanest cell to the "longest lean stretch" stat above) was
+built and then DELIBERATELY REMOVED same-day, per Ben's call: it read as "a lot of words saying
+nothing" that the heatmap (plus the existing headline/stat cards) already covers, and money was
+better spent on heatmap legibility than a fourth restatement of the same shortfall. Don't
+re-add a text rollup of this shape without checking first — if the heatmap needs to say more,
+prefer improving the heatmap itself over adding parallel prose.
+
+**Verified end-to-end (Playwright, headless), 2026-07-25:** CSV-arrivals upload → no current
+staffing → CTA card renders, zero `.whppv-heatmap-wrap` nodes inside `.current-analysis`
+(confirms no heatmap in the CTA state). Current-staffing grid filled with a mixed
+over/under/zero pattern (14 cells, 2-shift default menu) → full analysis renders, "Where your
+current schedule runs lean or rich" heading + a 168-cell heatmap appear, legend shows the same
+ENA-floor/backlog items as the idealized heatmap. Zero console errors both states. `npm test`
+78, `build`/`lint` clean (only the pre-existing StepIndicator warning).
+
+## Section 3 (ESI banner) + Section 2.5 (boarding transition) — built 2026-07-24
+
+**§3 ESI-banner removal (UI-copy only):** the top-of-`CoreGridTab` "No ESI mix provided — core
+allocation is running on raw volume only" banner is gone, along with CoreGridTab's now-unused
+`EvidenceBadge` import. `result.esiConfidenceFlag` is still COMPUTED (engine unchanged) — just
+no longer rendered. ESI mix, acuity weighting, the ESI Mix template tab, and the setup flow
+are all untouched (spec §1/§3 are explicit: engine keeps ESI, only this banner goes). Don't
+reintroduce the banner. The other §3 removals are NOT done here — the Compare section retires
+into §2.3 (not yet built), and the split current/diff cards already collapsed in §2.2.
+
+**§2.5 boarding transition bridge:** new `src/screens/dashboard/BoardingTransition.tsx`,
+rendered in `DashboardScreen` BETWEEN `CoreGridTab` and `BoardingCoverageSection`. A short
+NARRATIVE bridge — no grid — pivoting from the ED-arrivals picture to what boarding costs.
+Shows effective wHPPV after boarding for BOTH idealized (`idealizedRealized − consumed`) and
+current (`current.realizedWHppv − consumed`, only when current staffing exists) staffing, plus
+`boarding.annualFte` to fully cover it as the bridge line into §2.6. **Renders `null` when
+`result.boarding` is null** (the boarding section's own "Not produced" note covers that state).
+`consumed` = `result.lostProductivity.wHppvConsumedByBoarding` (guaranteed non-null whenever
+boarding is). Note: this is a THIRD independent surfacing of effective-wHPPV-after-boarding —
+the `.wHPPV-unit` stat (target-based `wHppvAvailableForEdCare`), the §2.1 current-staffing
+card, and now this bridge (realized-based, both grids). Intentional per spec §2.1/§2.5; don't
+"dedupe" them, they answer different framings.
+
+**Verified end-to-end (Playwright, headless):** manual no-ESI/no-boarding flow → ESI banner
+absent + bridge absent + boarding "Not produced"; uploaded filled template (arrivals + Scalars
+admit-rate/duration) + current staffing → ESI banner absent, bridge renders with both
+idealized & current effective-wHPPV stats and the FTE bridge line. Zero console errors. `npm
+test` 74, `build`/`lint` clean.
+
+## Section 2.6 — boarding coverage redesign (built 2026-07-24)
+
+The fourth reversal of the boarding-output shape — full detail in
+`.claude/rules/boarding-seasonality.md`'s LAST section (the engine model change lives there, as
+the boarding area of record). Summary: replaced the annual-aggregated grid (whose day-of-week
+view summed a cell's `+1`s across 12 funded months → the confusing `+12`-vs-~7-FTE mismatch)
+with ONE editable representative-week grid; month toggles are SCOPE (which months the plan
+applies to, scaling the stats), day toggles removed (zero a day by editing the cell), templated
+headline, default funded to the p25 band, "how is this calculated" explainer updated + reframed
+away from per-cell hold-vs-additive. Removed engine fns `deriveBoardingCoverageCells` /
+`restrictPrioritySlotsToActivePeriods` / `boardingHoursCoveredByGrid` / `fundedCountToReachWhppv`
++ `BoardingCoverageCell` type; added `weeklyBoardingDemandByCell` / `weeklyBoardingCoveredByGrid`
+/ `annualBoardingCoveredByWeeklyGrid` / `recommendWeeklyBoardingGrid` / `boardingCoverageFte` +
+`BoardingResult.monthFactors`. Kept `prioritySlots` (the new model reads it) + `effectiveEdWhppvAtCoverage`.
+
+**Follow-up, 2026-07-25 (§2.6.1, additive — not another reversal):** added a second "Actual FTE
+to staff this plan" figure alongside the existing coverage FTE, so imperfect shift-block
+coverage (fixed 8/10/12h shifts overshooting a cell's exact demand) shows up as visible
+"efficiency overhead" instead of being invisible inside a demand-capped number. New engine fns
+`weeklyStaffingHoursForGrid` / `annualStaffingHoursForWeeklyGrid`; `scopeWeeks` promoted from
+private to exported so both annualizers share one scope formula. Full detail (including the
+staffing-FTE == coverage-FTE edge case and its test) is in `boarding-seasonality.md`'s §2.6.1,
+now the file's actual last section.
+
+**Verified end-to-end (Playwright, headless):** flat-seasonality upload → single grid, small
+headcounts (max +1, not months-summed), NO month box, NO day toggles, editing reveals reset;
+monthly-seasonality upload → 12 month toggles, headline names the peak-need month (December),
+toggling 6 months off scales coverage % down (44%→20%) while the grid pattern stays. Zero
+console errors. `npm test` 62 (boarding tests rewritten to the new model: 24 in boarding.test.ts),
+`build`/`lint` clean.
+
+## Section 2.3 — shift-menu flexibility search (built 2026-07-25) — THE SOLVER REVERSAL
+
+Full engine detail in `.claude/rules/engine-solver.md`'s last section (the reversal of "no
+auto-optimizing shift-menu search"). Summary of the UI/wiring half:
+
+- **New engine** `engine/flexMenu.ts` (`searchFlexibleMenus`, `FlexAxes`, `NO_FLEX`,
+  `MenuCandidate`) — bounded, opt-in, advisory, reuses `solveShiftFit`. 7 tests in
+  `flexMenu.test.ts`. Exported from `engine/index.ts`.
+- **Store:** `flexAxes: FlexAxes` (default `NO_FLEX`) + `setFlexAxis`. Removed
+  `compareVariants`/`CompareVariant`/`addCompareVariant`/`removeCompareVariant`/`updateCompareVariant`.
+- **Shared control** `components/FlexAxesToggles.tsx` (store-driven checkboxes) used BOTH at
+  setup (`ShiftMenuStep`, the deferred §1 capture — now built) and on results.
+- **Results section** `screens/dashboard/ShiftMenuFlexibilitySection.tsx` — the axis toggles,
+  the best solver candidate side-by-side (only when it beats current; else "already efficient"),
+  and a manual alternate-menu path (`ShiftMenuEditor` + solved comparison, absorbing the old
+  Compare tab). Never auto-adopts. Rendered in `DashboardScreen` right after `CoreGridTab`.
+- **`CompareTab.tsx` DELETED** (the last §3 removal). Its manual side-by-side lives in the flex
+  section now.
+- **CLAUDE.md §7 updated atomically** (the reversal line) as part of this build + the full
+  maintenance refresh (Ben directed "continue through the plan and maintenance" 2026-07-25).
+
+**Verified end-to-end (Playwright, headless):** setup shift-menu step shows 3 axis checkboxes;
+enabling one persists to the results page (shared store); an enabled axis surfaces a candidate
+comparison table OR an "already efficient" note; manual mode opens an editor + comparison;
+toggling live works; the old `.compare-columns` section is gone. Zero console errors.
+`npm test` 69, `build`/`lint` clean.
+
+## ✅ REDESIGN COMPLETE (2026-07-25) — every section of the spec is built
+
+§1, §2.1, §2.2, §2.3, §2.4 (engine + UI), §2.5, §2.6, §3 (all removals), §4 (all engine work),
+§5 (all four judgment calls resolved). CLAUDE.md was refreshed to match (Screen/Module maps,
+Section 6 rules, Section 7 reversal, Feature Status, store shape). No export feature was built
+(spec §0 explicitly didn't want one — the page teaches the story itself). Nothing outstanding
+from the spec. Future boarding/solver edits: read `boarding-seasonality.md` + `engine-solver.md`
+last sections first (both reversed direction in this pass).
+
+## Section 5 judgment calls — ALL RESOLVED with Ben (2026-07-24)
+
+All four open calls were surfaced with concrete recommendations and signed off by Ben this
+session. These are now decisions, not open questions — build to them.
+
+1. **Backlog decay formula (2.4) — RESOLVED: `DECAY = 0.85`/hr + active paydown.**
+   `backlog[h] = max(0, backlog[h-1]·0.85 + (hourlyRequirement[h] − onDutyHeadcount[h]))`,
+   circular over 168h with NO week-boundary reset. ~15%/hr passive dissipation (~4.3h
+   half-life); excess-capacity hours actively pay backlog down via the signed deficit term
+   (no separate paydown mechanism needed — it's already in the formula). Reuses existing
+   shortfall math (`hourlyRequirement` + on-duty coverage), no new demand model. **ASSUMPTION**
+   evidence tag (same rigor as the boarding convolution / `effectiveEdWhppvAtCoverage`).
+   `0.85` lives as a single tunable `DEFAULTS` constant. Diagnostic-only at the time this call
+   was resolved (2026-07-24) — never fed the solver or any budget-trim/allocation logic (spec
+   §2.4/§4.1). **SUPERSEDED 2026-07-26:** the budget trim now deliberately DOES feed on this
+   same decay model — see `.claude/rules/engine-solver.md`'s "Budget-capped trim" section for
+   that reversal. The decay formula/constant itself (`0.85`, no boundary reset) is unchanged;
+   only "never feeds the solver" no longer holds. **Gotcha:** "no boundary
+   reset" + circular ⇒ run the 168h recurrence TWICE (a settle pass to seed `backlog[167]`,
+   then the reported pass) so the Sat→Sun carry is stable rather than seeded from 0.
+   (Ben's pick over the stickier 0.90/hr alternative.)
+
+2. **Shift-menu flexibility solver reversal (2.3) — RESOLVED: PROCEED, scoped tight.**
+   This DOES reverse CLAUDE.md §7's "no auto-optimizing shift-menu search (Compare section is
+   user-driven side-by-side only)" — confirmed intentional. Scope that keeps the reversal
+   honest but bounded: **per-axis opt-in** (start times / shift count / shift length), a
+   **bounded candidate enumeration** (e.g. all-8s/10s/12s; a small start-time offset set; ±1
+   shift count) each solved through the EXISTING `solveShiftFit` at the **same budget**,
+   surfaced as a **side-by-side candidate, NEVER auto-adopted** into the idealized grid
+   (preserves "numbers, not a verdict"). It's a user-triggered *advisory* search, not a
+   silent optimizer — that's the precise boundary of the reversal. **Must flag prominently in
+   that PR's commit/body.** Manual hand-defined alternate-menu path (spec §2.3) is preserved
+   alongside. When built, update CLAUDE.md §7 (needs Ben confirm to change that documented
+   line — now have it) + `.claude/rules/engine-solver.md`.
+
+3. **Heatmap risk flag vs. backlog streak (2.4) — RESOLVED: split, don't blanket-supersede.**
+   The backlog-streak overlay **supersedes the single-hour p25 red-outline** (a streak is
+   strictly more informative than a lone short hour). But the **ENA-floor violation flag
+   STAYS** — it's an absolute safety-minimum check, orthogonal to demand backlog, and must
+   not vanish into a backlog concept. So: p25-single-hour flag → replaced by streak overlay;
+   ENA-floor flag → preserved as its own indicator. (Refinement on the spec's "likely
+   supersede," which lumped p25 and ENA-floor together.)
+
+4. **"Hours below ideal coverage" stat (2.2) — RESOLVED: KEEP.** Different question than
+   backlog (total shortfall *magnitude* vs. whether shortfall *compounds over time*).
+   Complementary, not redundant — just make the copy distinguish them.
+
+**IMPORTANT — do not confuse with the 2026-07-25 heatmap legibility rework below:** call #3
+above retired a *binary per-cell flag* ("is this one hour below p25? outline it red"). The
+2026-07-25 rework (last section of this file) makes p25/p75 the heatmap's *continuous color
+domain* — a neutral band, not a flag. These are different mechanisms answering different
+questions; the rework does NOT un-resolve call #3, and call #3 does NOT forbid the rework.
+Read the last section before assuming a conflict.
+
+## Heatmap legibility rework (2026-07-25) — spec `HEATMAP_LEGIBILITY_SPEC_2026-07-25.md`
+
+Display/presentation only — no `engine/` changes. Per CLAUDE.md Section 6's heatmap
+convention, per-cell realized-wHPPV arithmetic stays client-side in the components; this
+rework doesn't move any of that into `engine/`. Full narrative rationale is in the spec file
+(repo root); this section is the code-mapping/gotcha record for future sessions, same as
+every other section of this file.
+
+**Two things that look like rule violations and aren't — read this before "fixing" either:**
+1. **p25/p75 as a color domain is not the retired p25 flag.** See the boxed note directly
+   above — call #3 (single-hour binary flag, GONE) and the neutral-band color domain
+   (continuous, THIS rework) are unrelated mechanisms that happen to share a data source
+   (`lookupWhppvBand`). CLAUDE.md Section 6 and this file's call #3 were both worded loosely
+   enough to read as a blanket "never use p25 on the heatmap again" — they're now reworded to
+   say specifically what's retired (the flag) vs. what isn't (p25/p75 as band edges).
+2. **Day-of-week display order changed to Mon-Sun; the engine's `day 0 = Sunday` index did
+   NOT.** This is a pure render/row-emission-order change — see CLAUDE.md Section 6's new
+   Mon-Sun paragraph and `.claude/rules/template-parsing.md`'s note on the legacy-template
+   regression test. Nothing in `arrivals[day*24+hour]` semantics moved.
+
+**§1 — Backlog overlay axis fix.** The old marker (`.heat-cell-backlog` bottom box-shadow bar
++ `.heat-backlog-dot` corner dot, both REMOVED) put a horizontal line on a cell's bottom edge
+— perpendicular to what it encodes, since a backlog streak is consecutive HOURS, which run
+vertically down a day column. Replaced with `.heat-backlog-spine`, an absolutely-positioned
+div on the cell's left inside edge, `top: -1px; bottom: -1px` so it overlaps the collapsed
+table border and bridges seamlessly into the same spine on a vertically adjacent flagged
+cell — a streak then reads as one continuous bracket, no per-cell gap. The ENA-floor red
+inset outline + "!" (`.heat-cell-risk`) is completely unchanged; the combined case (both
+flags on one cell) just renders both DOM elements independently now rather than needing a
+combined CSS selector (`.heat-cell-risk.heat-cell-backlog` was deleted — it had nothing left
+to do once the spine moved off `box-shadow` and onto its own element).
+
+**§2 — Backlog weight by magnitude, one shared max.** No new threshold —
+`BACKLOG_CAUGHT_UP_THRESHOLD` (engine/backlog.ts, unchanged) still gates "is there a backlog
+at all." Above that gate, the spine's `width`/`opacity` scale linearly with
+`cell.backlog / backlogMax` (inline styles, computed in `WhppvHeatmap.tsx`'s render — not a
+CSS class, since the weight is per-cell continuous data). **`backlogMax` is the max
+`peakBacklog` across BOTH the idealized grid's `computeBacklog` result AND the current-staffing
+grid's** — computed once in `CoreGridTab.tsx` (`currentBacklogForMax`, a second `computeBacklog`
+call purely to fold its peak into the shared max; cheap pure arithmetic, not a second real
+diagnostic) and passed as a `backlogMax` prop into both `WhppvHeatmap` instances. Per-grid
+normalization was explicitly rejected (spec §2): the two heatmaps are meant to be read side by
+side, and a per-grid max would make the same visual weight mean different backlog magnitudes
+in each — same reasoning as §6's shared color domain, below.
+
+**§3 — Color scale: neutral band, log-ratio domain, asymmetric ramps.** The largest change,
+all in `lib/whppvColorDomain.ts` (`computeColorDomain`, exported type `WhppvColorDomain`) +
+`components/WhppvHeatmap.tsx` (`cellVisual`, the named constants at its top). Detail already
+captured in CLAUDE.md Section 6's heatmap paragraph (band widening to include the user's own
+target, ±15% fallback, log-ratio distance from the crossed edge, asymmetric lean-fast/
+rich-slow gamma-eased ramps, muted gray-blue rich hue, white-text-flip threshold) — this file
+doesn't re-duplicate all of it, just the gotchas: `computeColorDomain` lives in its own
+`lib/` file, NOT in `WhppvHeatmap.tsx` itself, specifically so the component file only exports
+components (a function export there trips the `react(only-export-components)` fast-refresh
+oxlint rule — the same category of warning as the pre-existing `StepIndicator.tsx` one; don't
+reintroduce a second one by moving `computeColorDomain` back). The rich-side clamp anchor
+(~2x target) and lean-side saturate point (half the lower band edge) are independently-tunable
+named constants, not derived from each other — see the comment block above them.
+
+**§5 — Shift-boundary rules replace fixed hour marks.** `WhppvHeatmap.tsx`'s
+`shiftBoundariesByHour(shiftMenu)` builds an `hour -> label[]` map from the (already
+CoreGridTab/CurrentStaffingAnalysis-sorted) `shiftMenu` prop; any hour row matching a distinct
+`startHour` gets the `.shift-boundary` CSS class (top border rule) and its gutter cell shows
+the shift's `label || id` under the hour. Overlapping (swing) shifts just add another label at
+their own start hour — no special partition logic, and an overnight shift's within-day-circular
+model (`.claude/rules/engine-solver.md`) needs no special handling since the column's top edge
+already reads as a boundary. No 6-hourly banding was added; the shift rules replace that idea
+entirely, they don't coexist with it.
+
+**§6 — Shared domain, both instances.** `CoreGridTab.tsx` is now the ONE place that calls
+`computeColorDomain` and computes `backlogMax` — both are passed as explicit props into its
+own `<WhppvHeatmap>` call AND into `<CurrentStaffingAnalysis colorDomain={...}
+backlogMax={...} />`, which forwards them to its own `<WhppvHeatmap>` call. `
+CurrentStaffingAnalysis.tsx` no longer imports `lookupWhppvBand` itself — its "below/within/
+above the typical band" narrative language now reads `colorDomain.low`/`colorDomain.high`
+directly, so the heatmap's color and the narrative's band language can never drift apart from
+each other, on top of never drifting between the two heatmap instances.
+
+**§4 — Mon-Sun display order, everywhere.** New shared `src/lib/dayOrder.ts`
+(`DISPLAY_DAY_ORDER = [1,2,3,4,5,6,0]`, `DISPLAY_DAY_LABELS`) — every day-of-week-rendering
+surface imports this one helper instead of defining a local Mon-first ordering:
+`WhppvHeatmap`, `ArrivalsGrid`, `CurrentStaffingGrid`, `CoreGridTab`'s idealized + diff grids,
+`BoardingCoverageSection`, and `lib/template.ts`'s Arrivals/ESI Mix/current-staffing row
+emission. The engine's `day 0 = Sunday` index is untouched everywhere — this is a pure
+render/row-emission reorder. Parsers needed NO changes (`parseUpload.ts`/
+`parseStaffingUpload.ts` match a row to a day by NAME via `DAY_ALIASES`, never by row
+position) — proven by a new regression test
+(`lib/__tests__/parseUpload.test.ts`, "§4 regression") that uploads a hand-built legacy
+Sun-first arrivals workbook and a Mon-first one with the same underlying data and asserts
+identical parsed output. `lib/__tests__/template.test.ts` and
+`lib/__tests__/staffingTemplate.smoke.test.ts` each gained a row-order assertion confirming
+the generated templates themselves are Mon-first.
+
+**Verification (headless Playwright, screenshots captured for Ben):** a dataset with most
+daytime hours inside the band renders mostly blank (not pink) — confirms §3a; a deep-lean
+cell reads more alarming than an equally-distant rich cell — confirms §3c; a multi-hour
+backlog run renders as one continuous vertical bracket with visibly varying weight — confirms
+§1/§2; both heatmaps render identical color for the identical underlying value — confirms §6;
+columns render Mon→Sun in every grid; shift-start-hour rules show gutter labels; zero console
+errors. `npm run build`, `npm test` (80), `oxlint` clean (only the pre-existing
+`StepIndicator.tsx` fast-refresh warning).
+
+## PR D (2026-07-26, `SOLVER_REALISM_SPEC_2026-07-26.md`) — funding-ask surface + explanation rewrite
+
+Last of the four sequenced solver-realism PRs (A: global shift hours → B: asymmetric backlog
+recovery → C: convex objective → **D: this section**). Two halves: a new "what does closing
+the gap buy" surface, and a pass of copy fixes across the results page that had drifted false
+through the A/B/C reversals above.
+
+**Change 1-2 — trim trajectory + `EngineResult.fullCoverage`/`marginalCurve`/`marginalKneePoint`.**
+`engine/solver.ts`'s `trimWeekToBudget` was refactored into a shared `trimWeekToBudgetCore`
+(the exact same loop, unchanged) plus an optional `onBeforeCut` hook called once per outer
+iteration, BEFORE that iteration's cut, with the pre-cut `(capacity, baselineBacklog,
+scheduledHours)` state. The public `trimWeekToBudget` never passes the hook (so its own
+behavior is untouched by construction — proven directly, not just argued, by
+`solver.test.ts`'s byte-identical-grid test). `trimWeekToBudgetWithTrajectory` is the only
+caller that does, recording one `MarginalCurvePoint` per cut:
+`{ cumulativeHoursAdded, totalSeverity, longestLeanStretchHours, longestLeanStretchStart }`
+(the last field is a PR D addition beyond the spec's literal 3-field list — needed so the
+funding-ask headline can NAME a stretch, not just count its hours; `longestStreakAboveThreshold`
+already computed the position, so exposing it was free). Read BACKWARDS (last point → first),
+this is a diminishing-returns curve, guaranteed by construction since the trim is
+cheapest-cut-first — no fitting or smoothing.
+
+**Where the trajectory is computed — a decision the spec left open, resolved and flagged
+(same category as the flexMenu/relaxation-loop question above):** `compute()`
+(`engine/index.ts`) computes `fullCoverage`/`marginalCurve`/`marginalKneePoint` via a
+SEPARATE, plain ONE-SHOT `solveFullCoverageWeek` + `trimWeekToBudgetWithTrajectory` call —
+deliberately NOT threaded through the Phase 2b relaxation loop (`solveShiftFitWithBacklogFeedback`)
+that produces the primary idealized grid. Same reasoning as PR C's flexMenu decision: this is
+an ADVISORY curve (what does more budget buy), not the primary schedule, and running the
+8-pass relaxation loop just to trace a marginal curve would be a real cost multiplier the
+curve's own consumers don't need. This means `fullCoverage`/`marginalCurve` are computed
+against a plain one-shot trim, while `grid`/`weeklyScheduledHours` come from the relaxation
+loop — the two can diverge slightly in principle (different internal floor-raising), though
+`fullCoverage.weeklyHours` itself (from `solveFullCoverageWeek` alone, no trim involved) is
+unaffected either way.
+
+**`findMarginalKneePoint`** — classic geometric "elbow" heuristic (max perpendicular distance
+from the chord connecting the trajectory's first and last point), not a rate threshold or
+curve fit. Returns null below 3 points or when the max bend is under 2% of the chord length
+(`KNEE_MIN_BEND_FRACTION`, a tunable display heuristic).
+
+**Edge case, handled explicitly, tested:** a generous `wHppvTarget` can make full coverage
+cost LESS than budget (`fullCoverage.fteDelta <= 0`) — a real state (a low-volume ED with a
+generous target), not an error. `FundingAskSection.tsx` renders a distinct "your budget
+already funds full coverage" branch, no chart, no negative ask. Verified live via Playwright
+during this build (a flat low-arrivals dataset with `wHppvTarget: 1.7` actually hit this
+branch, not just in unit tests).
+
+**New component `screens/dashboard/FundingAskSection.tsx`** (change 3) — templated headline
+per the spec's exact pattern, plus a self-contained inline SVG line chart (no charting
+library) of the marginal curve, read right-to-left ("your budget" → "full coverage"), with a
+dashed marker at the knee point when one exists. Rendered in `DashboardScreen.tsx` between
+`CoreGridTab` and `ShiftMenuFlexibilitySection`.
+
+**Change 4 — heatmap: SECOND reversal of the color mechanism.** Read the existing
+"two things that look like rule violations and aren't" note above (2026-07-25 section) before
+touching this again — this is now a THIRD data point in that same history, not a conflict
+with it. Summary of what actually changed:
+- Cell's displayed NUMBER changed from realized wHPPV (`1.2`) to `onDuty/requirement` (`7/9`)
+  — demonstrably more intuitive (an ENA-floor-style ratio every nurse reads instantly), and
+  realized wHPPV moved to the tooltip.
+- Cell's COLOR is now driven by that SAME ratio (`onDuty/requirement`), against a per-cell
+  neutral band derived from THIS HOUR's own `bandFloorHourly`/`bandCeilingHourly` (expressed as
+  ratios against `requirement`, with `target = 1.0` — "exactly at this hour's own point
+  target" replaces "at the week's wHPPV target" as the reference point). This is DIFFERENT
+  from the 2026-07-25 rework's week-level `computeColorDomain`/`lib/whppvColorDomain.ts`
+  domain — that mechanism is UNCHANGED and still drives narrative band language elsewhere
+  (`CurrentStaffingAnalysis.tsx`'s "below/within/above the band" sentence, its stat cards) —
+  it just no longer drives THIS heatmap's color. `bandCeilingHourly` finally gets a consumer
+  it never had.
+- `WhppvHeatmap`'s prop signature dropped `colorDomain` entirely (no longer needed — the band
+  is now per-cell, carried on each `WhppvHeatmapCell` as `bandFloor`/`bandCeiling`). The
+  legend's numeric range text ("Typical range: 1.2–2.1") is GONE — there is no longer one
+  single range to show, since it varies by cell — replaced with a sentence describing the
+  per-hour mechanism itself. `computeColorDomain` is unchanged and still exported from
+  `lib/whppvColorDomain.ts` for the two components that still need week-level narrative text.
+- The "shared-domain-computed-once-in-CoreGridTab" rule is preserved IN SPIRIT: the underlying
+  `bandFloorHourly`/`bandCeilingHourly` curves are still `EngineResult` fields computed once by
+  `compute()` and read identically by both `CoreGridTab`'s own heatmap and
+  `CurrentStaffingAnalysis`'s — there's no longer a single shared prop VALUE to pass down (each
+  cell carries its own), but there's exactly one SOURCE curve, same invariant.
+
+**Change 5 — explanation fixes, all copy-level, no engine changes:**
+- **`CoreGridTab.tsx`'s "why" explainer REWRITTEN.** The old text ("cutting the hours that are
+  cheapest to lose, the ones that create the least shortfall") had been false since the
+  2026-07-25 band-floor-deadband reversal and false in a DIFFERENT way after every reversal
+  since (PR A/B/C) — the single most user-visible correctness defect on the page. New copy:
+  the solver removes whichever shift-hour adds the least queued patient work, weighted so a
+  deep hole counts far more than several shallow ones, never cutting below the peer-benchmark
+  floor unless the budget makes it unavoidable. Matches PR C's actual objective exactly.
+- **Front-loaded-nursing premise added** near the top of the results page (a fixed banner,
+  above the §2.1 current-staffing analysis) — the governing premise from
+  `SOLVER_REALISM_SPEC_2026-07-26.md` stated in plain language, so a manager whose census
+  peaks at 18:00 doesn't conclude the tool is broken when the grid peaks at 13:00.
+- **Backlog headline states WHEN**, not just how long. `computeBacklog`'s `longestStreakStart`
+  was computed since 2026-07-24 and never read by any consumer until now.
+  `CurrentStaffingAnalysis.tsx`'s headline and "Longest lean stretch" stat card both now name
+  the day/hour a lean stretch starts (and, when there's a genuine peak, the day/hour it peaks
+  and roughly how many nurse-hours are queued there) — reframed in waiting-room terms per the
+  spec's governing premise (backlog = un-started front-loaded arrival work = the direct
+  antecedent of LWBS).
+- **Comparison unit states what the gap BUYS**, not just its size. `CoreGridTab.tsx`'s
+  budget/shape headline gained a consequence clause: current-grid total severity vs.
+  idealized-grid total severity (`EngineResult.totalSeverity`, PR C), both computed on the
+  SAME convex objective the solver minimizes — a direct before/after, not a re-derivation from
+  the funding-ask marginal curve (which answers a different question: budget vs. full
+  coverage, not current-staffing vs. idealized). `engine/backlog.ts`'s
+  `summarizeBacklogSeverity` is called a second time here (client-side, against
+  `currentStaffingGrid`) for this specific comparison.
+- **"Hours outside your typical staffing range" relabeled** to "Hours below the peer
+  25th-percentile staffing floor" — states plainly what it counts (below only, never above)
+  and against what (the PEER cohort's 25th percentile, not this ED's own history — "typical
+  staffing range" implied the latter). Calculation is UNCHANGED (`computeBandFloorViolations`
+  against `bandFloorHourly`, the clamped reporting curve) — copy-only.
+- **`backlogFeedbackStillImprovingAtCap` surfaced** — a short caveat line in the "why"
+  explainer when Phase 2b's relaxation loop hit its pass cap while still improving (a
+  chronically-backlogged scenario that never converged). Previously computed and rendered
+  nowhere.
+- **Flexibility section states WHICH hours a candidate improves/costs.**
+  `ShiftMenuFlexibilitySection.tsx` gained a `biggestSwing` helper (pure client-side arithmetic
+  over two already-computed backlog curves — current-menu-one-shot vs. best-candidate) that
+  names the single biggest-improvement and biggest-regression hour ("Fixes around Fri 18:00
+  [...], costs you around Sun 02:00 [...]"). Also added an explicit retention caveat whenever a
+  suggested menu trims a 12h shift down to 8h shifts — a bigger rotation-pattern change than
+  the hours-and-coverage numbers alone would suggest.
+
+**Change 6 — flexMenu swing-shift overlay family.** `engine/flexMenu.ts`'s `buildTiling` only
+ever produced REGULAR tilings (same length, evenly spaced) — it could never propose a
+mid/swing shift layered over the existing menu, "the single most common correct answer to a
+unimodal arrival curve" per the spec. New `buildOverlayMenu(currentMenu, length, startHour)` +
+bounded `OVERLAY_LENGTHS` (4/6/8h) × `OVERLAY_OFFSETS` (9/11/13/15) family, ≤12 candidates,
+tried alongside the regular-tiling family whenever ANY flex axis is enabled (gated on
+`anyAxis`, same as the existing "static = no search" contract — an all-off `FlexAxes` still
+returns exactly one candidate, unchanged). `searchFlexibleMenus` was refactored to a shared
+`trySolve` helper so the two candidate families (tiling + overlay) don't duplicate the
+solve-and-score logic. New bound: ≤57 candidates total (was ≤45), still deduped, still bounded.
+
+**Change 7 — headcount semantics, ONE setup question, explicitly NOT role-level modeling.**
+New store field `headcountIncludesIndirectCare: boolean | null` (null until answered, no
+ED-specific default) and a new setup card in `ShiftMenuStep.tsx` ("Does your headcount
+include charge and triage nurses?"). **Never threaded into `EngineInputs`/`compute()`** — it
+never changes `hourlyRequirement`, the grid, the ENA floor, or any solved number. This was a
+deliberate scope boundary (the spec explicitly declined role-level skill-mix modeling) — if a
+future session is tempted to wire this into the engine "to make the ENA floor more accurate,"
+that's exactly the modeling the spec declined; don't, without a new, separate decision.
+
+**REVISED 2026-07-28 (Ben's direct ask) — the "no" branch is a one-time grid correction,
+not a display-only uplift % field.** The original build (above) paired this question with a
+conditional `indirectCareUpliftPct: number | null` field, shown only on "yes," that fed
+nothing but `ReviewStep.tsx`'s summary line and the Setup Decisions export tab — a pure
+dead-end input nobody read back. **`indirectCareUpliftPct` is REMOVED ENTIRELY** — from the
+store, the setup UI, `ReviewStep.tsx`'s summary/export, `lib/template.ts`'s
+`DECISIONS_TEMPLATE_FIELDS`/`SetupDecisionsData`, and `lib/parseUpload.ts`'s decision-field
+aliases/round-trip. `headcountIncludesIndirectCare` itself is UNCHANGED (still the one
+yes/no question, still never threaded into the engine). What replaced the uplift % field:
+answering **"no"** now shows a short explanation (the peer wHPPV benchmark assumes
+charge/triage hours are counted in headcount, so leaving them out understates staffing
+relative to the target) plus a one-time numeric input — "charge/triage (or other
+indirect-care) staff typically on duty per shift" — and an "Add to current staffing grid"
+button that adds that count to every `(day, shift)` cell of `currentStaffingGrid` for the
+current shift menu (component-local state in `ShiftMenuStep.tsx`, not a new store field —
+the amount itself is never persisted anywhere). After applying, the grid cells are just
+normal editable numbers, indistinguishable from hand-entered ones — this is a **one-time
+data-entry fix**, not an ongoing multiplier/flag layered on top of the grid. **This stays a
+setup-screen data-entry concern, per Ben's explicit instruction** — no changes to
+`EngineInputs`, `compute()`, the ENA floor check, or any comparison logic. If a future
+session is tempted to revive `indirectCareUpliftPct`-style wiring into the engine math (e.g.
+"apply an uplift % to the ENA floor automatically"), that is the exact role-level modeling
+this section's original "Change 7" note already declined — the grid-correction UX above is
+the intended resolution, not a stopgap pending a future engine hook.
+
+**Invariants verified:** `reconcile.test.ts` — zero-line diff (untouched by any PR D change).
+Recording the trim trajectory does not change the trim's OUTPUT — proven directly (byte-
+identical grid with/without recording), not just argued, since both paths share the exact same
+`trimWeekToBudgetCore` loop and the recording hook only READS state, never influences the
+cut-selection logic. `fullCoverage.weeklyHours >= weeklyScheduledHours` holds in the normal
+(budget-constrained) case; the under-budget edge case is handled explicitly and tested at both
+the engine level (`solver.test.ts`) and verified live in the browser (see above).
+
+**Verified end-to-end (headless Playwright, this build):** full setup flow (manual arrivals
+grid → shift menu → current staffing → headcount-semantics question → review) through to
+results, zero console errors in every state exercised: default results page, current-staffing
+filled in (triggers `CurrentStaffingAnalysis`'s full narrative + heatmap + the comparison
+unit's severity-reduction consequence clause), a flex axis toggled (triggers the swing-shift
+overlay search + the "fixes X, costs Y" headline + `MetricsCompare`), and the funding-ask
+section's "already funds full coverage" edge-case branch (hit by an actual dataset, not just
+forced in a unit test). `npm run build`, `npm test` (121), `oxlint` clean (only the
+pre-existing `StepIndicator.tsx` fast-refresh warning) throughout.
+
+## PR F (2026-07-26, `RESULTS_COMPREHENSION_SPEC_2026-07-26.md`) — budget framing, Scenario B, hidden-boarding diagnostic
+
+Three parts, built in the spec's §3/§5/§6.2 order. PR E must be merged first (Scenario B and
+the hidden-boarding diagnostic both read `EngineResult` fields PR E didn't touch, but the copy
+rewrite in Part 1 touches several of the same strings PR D's copy pass last touched).
+
+### Part 1 — budget framing (§3): four quantities, one word retired from the UI
+
+**Rule:** never call the target-derived figure ("budget") a *budget* in the UI. Engine field
+names (`weeklyBudgetHours`, `annualCoreRnHoursBudget`) are UNCHANGED — this is copy-layer only.
+Enforced by a new **source-grep test**, `src/lib/__tests__/copyLayer.test.ts`: strips comments
+from every `.tsx`/`.ts` file under `src/screens/` and `src/components/`, then fails on any
+remaining bare word "budget" (word-boundary regex — does NOT false-positive on camelCase
+identifiers like `weeklyBudgetHours`, since there's no boundary between "y" and "B"). This is a
+LIVE guardrail, not a one-time cleanup — it already caught two of this PR's own new files
+(`ScenarioBSection.tsx`, `HiddenBoardingSection.tsx`) using the word in fresh copy, exactly as
+designed.
+
+**Renames, all copy-only, in `CoreGridTab.tsx`/`FundingAskSection.tsx`/
+`ShiftMenuFlexibilitySection.tsx`/`DataStep.tsx`:**
+- "your weekly budget" -> "target-implied hours" everywhere (the "why this runs over/under"
+  toggle, the reconciliation-failure banner, the why-explainer paragraphs).
+- The `gapKind` union (`CoreGridTab.tsx`'s size-vs-shape reconciliation) renamed `'budget'` ->
+  `'size'` (also the CSS class `.reconciliation-budget` -> `.reconciliation-size`, `App.css`) —
+  a code-identifier rename, not just a display-string one, so the copy-grep test doesn't need a
+  JSX-vs-code exception carve-out anywhere in this file. `budgetGapHours`/`absBudgetGap` ->
+  `sizeGapHours`/`absSizeGap`.
+- `FundingAskSection.tsx`: "your budget" (chart axis label + prose) -> "today" / "what
+  delivering your target costs" (row 3 of the four-quantity table, not row 2 — the chart's left
+  endpoint is `capHours` ≈ delivery cost, not the raw target-implied figure).
+- `ShiftMenuFlexibilitySection.tsx`: local variable `budget` -> `targetImpliedHours`; "same
+  budget"/"budgeted hours" -> "same target-implied hours" in both the intro paragraph and the
+  candidate-comparison headline.
+
+**New rule: overcoverage computes against CURRENT STAFFED HOURS, never falls back silently.**
+`CoreGridTab.tsx`'s Coverage-summary "Overcoverage" stat previously always read
+`result.overcoveragePct` (engine field, always vs. target-implied hours, regardless of whether
+current staffing existed). Now: `overcoveragePctVsCurrent` (new local, current-grid total hours
+vs. idealized weekly hours) is the PRIMARY number, target-implied hours shown as a labelled
+secondary reference, and the stat is **suppressed entirely** (an em-dash + a prompt, `.stat-
+muted` — new CSS class, `App.css`) when no current staffing is entered, rather than silently
+reading against the target. `result.overcoveragePctVsTarget` (renamed from `overcoveragePct`
+locally, engine field itself unchanged) stays the driver for the "What this schedule means"
+panel's own sentence, which is legitimately about target math regardless of current staffing.
+
+**New: the delivery-premium disclosure.** `CoreGridTab.tsx`'s "What this schedule means" panel
+gained a line naming `weeklyScheduledHours - weeklyBudgetHours` (row 3 minus row 2 of the
+four-quantity table) as its own honest figure — "whole nurses and N-hour shift blocks cost X
+hours a week (Y FTE) more than the target's arithmetic implies... a different shift menu is the
+one lever that reduces it" — rather than letting it stay folded into a bare "% overcoverage"
+that reads like waste. Shown only when the premium exceeds 0.5 hrs (avoids noise on an exact-fit
+schedule).
+
+### Part 2 — Scenario B (§5): "the same hours, better placed"
+
+**`engine/index.ts`'s `computeScenarioB(result, inputs, currentStaffingGrid)`** — a PARAMETER
+SWAP, not a second solver, per the spec's explicit instruction: calls the EXACT SAME
+`solveShiftFitWithBacklogFeedback` pipeline `compute()` uses for the primary grid, with
+`weeklyBudgetHours` replaced by the current grid's own total weekly hours — `hourlyRequirement`/
+`protectedFloorHourly`/`demandVolatilityHourly`/the ENA floor/the shift menu are all read
+straight off the already-computed `result`/`inputs`, never re-derived. A new shared
+`resolveBacklogParams(inputs)` helper (extracted from `compute()`) so both `compute()` and
+`computeScenarioB` use identical backlog physics (including PR E's `lwbsRate` override) for the
+same department. Returns `null` when there's no current staffing (spec: "CTA, not a scenario").
+
+**Edge cases, all handled by the SAME pipeline naturally, not special-cased in
+`computeScenarioB` itself** (the trim's own `while (hours > capHours)` loop and
+`enforceDepartmentFloor`'s unconditional final pass already produce the right behavior — the
+function just reports it): `isFullCoverage` (current hours already >= full-coverage hours —
+the trim loop simply never fires) and `overageFromFloor` (current hours below what the ENA
+floor needs — `enforceDepartmentFloor` pushes the actual solved hours above the nominal budget;
+reported as a real, named overage, never called "hour-neutral" when it isn't).
+
+**CRITICAL FRAMING (spec §5, a UI responsibility, not something the engine function enforces):**
+Scenario B is computed on the ARRIVALS budget only. `ScenarioBSection.tsx` (new, rendered in
+`DashboardScreen` between `CoreGridTab` and `FundingAskSection`) states this bound in its own
+banner **every render**, not as a one-time disclaimer, and frames every outcome as "what
+arrivals alone would justify" — never as a standalone recommendation. Three templated headline
+branches (full-coverage, near-optimal difference < 5%, and the general case) — all three
+written and tested, per §12.3's "chapter 4 must be able to answer yes, entirely" requirement.
+
+**Tests:** `engine/__tests__/scenarioB.test.ts` (6) — null on no current staffing; the parameter-
+swap invariant (solved hours land near the current total, not the target); severity reduction
+for a badly-shaped current grid; both edge cases; and an "already near-optimal" case with a
+NOTE on why the assertion is "not dramatically worse" rather than "identical or better" — the
+8-pass relaxation heuristic (`backlogFeedback.ts`) is not guaranteed monotonic across different
+effective budgets (the current grid's actual total can differ from the target-implied figure
+by the delivery premium), so re-solving at a slightly different budget can occasionally land on
+a slightly worse local optimum. This is the same documented oscillation property Phase 2b's own
+history already flags, not a bug introduced here.
+
+### Part 3 — the hidden-boarding diagnostic (§6.2): "the advocacy artifact"
+
+**New engine module `engine/hiddenBoarding.ts`, `computeHiddenBoardingDiagnostic`.** Per
+(day/night) hour-block, current capacity minus ARRIVALS-ONLY requirement — "the staffing that
+exists for something other than arrivals." Day = 07:00-19:00, Night = 19:00-07:00 — a FIXED
+calendar convention, deliberately NOT derived from the shift menu (the same day/night split
+applies regardless of whether the department runs 8h/10h/12h blocks). Reads `hourlyRequirement`
+(already arrivals-only by construction — the separate-budget thesis never touches it) and the
+current-staffing grid's actual capacity (`fullWeekCapacity`, same helper every other diagnostic
+in this codebase uses, now also exported from `solver.ts`'s existing export block — no new
+solver code). Boarding need per block comes from `BoardingResult.cellBoardingRnHours` (the base
+weekly representative-week curve, pre-seasonality — matching `hourlyRequirement`'s own
+granularity). `boardingNeedHours`/`totalNeedHours` are `null` when boarding data is absent
+(never silently computed as zero or falls back to arrivals-only without saying so).
+
+**New section `HiddenBoardingSection.tsx`** (rendered in `DashboardScreen` between
+`ShiftMenuFlexibilitySection` and `BoardingTransition`) — per §12.2 profile D, this section
+**degrades to a prompt when boarding data is absent, it does NOT return null** (unlike
+`BoardingTransition`, which silently renders nothing in that state) — the whole point of this
+section is surfacing that half the picture is missing, so silently vanishing would defeat it.
+
+**Templated narrative, three tested mirror-branches per direction (§12.1: no headline may
+assume the sign of the gap) — `nightSentence`/`daySentence` helpers, written as PURE functions
+already in the shape `src/lib/narrative.ts` will hold once PR H extracts every templated
+headline into that one module:**
+- Night: (a) staffed beyond arrivals + boarding data present -> "carries N hours beyond
+  arrivals... isn't even enough" (or "covers most of what boarding needs," when it does); (b)
+  short of arrivals -> the mirror, naming the shortfall AND what boarding still needs on top;
+  (c) negligible either direction -> "matches what arrivals justify... nights are not where
+  your problem is" (§12.1's own example sentence, verbatim) — negligible is a real, tested
+  finding, not a null state. All three repeat with a "boarding data absent" variant that
+  degrades gracefully instead of asserting a boarding-specific claim it can't support.
+- Day: short of arrivals / beyond arrivals / roughly matching — same three-way split, mirrored.
+
+**Tests:** `engine/__tests__/hiddenBoarding.test.ts` (3) — boarding-absent fields are `null`
+(never zero); a hand-built scenario reproducing spec §6.2's QUALITATIVE shape (nights staffed
+beyond arrivals need, days short of it) with INVENTED numbers (the real department's own table
+can't ship in this repo per §12.6/§14 open question 5 — same constraint PR E's validation gate
+observed); and a degenerate zero-current-staffing case (finite, non-NaN, both blocks read
+negative).
+
+**Invariants:** no engine changes to `hourlyRequirement`/`annualCoreRnHoursBudget`/
+reconciliation from any of the three parts. `reconcile.test.ts` untouched.
+`npm run build`/`npm test` (143)/`oxlint` clean (only the pre-existing `StepIndicator.tsx`
+warning) throughout all three parts.
+
+## PR G (2026-07-26, `RESULTS_COMPREHENSION_SPEC_2026-07-26.md`) — synthesis chapter + reframed funding ask
+
+PR F must be merged first (reuses `computeScenarioB`'s parameter-swap technique and PR E's
+`estimatedAbandonedHours`).
+
+### The synthesis chapter (§7) — where the founding question gets answered
+
+**New `engine/synthesis.ts`, `computeSynthesis(result, inputs, currentStaffingGrid)`.** Adds
+arrivals demand (`sum(hourlyRequirement)`) and boarding demand (`BoardingResult
+.weeklyBoardingHours`, when present) back together FOR THE READER ONLY — never touches
+`EngineResult.grid` (the separate-budget thesis, spec §6/§12, is unchanged by this). Returns
+`null` with no current staffing (CTA, not a synthesis).
+
+**Four numbers and a subtraction, then STOP (spec §1(5)):** `totalDemandWeeklyHours`,
+`currentStaffedWeeklyHours`, `gapHours` (= their difference — can be `<= 0`, a REAL ending, not
+an error), `gapFte`. Plus two supporting numbers: `dayShareOfShortfallPct` (what fraction of the
+COMBINED day+night shortfall against current staffing falls in the daytime 07-19 block) and
+`gapClosedByReallocationHours` (how much of a positive `gapHours` reallocating the SAME current
+hours — against the COMBINED arrivals+boarding demand curve — could close, computed via a
+shared parameter-swap solve, capped at `max(0, gapHours)` so the display never claims closing
+more than the gap itself). **`SynthesisSection.tsx` renders exactly this arithmetic and NOTHING
+else** — no interpretive closing sentence. An earlier draft ending with "the rest is not a
+scheduling problem" was explicitly flagged (spec §1(5)) as presuming a residual exists at all —
+false for a department that's adequately staffed and merely misallocated. The arithmetic itself
+already carries the point for every §12.2 profile without the sentence needing to change.
+
+**Three tested endings (§12.3), `engine/__tests__/synthesis.test.ts`:** (1) positive `gapHours`
+— "you need more"; (2) `gapHours <= 0` with a badly-shaped current grid — "you have enough,
+they're in the wrong places" (`gapClosedByReallocationHours` is `0` here by construction — no
+positive gap to close, even though shape is still bad; the reader gets that from the
+comparison-unit card above, not this chapter); (3) no boarding data, current hours matching
+arrivals need closely — "you're in good shape" (degrades to arrivals-only demand, per §12.2
+profile D, never silently omitting the fact that it's half the picture — the headline says so
+explicitly when `boardingDataPresent` is false).
+
+**Reused primitive, not duplicated:** the reallocation solve inside `computeSynthesis` is the
+SAME parameter-swap technique `computeScenarioB` (PR F) uses, just against a COMBINED
+(arrivals+boarding) demand curve instead of arrivals alone, and using that combined curve
+itself as the protected floor (no separate cohort-band concept applies to a synthetic combined
+curve). This is also the mechanism PR K's "constrained boarding reallocation" (§6.3) needs —
+when that PR lands, extend `computeSynthesis`'s reallocation call site or extract it into its
+own named export rather than re-deriving a third copy of this solve.
+
+**Rendered in `DashboardScreen`** at the very end (`SynthesisSection`, after
+`BoardingCoverageSection`) — matches the eventual chapter order PR H will formalize
+("both budgets together" is the last true content chapter before the branches).
+
+### Reframed funding ask (§7, second half)
+
+**`FundingAskSection.tsx`'s headline REORDERED** to lead with the KNEE of the marginal curve
+(the ask that buys the most per FTE) when one exists, with full coverage stated as "the far end
+of that range" rather than the headline. The OLD order (full coverage first, knee mentioned as
+an afterthought — "But you don't need all of it...") led with an unsellable number and buried
+the one that mattered; for the source department this was +14.9 FTE vs. the +2.7 FTE knee.
+Falls back to the old full-coverage-first framing only when there's no meaningful knee (`<3`
+marginal-curve points or a flat curve, `findMarginalKneePoint` returns `null`) — a real,
+tested degenerate case, not a bug. The "already funds full coverage" branch is UNCHANGED (no
+knee question applies when there's no gap to ask for at all).
+
+**New `FinancePartnerWorksheet.tsx`** (rendered right after `FundingAskSection` in
+`DashboardScreen`) — "do the extra hours pay for themselves," three parts per spec: (1) the
+mechanism chain in the tool's own units (more hours -> less queued work -> fewer abandoned
+nurse-hours, PR E's `estimatedAbandonedHours` -> fewer LWBS); (2) an explicit, prominent
+statement that the tool does NOT convert this to a dollar figure and why (no salary/benefit-
+factor/margin inputs collected; a fabricated ROI is the first thing a finance partner attacks);
+(3) the worksheet itself, in a visually distinct bordered box (`.finance-worksheet-box`,
+`App.css`) — the FTE ask + a MODELED (explicitly labeled as such, not independently
+recomputed) reduction in abandoned nurse-hours, then the three numbers to hand a CFO: cost per
+FTE, contribution margin per treated visit, current LWBS rate. Renders `null` when there's no
+funding gap at all (`fullCoverage.fteDelta <= 0`) or no meaningful knee — same gating as the
+reframed headline above, so the worksheet never appears without an ask to attach it to.
+
+**Approximation flagged, not hidden:** the modeled abandoned-hours reduction scales
+`estimatedAbandonedHours` (today, against the CURRENT solved grid) by the SAME
+severity-reduction percentage the knee-point ask achieves — it is NOT computed against an
+actual grid solved at the knee-point budget (the trim's marginal-curve trajectory doesn't
+expose a grid per point, only aggregate severity/backlog numbers). Labeled "a modeled estimate,
+not an independent recomputation" in the worksheet copy itself. Revisit if the marginal-curve
+recorder (`solver.ts`'s `trimWeekToBudgetWithTrajectory`) is ever extended to expose a grid or
+backlog curve per point.
+
+**Reaffirmed out of scope (spec §13), still true after this PR:** no dollar/ROI calculator
+anywhere. `estimatedAbandonedHours` is never converted to a dollar figure by this tool, in this
+worksheet or elsewhere.
+
+**Tests:** `engine/__tests__/synthesis.test.ts` (5). `reconcile.test.ts` untouched.
+`npm run build`/`npm test` (148)/`oxlint` clean (only the pre-existing `StepIndicator.tsx`
+warning) throughout.
+
+## PR H (2026-07-26, `RESULTS_COMPREHENSION_SPEC_2026-07-26.md`) — page architecture
+
+PR G must be merged first (the chapter rail wraps sections PR F/G added).
+
+### Chapter rail (§8)
+
+**New `components/ChapterRail.tsx`** — sticky (desktop; stacks above content below a 900px
+breakpoint, per spec §12.3's explicit mobile carve-out: "a narrow-viewport top bar is a
+nice-to-have, not a gate"), `IntersectionObserver`-based scroll-spy, click-to-jump
+(`scrollIntoView`). Takes a `chapters: ChapterRailEntry[]` prop — `DashboardScreen.tsx` owns the
+actual chapter list/order, the rail only renders and tracks it.
+
+**SCOPE NOTE, flagged in both files' own comments:** the spec's §8 chapter list has 9 entries;
+several of those (the opening current-staffing analysis, the idealized-vs-current comparison,
+the coverage summary) are still bundled inside the ONE monolithic `CoreGridTab` component. The
+rail's 6 entries (`ch-current-staffing`, `ch-scenario-b`, `ch-funding-ask`, `ch-shift-menu`,
+`ch-boarding`, `ch-synthesis`) match the ACTUAL top-level sections `DashboardScreen` renders,
+not a forced 1:1 mapping onto the spec's 9-chapter ideal. Splitting `CoreGridTab` into its true
+sub-chapters is a real, separate refactor — deferred, not silently glossed over. Each `<div
+id="...">` wrapper in `DashboardScreen.tsx` is a scroll-spy/jump target; the id list there and
+`ChapterRail`'s `chapters` prop must stay in sync (both defined in the one `CHAPTERS` constant).
+
+### The philosophy statement / welcome section (§6.1) — FOUR revisions, read all of them before touching this again
+
+**Revision 1 (2026-07-26, original build).** `CoreGridTab.tsx`'s two top banners MERGED into
+one (`.philosophy-statement`, two `<p>`s) — the two-budget expectation-setter (spec §6.1's
+exact quoted text, stated first) and PR D's front-loaded-nursing premise (stated second).
+REMOVAL rationale (spec §8's "remove the arrivals-premise banner... its content is now part of
+item 2"): both banners render before any recommendation, unconditionally, every load —
+stacking two separate banners there is exactly the kind of front-loaded friction this redesign
+exists to remove. **This is an expectation-setter, not a disclaimer** — do not soften into a
+collapsed panel or footnote (spec's own explicit instruction, and it still holds through every
+revision below).
+
+**Revision 2 (2026-07-27, first rewrite).** The spec's original text opened with a specific
+directional example — "where the numbers below look like they're cutting your nights" —
+phrased as if it were a finding about the department currently on screen. It wasn't: the
+banner is static, unconditional text shown to every department regardless of shape, so stating
+one specific direction read as overcommitted to data the banner never actually looked at.
+Rewritten to a generic welcome/orientation framing ("most ED schedules blend the two", no
+department-specific claim), stating the page's reading order and folding the two-budgets
+concept into that orientation rather than a standalone disclaimer.
+
+**Revision 3 (2026-07-27, same day, hedged rewrite).** A follow-up pass softened revision 2's
+generic claim into an explicitly hedged one ("your ED might normally lump these together — if
+so, ...") rather than asserting a pattern across ED schedules at all. Still kept the backlog/
+task-time mechanism (staffing sized to arrival, busier-later-in-visit shows up as backlog) in
+this banner's own body text.
+
+**Revision 4 (2026-07-27, same day).** Replaces revisions 1-3 with fixed copy, per direct ask,
+changing three things at once (superseded on heading text/branding only by revision 5 below —
+the body paragraph and visual treatment described here are still current):
+1. **Adds the explicit product-philosophy rationale** revisions 1-3 never stated outright —
+   *why* ShiftLens splits arrivals and boarding into two budgets in the first place ("gives a
+   clearer picture of how nursing time is actually being consumed, and makes it easier to
+   communicate when and why your staffing falls short"), not just that it does.
+2. **Names the mechanism differently per budget** — ED/arrivals workload lands upfront at
+   visit start; boarding workload is budgeted via inpatient nursing ratios instead. This is a
+   more precise (and more different-per-budget) statement than revisions 1-3's shared
+   "staffs to when patients arrive" framing, which described only the arrivals side.
+3. **Drops backlog/task-time mechanics from this banner entirely.** Revisions 1-3 all carried
+   some version of "a department busier later in a visit's course sees that show up as backlog,
+   not headcount" in the banner body itself. Revision 4 removes that thread completely — it
+   already lives in `CurrentStaffingAnalysis.tsx`'s collapsed "why" toggle (the feed-forward/
+   originates-vs-inherits explainer, §2.1) and in the "Front-loaded nursing" `ConceptCallout` in
+   this same file's plain-summary panel (§8 teaching layer, PR J) — so keeping a third copy in
+   the welcome banner was redundant, not reinforcing.
+
+**Visual treatment changed too, not just copy.** Revisions 1-3 kept the original `.banner
+banner-info philosophy-statement` treatment (bordered, tinted, same visual family as the
+ESI/reconciliation banners above it). Revision 4 replaces this with a real heading (`<h2>Welcome
+to the Results Page</h2>`) inside a new `.results-welcome` section — deliberately NOT `.card`
+(no border, so it doesn't read as another chapter alongside `.comparison-unit`/
+`.current-analysis`) and NOT `.banner` (no longer a caveat-style callout — it's a welcome).
+`.results-welcome` uses `--bg-card-muted` (a background close to the page's own `--bg` in both
+themes, distinct from `.card`'s brighter `--bg-card`) and a 40px bottom margin to create real
+whitespace before the first chapter card ("Your current staffing, analyzed"). New CSS in
+`App.css`; `.philosophy-statement`'s CSS rule was removed (no longer referenced anywhere in
+`src/`). Copy/CSS-only change throughout all four revisions — no engine/store impact, `npm
+test` a no-op every time.
+
+**Placement moved to `DashboardScreen.tsx`, same day (2026-07-27, immediately after revision
+4 above shipped).** `.results-welcome` originally rendered as the first thing inside
+`CoreGridTab.tsx` — which put it INSIDE `.dashboard-content`, the flex:1 column beside the
+sticky `.chapter-rail` (`.dashboard-body`'s two-column layout, PR H). That confined it to the
+content column's width, not the full page width, and put it below the rail's own top edge, not
+above it. Moved to `DashboardScreen.tsx`, rendered directly inside `.dashboard-screen` — ABOVE
+`.dashboard-body` entirely, so it now spans the full page width and sits above the chapter rail,
+not beside it. `CoreGridTab.tsx` keeps a short comment marking where it used to render and
+pointing here, so a future session doesn't accidentally re-add a second copy inside the chapter
+content. **Ordering on the page, top to bottom, is now:** "← Back to setup" (top-left,
+`.dashboard-topbar`) → `.results-welcome` (full width) → `.dashboard-body` (sticky chapter rail
++ scrolling chapter content).
+
+**The redundant page title was also retired in this same pass.** `DashboardScreen.tsx`'s
+`.dashboard-topbar` used to open with `<h1>ShiftLens — Results</h1>`, immediately followed by
+`.results-welcome`'s own "Welcome to the Results Page" — two page-level titles stacked directly
+on top of each other. The `<h1>` is gone; `.dashboard-topbar` now holds only the "← Back to
+setup" button (moved to be the topbar's FIRST child, so `justify-content: space-between` puts
+it at the top-left) and the "Export to PPTX" button (still on the right, unchanged). No CSS
+changes were needed for this — `.dashboard-topbar`'s existing flex/space-between rule already
+produces the right layout once the `<h1>` is simply removed from the JSX.
+
+**Revision 5 (2026-07-27, same day) — heading text + branding, following the `<h1>` removal
+above.** Once the page-level `<h1>ShiftLens — Results</h1>` was retired, the results page had
+no product branding anywhere on it at all. Two changes, both in `DashboardScreen.tsx`/`App.css`,
+copy/CSS-only:
+1. **Heading text changed** from "Welcome to the Results Page" to **"Your ShiftLens Results"** —
+   names the product and makes clear these are *this department's* results, not a generic page
+   title.
+2. **The `/favicon.svg` mark** (the same rounded-square-tile lightning-bolt asset
+   `WelcomeScreen.tsx` already uses at 56px as `.welcome-logo`) is now rendered inline next to
+   the heading at 32px (new `.results-welcome-icon`, wrapped with the `<h2>` in a new
+   `.results-welcome-header` flex row, `gap: 12px`). `alt=""` — the icon is decorative next to a
+   heading that already states the same thing in text, so a repeated "ShiftLens" in the
+   accessibility tree would be redundant, not informative (same convention as any icon-plus-
+   label pairing elsewhere in this app). No new asset was added; this reuses the one mark the
+   app already ships.
+
+Body paragraph copy (the two-budget product-philosophy text) is UNCHANGED by this revision —
+only the heading and its accompanying icon changed.
+
+### Narrative extraction (`src/lib/narrative.ts`)
+
+Every function is PURE — `(values) -> string`, no JSX, no store access, unit-tested directly
+(`lib/__tests__/narrative.test.ts`, 8 tests) and exercised by `engine/__tests__/
+syntheticSweep.test.ts`'s narrative hook (now a REAL check, not a no-op — see that file's
+updated comment). Covers: the coverage-summary overcoverage/delivery-premium/wHPPV-range
+sentences (`CoreGridTab.tsx`), the comparison-unit headline (`gapKind`-branched), Scenario B's
+three branches, the hidden-boarding night/day sentences (both directions + negligible, per
+§12.1), the synthesis headline (three §12.3 endings), and the funding-ask's two branches.
+
+**SCOPE NOTE, flagged in the file's own header — read before assuming this is fully wired up:**
+the covered components still render their OWN JSX inline (with `<strong>` emphasis these
+plain-text functions don't reproduce) rather than calling these functions directly. Swapping
+already-verified, live UI copy over to a plain-text renderer without a way to visually
+re-verify emphasis/layout in this session (no Playwright installed — see
+`.claude/rules/synthetic-fixtures.md`) was judged a worse risk than a documented, temporary
+duplication, WORDED IDENTICALLY on both sides. These functions exist today for (1) the sweep's
+narrative hook and (2) PR L's PPTX export, which needs a single source for slide titles. Wire a
+component over to call its narrative.ts function the next time that section's copy changes —
+that closes the duplication section by section, not in one large risky pass. Two small helper
+wrappers (`scheduleMeansOvercoverageFromResult`, `deliveryPremiumFromResult`) exist specifically
+so the sweep's `(result, inputs)`-only hook has at least a few real functions to exercise;
+most others need additional context (a grid, a current-staffing grid) that hook can't supply
+and are silently skipped by its own tolerant try/catch — expected, not a gap.
+
+### Removals and fixes
+
+- **ASSUMPTION pill removed from the RESULTS page.** `CurrentStaffingAnalysis.tsx`'s
+  `<EvidenceBadge status="ASSUMPTION">` on the backlog diagnostic is gone (always-on, therefore
+  no information, per spec). `EvidenceBadge` STAYS on setup screens (optional-vs-required IS
+  real information there). Provenance for this diagnostic moves to Chapter 9 (PR I) — not yet
+  built; until then this specific ASSUMPTION tag has no on-page equivalent, which is the
+  intended state per spec (a stopgap "what this is based on" line was considered and deferred
+  to avoid duplicating PR I's actual evidence surface).
+- **Realized-wHPPV range now spans the 168 HOURS, not the 7 days, and NAMES the hours the
+  extremes fall on.** `CoreGridTab.tsx`'s range sentence used to compute a per-DAY min/max
+  (7 values) with no location attached — "a range with no location attached gets read past"
+  (spec's own words). Now reuses the SAME per-cell `whppv` values already computed for the
+  168-cell heatmap (`heatmapCells`) to find the true min/max hour and names it
+  ("around Sat 07:00") — no new computation, no engine changes, pure display arithmetic over an
+  already-computed array.
+
+**Invariants:** no engine math changes anywhere in this PR. `reconcile.test.ts` untouched.
+`npm run build`/`npm test` (156)/`oxlint` clean (only the pre-existing `StepIndicator.tsx`
+warning) throughout. No Playwright verification was possible (no such harness in this repo,
+per `.claude/rules/synthetic-fixtures.md`) — rail scroll-spy/jump behavior and the merged
+banner's visual layout are UNVERIFIED IN A BROWSER this session; a future session with visual
+access should confirm before treating this as fully done.
+
+## PR I (2026-07-26, `RESULTS_COMPREHENSION_SPEC_2026-07-26.md`) — evidence surface (Chapter 9)
+
+PR H must be merged first (reads `src/lib/narrative.ts`'s existence conceptually, though this
+PR doesn't call into it directly — the constants table follows the same "generated, not
+transcribed" principle narrative.ts follows for copy).
+
+**Success condition (spec's own words): an analyst can reconstruct the pipeline from this page
+alone and find nothing undisclosed.**
+
+**New `screens/dashboard/EvidenceSurfaceSection.tsx`** — Chapter 9, "How this works," rendered
+last, collapsed by default (same `.why-toggle` pattern every other collapsed explainer in this
+app uses — CLAUDE.md Section 6). Visually set apart via `.evidence-surface` (muted background +
+top rule, `App.css`) rather than styled as another narrative card — spec §8's own instruction
+that branches off the main chapter arc read differently from the argument itself.
+
+Six parts, all in one component:
+1. **Pipeline walkthrough** — Steps 1/1b/1c/2/3, each with its formula, inputs, and one "why"
+   sentence, in plain prose (written for an analyst, but jargon density is explicitly NOT a
+   credibility signal per the spec).
+2. **Constants table — new `lib/constantsMetadata.ts`, `buildConstantsTable()`.** GENERATED
+   FROM `DEFAULTS` AT RUNTIME, not transcribed into prose — the function iterates
+   `Object.keys(DEFAULTS)` and throws if any key lacks a hand-written `METADATA` entry (label /
+   what it controls / evidence tag / what changes if you move it), so a constant added to
+   `DEFAULTS` without documentation fails loudly rather than silently rendering an incomplete
+   table. The VALUE column always reads the live `DEFAULTS` object — a prose copy of a constant
+   can drift when the constant's default changes; this can't, since it's the same object.
+3. **Data provenance** — every number classified into one of three buckets (your data / peer
+   cohort / modeled assumption), replacing the ASSUMPTION pill PR H removed from the results
+   page — more informative because it's comparative, not just a binary flag.
+4. **Known approximations** — the spec's own minimum list, verbatim in spirit: the 48-hour
+   `BACKLOG_SIM_WINDOW_HOURS` truncation, linear boarding recovery, month-scope conservation
+   (annual-exact, can drift within any one month), circular no-reset, greedy set-cover (not
+   exact ILP), and boarding census being derived from admit timing rather than measured.
+5. **The reconciliation invariant**, presented as the correctness proof it is — live numbers
+   (`result.reconciliation`), not a static claim, so a genuine reconciliation failure (the
+   existing error banner elsewhere on the page) is also visible here in its proper framing.
+6. **Decisions and rejected alternatives** — mean-not-median for boarding duration, why p75
+   never enters the point target, why severity normalizes by requirement not raw nurse-hours,
+   why there's no dollar layer, and the separate-demand thesis (arrivals/boarding) — sourced
+   from `.claude/rules/`'s own history rather than re-derived from scratch.
+
+**Copy-layer note:** several early drafts of this section's prose used "budget"/"budgeted" in
+the generic sense ("boarding census (separate budget)", "arrivals and boarding are budgeted
+separately") — caught by PR F's copy-grep test (`copyLayer.test.ts`) and reworded to "a separate
+demand"/"modeled as two separate demands" rather than added to that test's narrow philosophy-
+statement allowlist, since these weren't spec-mandated exact quotes the way §6.1's text is.
+
+**Tests:** `lib/__tests__/constantsMetadata.test.ts` — one row per `DEFAULTS` key, every field
+non-empty, the value read live (not a copied literal). `reconcile.test.ts` untouched — this PR
+made no engine changes.
+
+`npm run build`/`npm test` (157)/`oxlint` clean (only the pre-existing `StepIndicator.tsx`
+warning). No Playwright verification possible (no such harness in this repo) — the collapsed/
+expanded toggle and table layout are unverified in an actual browser this session.
+
+## PR J (2026-07-26, `RESULTS_COMPREHENSION_SPEC_2026-07-26.md`) — teaching layer
+
+PR H must be merged first (reuses the `.why-toggle` pattern established there/earlier). Can run
+in parallel with PR I — no shared files.
+
+**Goal (spec §0): a manager with no stats background reads the page once and can afterward
+explain to their CNO, in their own words, whether their department is understaffed, where, how
+much they can fix themselves, and what the rest costs.**
+
+**New `components/ConceptCallout.tsx`** — REUSES the existing `.why-toggle`/`.why-explainer`
+disclosure pattern (CLAUDE.md Section 6) rather than inventing a second idiom; collapsed by
+default so a returning user isn't re-taught. Six concepts, each placed at its FIRST use:
+
+| Concept | Where |
+|---|---|
+| wHPPV | `CoreGridTab.tsx`, "What this schedule means" panel |
+| Front-loaded nursing | same panel |
+| Averages under-staff you half the time | same panel |
+| Right total != right shape | `ScenarioBSection.tsx` |
+| Depth beats spread (convexity) | `ScenarioBSection.tsx` |
+| Two budgets, one department | `HiddenBoardingSection.tsx` |
+
+**New `components/ConvexityDemo.tsx`** — THE ONE interactive, per the spec's explicit
+instruction (convexity is the least intuitive AND most load-bearing concept — it's literally
+the Step 3 trim's objective, and prose does it badly). Two fixed scenarios, same 10 nurse-hours
+of shortfall against the same 10-nurse-hour requirement baseline: spread across 4 hours (2.5
+each) vs. concentrated in 1 hour (10). Uses the REAL `severity` function imported from
+`engine/solver.ts` — not a mock — so the numbers shown are exactly what the Step 3 trim itself
+would compute for these two shapes. `engine/__tests__/convexityDemo.test.ts` verifies the
+pedagogical claim the component makes (concentrated scores higher/worse) actually holds under
+the real function, not just asserted in prose.
+
+**Guardrails honored:** no glossary page (nobody reads one — six inline callouts instead);
+collapsed by default everywhere; every headline stays a complete, quotable sentence with
+numbers interpolated (the callouts add explanation ALONGSIDE headlines, never replace one).
+
+**Tests:** `engine/__tests__/convexityDemo.test.ts` (1). No engine changes elsewhere.
+`npm run build`/`npm test` (158)/`oxlint` clean (only the pre-existing `StepIndicator.tsx`
+warning). No Playwright verification possible — the six callouts' collapsed/expanded behavior
+and the convexity demo's bar rendering are unverified in an actual browser this session.
+
+## PR K (2026-07-26, `RESULTS_COMPREHENSION_SPEC_2026-07-26.md`) — input integrity + boarding copy + constrained boarding reallocation
+
+PR F must be merged first (`computeCombinedReallocation` extends PR G's synthesis primitive,
+which itself reused PR F's `computeScenarioB` technique).
+
+### 1-2. Input integrity checks (§10)
+
+**New `lib/inputIntegrity.ts`** — two pure, diagnostic-only functions, NEVER auto-correcting:
+- `checkBoardingDurationConsistency(scalarBoardingDuration, monthlyMeans, dayOfWeekMeans)` —
+  compares the Scalars-tab scalar duration against the plain average of the per-period means;
+  flags when they disagree by more than ~15% (`CONSISTENCY_TOLERANCE`, a display heuristic).
+  Falls back to day-of-week means when monthly means are absent. Returns `null` when there's
+  nothing to compare (matches the engine's own graceful-degradation convention). The message
+  this powers names BOTH numbers and says which one the calculation actually uses (the scalar
+  — see `engine/boarding.ts`'s `overallMeanBoardingDuration`) rather than auto-correcting either.
+- `checkMonthlyDispersion(monthlyMeans)` — flags implausible month-to-month swings (>= 3x,
+  `DISPERSION_RATIO_THRESHOLD`) as "possible small-sample months," without refusing the input.
+
+Both wired into `screens/setup/DataStep.tsx`, rendered live (recomputed from current store
+state, not just at the moment of upload) right below the existing data-status list — surfaced
+where the data enters, since that's where it's actionable.
+
+**Tests:** `lib/__tests__/inputIntegrity.test.ts` (7) — reproduces the QUALITATIVE shape of the
+real defect (scalar ~10hrs vs. monthly-average ~6.4hrs, a ~37% gap) with INVENTED numbers (the
+real figures can't ship per §12.6/§14 open question 5), plus within-tolerance, day-of-week
+fallback, null-guard, and both dispersion-flagged/not-flagged cases.
+
+### 3. Missing-input consequences at results time (§10.3)
+
+**`CoreGridTab.tsx` gains a NEW banner reading `result.esiConfidenceFlag`** — this is NOT a
+resurrection of the 2026-07-24-removed "no ESI mix" caveat banner (that one just stated the
+absence); this one states the CONSEQUENCE for what's being read ("hours where sicker patients
+tend to arrive may be under-weighted relative to what they actually need"). `esiConfidenceFlag`
+was already computed by `compute()` and simply not rendered anywhere since that removal — this
+PR gives it a consumer again, reworded per spec's explicit ask (missing-input consequences
+belong at results time, not only setup time).
+
+### 4. Boarding methodology copy rewrite (§10.4) — apology to shopping list
+
+**`BoardingCoverageSection.tsx`'s "How is this calculated?" explainer REWRITTEN.** Every
+ASSUMPTION-flavored paragraph now follows the same inversion: state what was COMPUTED, then
+name the BETTER DATA that would replace the derivation and roughly where it lives (bed-
+management/ADT systems for a real hourly census; finance/throughput reporting for real monthly
+boarding hours; a real before/after coverage comparison to calibrate the linear-recovery
+assumption) — Ben's own framing: *"if there is better data / a better way to do this, I should
+look into getting it rather than relying on derivation."* The stale "a dollar cost layer is
+designed but not yet built" line (contradicted by spec §13's reaffirmed no-dollar-layer stance)
+was replaced with a pointer to the finance-partner worksheet (PR G) instead.
+
+### 5. Constrained boarding reallocation (§6.3)
+
+**`engine/synthesis.ts`'s reallocation logic EXTRACTED into a new exported
+`computeCombinedReallocation(result, inputs, currentStaffingGrid)`** (was inlined in PR G's
+`computeSynthesis`, which now calls this shared function instead of re-deriving it) — the same
+parameter-swap technique as `computeScenarioB` (spec §5), against the COMBINED
+arrivals+boarding demand curve, at the CURRENT total hours. Returns `null` with no current
+staffing. New fields beyond what `computeSynthesis` needed:
+`arrivalsShortfallHoursBefore`/`After` — the shortfall against ARRIVALS ALONE before/after
+reallocation, whose difference is the real, named COST this reallocation imposes on arrivals
+coverage.
+
+**New `screens/dashboard/ConstrainedReallocationSection.tsx`**, rendered at the END of the
+boarding chapter (after `BoardingCoverageSection`, still inside `ch-boarding`) — presented as a
+COMPROMISE WITH ITS COST NAMED, every render, never as the recommendation (a banner states this
+plainly, matching `ScenarioBSection`'s "every render, not once" convention). Renders `null`
+without both current staffing AND boarding data (this is specifically an arrivals-vs-boarding
+trade-off question, which doesn't exist without both demands present).
+
+**Tests:** `engine/__tests__/combinedReallocation.test.ts` (4) — null with no current staffing;
+combined shortfall improves for a badly-shaped grid; a real, finite, non-negative cost on the
+arrivals side; and scheduled hours never meaningfully exceed the current total (a placement
+change, not a funding ask — same "full coverage costs less than current" edge case Scenario B
+already handles is a real, separate state, not tested for near-equality here).
+
+**Invariants:** no changes to `hourlyRequirement`/reconciliation. `reconcile.test.ts` untouched.
+`npm run build`/`npm test` (169)/`oxlint` clean (only the pre-existing `StepIndicator.tsx`
+warning) throughout. No Playwright verification possible — the new DataStep banners and the
+constrained-reallocation section's layout are unverified in an actual browser this session.
+
+## PR L (2026-07-26, `RESULTS_COMPREHENSION_SPEC_2026-07-26.md`) — PPTX export
+
+PRs H and I must be merged first (reads `src/lib/narrative.ts` and the method-content shape).
+
+**New dependency: `pptxgenjs@4.0.1`** (client-side, no backend — `writeFile()` triggers a
+browser download; nothing is uploaded anywhere). No new high-severity `npm audit` findings
+attributable to it (the two existing high-severity advisories — `xlsx`, and `postcss` via
+`vite` — both pre-date this PR).
+
+**New `lib/pptxExport.ts`, `exportResultsToPptx({ result, inputs, currentStaffingGrid,
+wHppvTarget })`.** Slide titles are pulled from `src/lib/narrative.ts` — the SAME functions
+(`scenarioBHeadlineSentence`, `hiddenBoardingNightSentence`/`DaySentence`,
+`synthesisHeadlineSentence`, `fundingAskKneeLeadSentence`/`AlreadyFundedSentence`,
+`comparisonHeadlineSentence`, `scheduleMeansOvercoverageSentence`, `deliveryPremiumSentence`) —
+never a second, hand-written set of titles. This is the reason PR H's narrative extraction
+exists in the first place.
+
+**Deck order mirrors the chapter rail:** title → what your department demands → what you staff
+against it → could moving hours fix it (Scenario B) → what this costs/what it buys (funding ask
++ finance-partner worksheet) → the second demand: boarding (SKIPPED — both the boarding slide
+AND the constrained-reallocation slide — when `result.boarding` is null; no empty placeholder)
+→ both budgets together (synthesis) → **Method & Limitations, ALWAYS included, never
+optional** (a constants table via `lib/constantsMetadata.ts`'s `buildConstantsTable()` — the
+SAME generated-from-`DEFAULTS` table PR I's evidence surface uses — plus the reconciliation
+check's live pass/fail state).
+
+**Grids as NATIVE PPTX TABLES** (`slide.addTable`, with header cell fills), not images —
+editable and they survive being pasted into someone else's deck. `gridToTableRows` (shared
+helper) renders both the idealized and current-staffing grids this way.
+
+**Speaker notes** (`slide.addNotes`) on every slide — plain-English explanation matching the
+same content the page's `ConceptCallout`/"why" text carries (PR J), so a manager presenting for
+the first time has something to say out loud, not just numbers to point at.
+
+**No current staffing:** most slides render a plain "no current staffing was entered for this
+export" line instead of throwing — verified directly (`pptxExport.test.ts`'s fourth test).
+**No boarding data:** the boarding + constrained-reallocation slides are OMITTED from the deck
+entirely (not rendered empty) — verified by asserting a full dataset produces strictly MORE
+`addSlide()` calls than an arrivals-only one.
+
+**Export entry point:** `DashboardScreen.tsx` gained an "Export to PPTX" button in the topbar
+(`.dashboard-topbar-actions`), calling `exportResultsToPptx` with the current store state.
+
+**Tests:** `lib/__tests__/pptxExport.test.ts` (4) — spies on `PptxGenJS.prototype.writeFile`
+(mocked, so no file is actually written during tests) and `addSlide` (NOT mocked — real slide
+construction still runs, only call-count is tracked) to verify: a full dataset exports without
+throwing; an arrivals-only dataset (boarding absent) still exports and still includes Method &
+Limitations; the full dataset produces strictly more slides than the arrivals-only one (proving
+boarding slides are actually skipped, not just documented as skippable); and a no-current-
+staffing dataset doesn't throw.
+
+**Not verified this session:** the actual generated `.pptx` file's slide COUNT/titles were not
+opened in PowerPoint/Keynote (no such tooling available in this environment) — the test suite
+verifies the JS-level construction (slide count, no exceptions, `writeFile` invoked with the
+right filename) but not the binary file's own structural validity beyond what `pptxgenjs`
+itself guarantees.
+
+**Invariants:** no engine changes. `reconcile.test.ts` untouched. `npm run
+build`/`npm test` (173)/`oxlint` clean (only the pre-existing `StepIndicator.tsx` warning).
+`DashboardScreen.tsx`'s `handleExport` uses a dynamic `import('../lib/pptxExport')` (not a
+static top-level import) specifically so `pptxgenjs` (~400KB minified) loads into its own
+chunk, fetched only when a user actually clicks "Export" — the main bundle is unaffected by
+this dependency's size.
+
+## Guided setup + measured boarding census (2026-07-27, `SETUP_AND_MEASURED_BOARDING_SPEC_2026-07-27.md` + same-day follow-up prompt) — Part 6 results-page copy
+
+Full engine/parser/template detail is in `.claude/rules/boarding-seasonality.md`'s and
+`.claude/rules/template-parsing.md`'s own measured-path sections; this entry covers just the
+Part 6 results-page copy changes.
+
+- **BH boarding understatement callout** — `BoardingCoverageSection.tsx`, rendered whenever
+  `boarding.bhWeeklyRnHours !== null`: a medical-vs-BH RN-hours/week split line, then a
+  required (not optional-framing) banner stating these figures are RN-only and BH boarding's
+  true operational cost (techs/sitters/security) is understated by any RN-staffing view.
+- **Boarding methodology explainer** (the PR K apology→shopping-list rewrite) — its first
+  ("Computed: an hourly boarding-census curve...") and third ("month toggles are
+  scope...Better data...") paragraphs now branch on `boarding.censusSource === 'measured'`:
+  each says **Satisfied** instead of naming better data to chase, since the measured path
+  already IS that better data. The linear-recovery and coverage-vs-staffing-FTE paragraphs are
+  UNCHANGED regardless of path — they're not about where the census comes from.
+- **Evidence surface (`EvidenceSurfaceSection.tsx`)** — the "Your data" provenance row lists
+  the measured census (medical + BH if tracked) instead of admit rate/boarding duration when
+  `censusSource === 'measured'`; a new provenance row states the bed-request clock definition
+  explicitly ("the one thing that makes a department's boarding number comparable to a
+  peer's," per spec) whenever measured; the "modeled assumption" row drops "the boarding
+  census convolution" on the measured path. Three known-approximation bullets (derived
+  boarding census, mean-not-median duration in Decisions, the duration-conflated month index)
+  are now conditional — hidden when `censusSource === 'measured'`, since none apply. A new
+  Decisions bullet documents ESI-3-as-unbiased-anchor as an inference from one department's
+  data, not a proven universal (mirrors the existing open question in
+  `.claude/rules/template-parsing.md`).
+- **ESI normalization disclosure (Part 5)** — `normalizeEsiMix`'s adjustment summary is
+  surfaced in TWO places: `TutorialFlow.tsx`'s ESI tutorial step (item 6), computed live from
+  the arrivals/esiMix currently in the store, and `EvidenceSurfaceSection.tsx` (a `degrade-note`
+  paragraph right after the provenance table) — both read the SAME `normalizeEsiMix(arrivals,
+  esiMix)` call, so the two disclosures can't drift apart. States plainly that ESI 3 is treated
+  as least-biased and that the true answer likely sits between this and even scaling.
+- **Pre-bed-request census validation (§7, optional)** — new `engine/
+  preBedRequestValidation.ts`'s `computePreBedRequestValidation`, rendered as its own small
+  subsection in `EvidenceSurfaceSection.tsx` only when `preBedRequestCensus` was supplied.
+  Compares observed non-boarding occupancy against `hourlyRequirement / wHppvTarget` (a rough
+  visit-equivalent proxy, explicitly labeled as such, not an exact occupancy model) via mean
+  comparison + Pearson correlation. Diagnostic only — no solver interaction, no headline, no
+  change to any recommendation, per the spec's explicit "keep it small" instruction.
+
+**Setup-side changes (not results-page, noted here for completeness — full detail in
+`.claude/rules/template-parsing.md`'s "Guided setup walkthrough" section):** `DataStep.tsx` is
+deleted, replaced by `SetupEntryFork.tsx` (`setupMode` fork) → `TutorialFlow.tsx` (guided,
+one item per screen) / `ColleagueRequestPage.tsx` / the 'returning' upload-then-jump-to-Review
+path inside the fork itself. `BoardingFork.tsx` is the tutorial's boarding-path question. A
+Settings tab and a `boardingCensusClockStart` field were both built earlier in this same
+session and then REVERTED — see `.claude/rules/template-parsing.md`'s reversal sections for
+why, and don't reintroduce either without checking first. `ReviewStep.tsx` gained a "Download
+my data file" export (Part 3, the app's only persistence) — see template-parsing.md's export
+section for the round-trip guarantee and test.
+
+---
+
+## Results Page V2 (`RESULTS_PAGE_V2_SPEC_2026-07-27.md`) — five panels, one visual frame, a sandbox
+
+The next full rebuild of this results page, superseding almost everything documented above in
+this file about the current chapter-by-chapter architecture (`CoreGridTab`/`ScenarioBSection`/
+`FundingAskSection`/etc.) — see the spec's own §2 for the full reversal list (R1-R12), each
+confirmed with Ben after reviewing the rendered page against a real department's data. PRs land
+in the sequence the spec's §8 table specifies (A0 → H); this section accrues one entry per PR,
+same convention as the rest of this file. **Read the spec in full before touching any PR in this
+sequence** — it is the governing document, not a paraphrase of it.
+
+### PR A0 — Playwright browser test harness
+
+Full detail lives in `.claude/rules/synthetic-fixtures.md`'s Playwright section (the harness is
+fixture-adjacent, not results-page-specific) — `@playwright/test`, `npm run test:e2e`, the
+`window.__shiftlensSeed` dev-only hook, `e2e/smoke.spec.ts` covering all eight named profiles.
+Built first per the spec's own instruction, since every PR from D onward is visual and this repo
+had never had a way to verify visual work before this.
+
+### PR A — backlog reporting confirmation + pattern namer
+
+Full detail lives in `.claude/rules/engine-solver.md`'s new "PR A" section (the backlog-curve/
+threshold finding is solver-adjacent) and `src/lib/whenPattern.ts`'s own header (the pattern-namer
+ladder + its flagged rung-3-unreachability finding). Engine/lib only, no UI — the actual heatmap/
+stat changes this finding motivates land in PRs D/E.
+
+### PR B — full coverage over combined demand (§5.3)
+
+New `EngineResult.fullCoverageCombined: { weeklyHours: number; grid: Grid }` (`engine/index.ts`)
+— Panel 3's ceiling. Reuses `solveFullCoverageWeek` verbatim against the COMBINED demand curve
+(`hourlyRequirement + boarding.cellBoardingRnHours` when boarding is present) — no second solver,
+per the spec's explicit instruction. **Resource-agnostic by construction**: `solveFullCoverageWeek`
+has no concept of ED-vs-hold nurses (§3.5 is a Panel-5-only distinction) — it only ever asks "how
+many total nurse-hours, placed where, cover this demand curve with zero shortfall anywhere."
+
+**Always computed, never null** — a deliberate choice over returning `null` when boarding is
+absent. With no boarding data the combined curve degenerately equals `hourlyRequirement` alone,
+so `fullCoverageCombined.weeklyHours === fullCoverage.weeklyHours` exactly — the mathematically
+correct answer for "zero boarding demand," not a special case needing a guard. Consumers that
+need to know whether boarding was actually included should check `result.boarding` (already
+nullable), not infer it from whether this field differs from `fullCoverage`.
+
+Computed AFTER `boarding` in `compute()`'s body (moved from where `fullCoverage`, the
+arrivals-only version, is computed — that one still runs before `boarding` since it doesn't need
+it) — the one structural change this PR made to `engine/index.ts`'s existing code, since the
+combined curve needs `boarding.cellBoardingRnHours` to exist first.
+
+**Tests** (`engine/__tests__/fullCoverageCombined.test.ts`, 4): the no-boarding degenerate-equality
+case; strictly-greater-than-arrivals-only when boarding is present; a direct reconstruction of
+capacity from the returned grid, confirming it never falls short of the combined demand curve at
+any of the 168 hours (not just trusting the solver's own invariant); and confirmation that
+`annualVisits`/`annualCoreRnHoursBudget`/`hourlyRequirement`/`reconciliation` are completely
+untouched by any of this. `reconcile.test.ts` itself passes with a zero-line diff.
+
+### PR C — sandbox model (§5.4), engine only
+
+New `src/engine/sandbox.ts`, `computeSandbox(arrivalsRequirement168, medBoarding168,
+bhBoarding168, arrivals168, edNurses168, hold168, backlogParams)` → `SandboxResult`. Pure
+arithmetic, no solve — same cheap-live-recompute convention as `recomputeAfterEdit`, so Panel 5
+(PR G) can call it on every keystroke against two editable grids without a re-solve.
+
+**The exact formula, per the spec:**
+```
+holdApplied[h]    = min(hold[h], medBoarding[h])
+holdSurplus[h]    = max(0, hold[h] - medBoarding[h])
+residualDemand[h] = arrivalsRequirement[h] + (medBoarding[h] - holdApplied[h]) + bhBoarding[h]
+unmet[h]          = max(0, residualDemand[h] - edNurses[h])
+spare[h]          = max(0, edNurses[h] - residualDemand[h])
+```
+`queueDepth` reuses `backlogModel.ts`'s `backlogRecurrence(edNurses168, residualDemand168,
+params)` verbatim — no new recurrence, no second copy of the formula. `effectiveWhppv[h] =
+(edNurses[h] - unabsorbedMedBoarding[h] - bhBoarding[h]) / arrivals[h]` — can go NEGATIVE,
+reported honestly (never clamped by this function; a clamp is a display/color concern for
+whichever PR builds Panel 5's UI). Guarded to `0` (not `NaN`/`Infinity`) at an hour with zero
+arrivals, since there's no meaningful "per ED visit" figure there.
+
+**Two hard rules from §5.4, both load-bearing and both tested:**
+- **Never attribute `unmet` between arrivals and boarding** — `residualDemand`/`unmet`/`spare`
+  are each ONE combined number per hour, never decomposed by source. This is why `holdApplied`
+  is capped at `medBoarding[h]` rather than netted against the blended `residualDemand` some
+  other way — the cap has to happen BEFORE the three demand sources are summed into one curve,
+  or there'd be no principled way to "give back" the boarding-specific relief afterward.
+- **`holdSurplus` must be surfaced, never silently absorbed** — hold nurses staffed against
+  medical boarders who aren't there is a real, honest cost of the cheaper-looking hold-nurse
+  ask (§1's governing test: a manager needs to be able to explain this, not have it smoothed
+  over). Tested directly: once `hold >= medBoarding` at an hour, `holdApplied` stays capped at
+  `medBoarding` and every additional hold-nurse-hour becomes pure `holdSurplus` — `residualDemand`
+  /`unmet` are provably UNCHANGED beyond that point (more hold does nothing further).
+
+**Tests** (`engine/__tests__/sandbox.test.ts`, 5): hold has literally zero effect on
+`residualDemand`/`unmet`/`spare` when `medBoarding = 0` everywhere (proves hold can never
+reduce arrivals/BH shortfall, since its only lever — `holdApplied` — is capped at medical
+boarding demand, which is zero here); the surplus-capping property above; a full-coverage
+input (`edNurses = residualDemand` exactly) produces zero `unmet` and a flat (all-zero)
+`queueDepth`; a heavy-uncovered-boarding scenario producing a genuinely negative
+`effectiveWhppv`, asserted by exact value, not just "is negative"; and the zero-arrivals guard.
+No engine changes elsewhere; `reconcile.test.ts` untouched. This PR has no UI — Panel 5's
+editable grids and prefill buttons are PR G.
+
+### PR D — layout shell, the shared visual frame, heatmap R1/R2/R3
+
+Three independent pieces, all UI, no engine changes.
+
+**Heatmap changes (`components/WhppvHeatmap.tsx`):**
+- **R1** — the cell's displayed NUMBER changed (THIRD change to this mechanism — see
+  CLAUDE.md §6's history) from `onDuty/requirement` back to headcount alone (`onDuty`). Color
+  is UNCHANGED — still driven by the same `onDuty/requirement` ratio against this cell's own
+  per-hour band; only the second redundant number was dropped.
+- **R2** — `RICHER_RGB` reversed from the 2026-07-25 deliberate muted gray-blue back to a
+  saturated blue. Confirmed against a real rendered page: an 8-nurses-against-4-requirement
+  hour at 04:00 rendered pale gray was arguably the single most actionable finding on the page
+  (§3.2) — muting made a genuine "you're overstaffed here, move these hours" signal invisible.
+- **R3** — the backlog spine overlay is REMOVED from the component entirely (`backlogMax` prop
+  gone; `WhppvHeatmapCell` no longer carries `backlog`/`inBacklogStreak`). In the rendered page
+  it appeared on nearly every cell at near-uniform weight — reading as a table-border artifact,
+  not data (§3.2). Backlog gets its own aligned strip chart in the new `VisualFrame` instead
+  (below) — a different, more legible representation of the same signal, not a deletion of it.
+  The ENA on-duty floor overlay (red outline + "!") is UNCHANGED — unrelated to R3, still the
+  only per-cell flag left.
+- **Callers updated for the new contract:** `CoreGridTab.tsx`/`CurrentStaffingAnalysis.tsx` no
+  longer compute `idealBacklog`/`currentBacklogForMax`/`backlogMax` (now fully dead code once
+  the heatmap stopped consuming them) or set `backlog`/`inBacklogStreak` on heatmap cells.
+  `computeBacklog`/`BACKLOG_CAUGHT_UP_THRESHOLD` imports dropped from `CoreGridTab.tsx`
+  entirely (no other use in that file); `CurrentStaffingAnalysis.tsx` keeps `computeBacklog`
+  for its own narrative stats (the "longest lean stretch" text — unchanged by this PR, its
+  actual §3.1 rewrite is PR E's job when Panel 1 absorbs this content). Orphaned CSS
+  (`.heat-backlog-spine`, `.heat-legend-backlog-swatch`, `.heat-legend-spine`) removed from
+  `App.css`.
+
+**`StepBar` (`components/StepBar.tsx`) — R10, REPLACES `ChapterRail.tsx` (deleted).** Identical
+scroll-spy/click-to-jump logic (`IntersectionObserver`, same rootMargin heuristic), reused
+verbatim — only the LAYOUT changed, from a sticky left sidebar to a slim bar pinned to the top
+of the page. Reason: a sidebar was competing with each panel's visual frame for width, exactly
+the thing §4's "words left, one fixed visual frame on the right" two-column panel layout needs
+back. `DashboardScreen.tsx`'s `.dashboard-body` two-column flex wrapper is gone —
+`.dashboard-content` is now the page's only column, directly below `<StepBar>`.
+**`DashboardScreen.tsx` STILL PASSES THE OLD 7-ENTRY CHAPTER LIST** (`CHAPTERS`) — this PR only
+replaces the shell, not the content redistribution; PRs E/F/G shrink that list to the real 5
+panels as they land. `App.css`'s `.chapter-rail*` rules replaced by `.step-bar*` (horizontal
+bar, wrapping flex row of buttons, bottom border instead of left border for the active-item
+indicator).
+
+**`VisualFrame` (new `components/VisualFrame.tsx`) — §4's shared frame, built once.** Three
+stacked elements, one shared x-axis, exported as `VisualFrameView[]` a panel supplies:
+1. **Demand-vs-capacity chart** — two lines (`var(--error)` demand, `var(--accent)` capacity),
+   the gap between them shaded (`var(--warning)` where demand exceeds capacity). Defaults to
+   the **average day** (24 points, `averageDay()` means across the 7 days at each hour-of-day)
+   per §4's explicit instruction that the full 168-hour week is an expansion, not the default —
+   a "Show full week" toggle switches both this chart AND the queue strip together (same
+   x-axis, so they must stay in lockstep).
+2. **Queue strip** — draws the view's `queueDepth168` (MUST be the CYCLICAL curve, R4 — never
+   the blended actual curve; see PR A's finding above for why that distinction matters), with
+   `structuralFloor` as a dashed horizontal baseline. **`queueDepth168: null` renders a
+   deliberately BLANK strip** — this is Panel 3's requirement (§4: "after two panels of
+   watching a queue build, the strip is empty — preserve that; it is the most persuasive frame
+   on the page and it is free"), not a missing-data fallback.
+3. **Heatmap** — the same `WhppvHeatmap` component, always full 7×24 regardless of the
+   24h/168h chart toggle (the heatmap has its own inherent day×hour shape).
+
+**Toggling animates via a CSS fade, not per-cell tweening** — `.frame-body`'s `key={activeKey}`
+forces a remount on view change, and a `frame-fade-in` CSS keyframe animation (220ms) fades the
+new content in. This is the simple, robust fallback §10's open item 2 explicitly sanctions
+("if it is janky, drop to a cross-fade rather than per-cell tweening") — chosen up front rather
+than building the more complex per-cell tween and finding out later it's janky at 168 cells.
+
+**NOT YET WIRED INTO A REAL PANEL.** `VisualFrame` is fully built and self-contained but has no
+caller yet — Panels 1-5 (PRs E/F/G) are its first real consumers. Per §11's explicit
+instruction ("never claim visual verification that did not happen"): this component has NOT
+been e2e-verified in an actual mounted panel this PR, only reasoned through and build/lint-
+verified in isolation. Full verification (does the toggle actually cross-fade cleanly, does the
+blank queue strip actually look intentional rather than broken, does the 24h/168h expand toggle
+work) is deferred to PR E, its first real mount point, and should be confirmed there before
+being called done.
+
+**Invariants:** no engine changes anywhere in this PR. `reconcile.test.ts` untouched. `npm run
+build`/`npm test`/`oxlint`/`npm run test:e2e` all clean — the e2e smoke suite exercises the
+heatmap/StepBar changes indirectly (still mounted via the old `CoreGridTab`/`DashboardScreen`),
+confirmed via a manual screenshot review this session (headcount-only cell numbers, saturated
+blue, no spine, horizontal top bar all visually present).
+
+### PR E — Panels 1 and 2, `VisualFrame`'s first real mount
+
+New `screens/dashboard/Panel1.tsx` and `Panel2.tsx`. **Deletes** (R9) `CoreGridTab.tsx`,
+`CurrentStaffingAnalysis.tsx` (fully absorbed into Panel 1), `ScenarioBSection.tsx` (absorbed
+into Panel 2), `HiddenBoardingSection.tsx` (absorbed into Panel 1), `BoardingTransition.tsx`
+(its one idea — effective wHPPV after boarding — folded into Panel 1's effective-wHPPV bullet),
+`ConstrainedReallocationSection.tsx` (absorbed into Panel 2's "reallocated for arrivals +
+boarding" toggle). Verified before deleting: no other file imported any of the five.
+`DashboardScreen.tsx`'s `CHAPTERS` list is unchanged in SIZE (still 7 — `ch-funding-ask`
+through `ch-evidence` are still the old architecture, PR F/G's job) but its first two entries
+now point at real panels.
+
+**`VisualFrame` gained a controlled mode** (`activeKey`/`onActiveKeyChange` props, both
+optional) — a gap found while building Panel 2, not anticipated in PR D. Panel 1's toggle can
+stay uncontrolled (its left-column text is static, doesn't need to track which view is active),
+but Panel 2's left-column stats ("hours below need," "worst unbroken stretch") explicitly MUST
+update WITH the toggle per §4 — that requires the panel to know which view is active, which an
+internally-state-owning frame can't expose. Uncontrolled remains the default (`views[0]?.key`
+seed, frame owns its own state) so Panel 1's usage is unaffected.
+
+**`averageDay` moved out of `VisualFrame.tsx` into new `lib/averageDay.ts`** — a component file
+exporting a non-component function trips oxlint's fast-refresh rule (same reasoning
+`lib/whppvColorDomain.ts`'s own header already documents for `computeColorDomain`). Both
+`VisualFrame.tsx` and `Panel1.tsx` (for its late-ramp sentence, §3.2) import the one shared copy.
+
+**Judgment calls this panel makes explicit — the spec describes each toggle's STORY but not
+its exact formula, so these are documented choices, not silent guesses (§11):**
+- **Panel 1's "Boarding" toggle capacity line** = `max(0, currentCapacity - hourlyRequirement)`
+  — how much of today's actual staffing, once arrivals are served, is left over for boarding.
+  This directly operationalizes the panel's own bullet ("whether boarding is currently staffed
+  for at all") using the SAME arithmetic the hidden-boarding diagnostic already does, just at
+  168-hour grain instead of day/night blocks.
+- **Its heatmap band** for that toggle sets `bandFloor = bandCeiling = boardingDemand` exactly
+  (a zero-width neutral point at the demand value itself) rather than inventing a boarding-
+  specific benchmark band that doesn't exist — anything at/above demand reads neutral/rich,
+  anything below reads lean, via the same `cellVisual` mechanism unchanged.
+- **Panel 1's "Combined" toggle band** shifts the existing arrivals band (`bandFloorHourly`/
+  `bandCeilingHourly`) up by the same per-hour boarding demand — directly matching §3.4's
+  "summing the two demand curves is what smooths effective wHPPV" framing, applied to the band
+  rather than re-deriving a new one.
+- **Panel 1's "Effective wHPPV" toggle** inverts the chart's usual demand/capacity semantics:
+  the flat `wHppvTarget` line stands in for "demand" (what should hold steady) and the actual
+  per-hour effective-wHPPV curve stands in for "capacity" (what actually happens) — this is
+  the cleanest way to show the target-vs-actual gap in the SAME two-line chart shape every
+  other view uses, without inventing a fourth chart type. Its heatmap reuses the Combined
+  view's cells verbatim (a per-hour wHPPV ratio has no natural headcount-shaped heatmap
+  rendering; the wHPPV story is already carried by the chart line and the text).
+- **Panel 2's per-toggle queue/backlog** is computed fresh per state (`computeBacklog` against
+  that state's own grid + demand curve) rather than reusing Panel 1's — a genuinely different
+  question (what would backlog look like AFTER this reallocation) needs its own computation.
+
+**`namePattern` (§5.2) gets its first real UI caller** — Panel 2's "worst unbroken stretch"
+stat calls `namePattern(activeBacklog.cyclicalBacklog, 'higher-is-worse')`, updating with the
+toggle same as the "hours below need" number beside it.
+
+**R7 compliance (severity removed from the UI) — self-policed in this PR, not yet enforced by
+`copyLayer.test.ts`.** Neither Panel 1 nor Panel 2 uses the word "severity" or exposes a raw
+severity number anywhere; Panel 2 reports `totalBacklogHours`/nurse-hours instead of
+`totalSeverity`. **§5.5's copy-layer test extensions (forbidding "severity"/"idealized" as bare
+words) are DEFERRED to PR F, not added here — flagged, not silently skipped.** Several
+still-live files this PR doesn't touch (`ConvexityDemo.tsx`, `FinancePartnerWorksheet.tsx`,
+`ShiftMenuFlexibilitySection.tsx`, `EvidenceSurfaceSection.tsx`) currently contain both words in
+rendered UI text; adding the ban now would either fail immediately against files outside this
+PR's assigned scope or need a broad allowlist that defeats the guardrail's purpose. PR F is the
+natural point to add it — it deletes/renames the last of the "idealized" grid language (R11,
+Panel 4) and deletes `FinancePartnerWorksheet.tsx` (R8) outright.
+
+**Tests:** `e2e/panel1-2.spec.ts` (new) — both panels render, their toggles switch views
+(`aria-selected` flips), the frame's three elements (`.frame-demand-chart`/`.frame-queue-
+strip`/`.whppv-heatmap`) are all present, and Panel 2's left-column stat text actually changes
+when the toggle changes (proving the controlled-mode wiring genuinely works, not just that the
+buttons exist). All 8 smoke-spec profiles re-verified green with Panel 1/2 now live — this is
+`VisualFrame`'s first real e2e verification, closing the gap PR D explicitly flagged. Manually
+screenshot-reviewed: both panels render two-column with a sticky right-hand frame, toggle
+buttons, and correctly-populated charts/heatmaps.
+
+**Invariants:** no engine changes. `reconcile.test.ts` untouched (its own test file wasn't
+touched; the invariant itself doesn't depend on anything this PR changed). Vitest count
+unchanged at 215 (this PR is UI/e2e only, no new engine/lib unit tests) — 10 e2e tests now
+(8 smoke + 2 panel-specific). `npm run build`/`npm test`/`oxlint`/`npm run test:e2e` all clean.
+
+### PR F — Panels 3 and 4, §5.5's copy-layer bans finally added
+
+New `screens/dashboard/Panel3.tsx` ("what would it take to fully cover the department") and
+`Panel4.tsx` ("recommended staffing"). **Deletes** (R8/R9) `FundingAskSection.tsx`,
+`FinancePartnerWorksheet.tsx`, `SynthesisSection.tsx`, `BoardingCoverageSection.tsx`,
+`ShiftMenuFlexibilitySection.tsx` — the last one folded into Panel 4 (collapsed, at the
+bottom), not deleted-and-lost; its content (axis toggles + best-candidate comparison) is
+identical, just relocated. Verified no other file imported any of the five before removing.
+`StepBar`'s `CHAPTERS` list finally shrinks from 7 to the real 5 panels.
+
+**Panel 3** reuses `EngineResult.fullCoverageCombined` (PR B) directly — no new engine work.
+Queue strip renders deliberately BLANK (`queueDepth168: null`), per §4's explicit instruction
+that an empty strip after two panels of watching a queue build is itself the finding. New
+**two-bar comparison** (`TwoBarComparison`, a small dedicated inline SVG — not the shared
+`VisualFrame` chart, since a stacked-bar comparison is a genuinely different visual than a
+demand/capacity line chart) replaces `SynthesisSection`'s paragraph. **§10 open item 3
+resolved:** when boarding is absent, the demand bar is a single (arrivals-only) segment, not
+a half-empty stacked bar — a smaller, still-correctly-scaled total is the honest degraded
+state, not an incomplete-looking chart.
+
+**Panel 4** — R11 applied throughout its own copy ("recommended," never "idealized"). R6
+(display-level combined grid, `EngineResult.grid` itself never mutated) implemented by
+summing `result.grid` and a freshly-computed `recommendWeeklyBoardingGrid(...)` cell-by-cell
+in the component only. The shift-menu flexibility subsection reuses `searchFlexibleMenus`/
+`FlexAxesToggles` unchanged, collapsed inside a `<details>`.
+
+**Judgment call, flagged (no new engine work was scoped for this conversion):** the spec asks
+for "each additional shift removes roughly X HOURS of unmet need" — the engine's marginal
+curve (`EngineResult.marginalCurve`) only records convex queue-cost (the internal `severity`
+objective) per point, not raw backlog-hours per point. Panel 4 approximates the hours figure
+by scaling `EngineResult.totalBacklogHours` (the real current total) by the SAME percentage
+reduction the queue-cost curve already shows between "today" and the knee point — a disclosed
+approximation, not a fabricated number, but an approximation nonetheless. When this scales to
+a negligible amount (a department whose recommendation is already close to full arrivals
+coverage), Panel 4 shows a plain "not a meaningful curve here" sentence instead of a
+confusing "removes roughly 0 hours" line — found and fixed via the manual screenshot review
+this PR, not assumed.
+
+**§5.5's copy-layer test additions, deferred from PR E, land here:** `copyLayer.test.ts`
+gained two more describe blocks — "severity" (R7) and "idealized" (R11) banned as bare words
+in `src/screens`/`src/components`, same strip-comments-then-grep strategy as the existing
+"budget" rule. Fixing the repo to actually PASS these needed real changes, not just the test:
+- **`components/ConvexityDemo.tsx`** — its whole teaching purpose is showing the REAL convex
+  `severity` function's behavior (spec §8 teaching layer, unchanged by this PR otherwise), so
+  the word couldn't just be deleted — it needed a rename. Display text now says "queue cost"
+  everywhere; the import is aliased (`import { severity as computeQueueCost }`) so the bare
+  identifier only appears once, at the import site.
+- **`screens/dashboard/EvidenceSurfaceSection.tsx`** — TWO live "severity" mentions reworded
+  to "queue cost" (same rename as ConvexityDemo, for consistency). **This is a deliberate,
+  narrow departure from the spec's "EvidenceSurfaceSection stays as-is" instruction** — read
+  as being about STRUCTURE/PLACEMENT (don't restructure or move this section), not an
+  exemption from R7's own "removed from the UI entirely." Also fixed a genuinely stale
+  cross-reference to the now-deleted `FinancePartnerWorksheet` ("the finance-partner worksheet
+  names the three numbers...") — a real correctness bug independent of either copy rule,
+  found while making this pass.
+- **`screens/setup/ShiftMenuStep.tsx`** — THREE live "idealized" mentions renamed to
+  "recommended"/"recommended grid." R11 says "idealized" is renamed "everywhere in the UI,"
+  and `copyLayer.test.ts` scans `src/screens` recursively (including `setup/`) — this setup
+  screen was in scope and was missed by an initial read that only considered results-page
+  panels. Found by actually running the new test against the whole repo before declaring it
+  passing, not by inspection alone.
+- **ONE allowlisted exception**, same technique the "budget" rule already established:
+  `ConvexityDemo.tsx`'s one `import { severity as computeQueueCost } from '../engine/solver'`
+  line is unavoidable — importing an export literally requires naming it once, so no rename
+  can make the word disappear from that one line. Allowlisted by exact substring match.
+
+**Tests:** `e2e/panel3-4.spec.ts` (new) — Panel 3's queue strip is confirmed blank
+(`.frame-queue-strip-blank` visible) and the two-bar chart renders; Panel 4's toggle switches
+between arrivals/boarding/combined nurses and its folded-in shift-flexibility `<details>` is
+present. `copyLayer.test.ts` now has 3 passing describe blocks (budget/severity/idealized), all
+verified to actually pass against the current repo state, not just written and assumed. All 8
+smoke-spec profiles + all 4 panel-specific specs green (12 e2e tests total). Manually
+screenshot-reviewed: all four live panels render correctly end to end, including the two-bar
+comparison and the corrected "no meaningful curve" fallback text.
+
+**Invariants:** no engine changes. `reconcile.test.ts` untouched. Vitest count reached 217
+(the two new copyLayer describe blocks). `npm run build`/`npm test`/`oxlint`/`npm run
+test:e2e` all clean.
+
+### PR G — Panel 5, the sandbox: the five-panel architecture is complete
+
+New `screens/dashboard/Panel5.tsx` ("test it yourself"). All five panels of §4 are now live;
+`StepBar`'s chapter list gained its final entry (`ch-sandbox`, 6 total including
+`ch-evidence`). Two editable day×shift grids (component-local `useState<Grid>`, NOT the
+zustand store — this is ephemeral what-if state, same convention the old
+`BoardingCoverageSection`'s `cellOverrides` used, not something that needs to persist beyond
+the page). Reuses `computeSandbox` (PR C) verbatim on every keystroke — no solver call, per
+the spec.
+
+**§3.5's hard rule lives ENTIRELY in this panel** — nowhere else on the page distinguishes ED
+nurses from hold nurses; every other panel treats all nursing demand as one pool.
+
+**Judgment call, flagged — a genuine engine data gap, not a design choice:** hold nurses can
+only ever cover MEDICAL boarders (§3.5), but `EngineResult.boarding.cellBoardingRnHours` is a
+single PER-HOUR curve that already blends medical and BH together — only the WEEKLY totals
+(`medicalWeeklyRnHours`/`bhWeeklyRnHours`) are split apart, and only on the measured census
+path. No PR in this sequence scoped a new per-hour medical/BH split. Panel 5 approximates it:
+on the measured path with both streams present, the combined curve is split proportionally by
+the weekly medical:BH ratio, applied UNIFORMLY across all 168 hours (assumes both streams
+share the same hourly shape — a real simplification, not a proven one); everywhere else
+(derived path, or measured with only medical tracked), the entire curve is treated as medical,
+since the derived path has no BH-specific concept to split out of in the first place. This is
+disclosed in the component's own header comment, not silently assumed.
+
+**Three prefill buttons**, per §4: "My current staffing" (ED = current grid, hold = zero);
+"The recommendation, all as ED nurses" (ED = `result.grid` + the recommended boarding grid,
+summed — the full ask as one flexible pool, hold = zero); "The recommendation, with boarding
+covered by hold nurses" (ED = `result.grid` alone, hold = the recommended boarding grid — the
+SAME approximation call as Panel 4's R6 combined view, reused here rather than re-derived).
+
+**The hold-surplus finding is surfaced as prose, not buried in a number** — whenever
+`holdSurplus` totals ≥0.5 hours, the panel states plainly that hold nurses are staffed against
+medical boarders who aren't there and that this capacity can't help with BH boarders or
+arrivals, per §5.4's "must be surfaced" rule.
+
+**Tests:** `e2e/panel5.spec.ts` (3, new) — prefill buttons genuinely populate the ED grid
+(read back via each `<input>`'s live DOM value, not just "button exists"); typing a large
+number into every hold-nurse cell makes the hold-surplus sentence appear; and a heavy-BH
+profile (`measuredBoardingCensus`) produces a real, finite "hours below need" figure in both
+the current and hold-covered states — the SPECIFIC claim that hold nurses barely move
+coverage for a BH-heavy department is a finding about that profile's own medical:BH mix, not
+hard-coded as a fixed percentage in the test. `copyLayer.test.ts`'s "budget" rule caught this
+PR's own first draft using the word in Panel 5's two-grids explanation — reworded to "pools of
+hours," a live demonstration of the guardrail actually working, not just passing by
+construction. All 15 e2e tests green (8 smoke + 7 panel-specific). Manually screenshot-
+reviewed: both grids render, start at zero, and the frame/heatmap populate correctly.
+
+**Invariants:** no engine changes (Panel 5 is a pure consumer of PR C's `computeSandbox`).
+`reconcile.test.ts` untouched. Vitest count unchanged at 217 (this PR is UI/e2e only). `npm
+run build`/`npm test`/`oxlint`/`npm run test:e2e` all clean.
+
+### PR H — PPTX rewrite (§7, R12): the final PR, the spec is fully implemented
+
+Full rewrite of `lib/pptxExport.ts`, replacing the PR L deck built for the pre-V2 nine-chapter
+architecture (that deck's slide functions — Scenario B, funding-ask, finance-worksheet,
+boarding, constrained-reallocation, synthesis — are all gone; their content either doesn't
+belong in the narrower deck or is superseded by the current-staffing/sandbox slides below).
+
+**R12 scope, exactly as specified:** title → current-staffing analysis (Panel 1's content) →
+the user's sandbox scenario (Panel 5) → the delta between them → Method & Limitations. Panels
+2, 3 and 4 are deliberately NOT exported — the deck is what a manager wants to present, not a
+dump of the tool. **Export moved from the top bar to the bottom of the page** (new
+`.export-row`, after `<Panel5 />`) — you export after testing your own scenario, not before
+you've read anything. `.dashboard-topbar-actions` (now empty) removed from `App.css`.
+
+**A real architectural requirement this PR surfaced, not anticipated in PR G:** "export the
+user's sandbox scenario" requires that scenario to be readable from `DashboardScreen`, but PR
+G put Panel 5's `edGrid`/`holdGrid` in component-local `useState` — invisible outside Panel 5.
+Fixed by lifting `sandboxEdGrid`/`sandboxHoldGrid` (+ setters) into the zustand store — still
+ephemeral (not part of `EngineInputs`, never touches `compute()`), just readable from the
+export handler now. `Panel5.tsx` itself is otherwise behaviorally unchanged; its `useState`
+calls became thin wrappers around the store setters (see the component's own comment). `null`
+in either store field means "untouched," which the export path reads as "prefill with the
+recommendation, all as ED nurses" and labels those slides as the tool's own recommendation
+rather than the user's scenario — per the spec's explicit instruction.
+
+**Everything native, no images:**
+- **Grids → native PPTX tables** (`addTable`, unchanged mechanism from PR L) with a NEW simple
+  per-cell fill heuristic (below that cell's own approximate hour's band floor → light red;
+  above the ceiling → light blue) — a simplified echo of the web heatmap's color logic, not a
+  pixel-exact reproduction. Flagged approximation: a table cell holds one headcount per
+  (day, shift), but the band is per-HOUR — the cell is checked against its shift's own start
+  hour as a representative point, not averaged across every hour the shift covers.
+- **Demand-vs-capacity → native line charts** (`addChart(pptx.ChartType.line, ...)`), reused
+  for both the current-staffing slide and the sandbox-scenario slide — the SAME chart shape
+  in both places, matching the shared `VisualFrame`'s own "one frame, reused" philosophy.
+- **The delta → a native bar chart** (`addChart(pptx.ChartType.bar, ...)`) — hours below need,
+  today vs. the scenario, one glance.
+- **Scope reduction, flagged:** the deck does NOT attempt a native queue-depth strip chart or
+  the Panel 3 two-bar comparison (Panel 3 isn't exported at all per R12, so this is moot for
+  that one, but the queue strip's cyclical-curve visual is also not reproduced in the deck —
+  only the demand/capacity line and the summary numbers are). A full native reproduction of
+  every web chart type was judged lower priority than a working, tested deck within this PR's
+  scope; if a future session wants full parity, this is the place to extend.
+
+**Branding, per §7's explicit instruction:** title slide gets a plain native-shape "mark" (a
+rounded rectangle in the accent purple `#7C3AED` with a bold white "S" — `markShape()`, no
+image embedding, since PPTX images would need a base64-inlined asset and the spec's own
+framing is "derive the theme from the mark," not "reproduce the mark pixel-for-pixel") on a
+pale `#F5F0FF` background — the SAME two colors the web app's favicon uses. One accent color
+throughout. **Section-divider slides** (`sectionDivider()`) before each of the three main
+sections (Your current staffing / Your scenario or the tool's recommendation / The delta),
+same background/accent treatment as the title slide, so the deck reads as one visual system
+end to end, matching the page's own use of one repeated frame.
+
+**Tests, both layers:** `pptxExport.test.ts` rewritten (6 tests) — the four original cases
+(full dataset, arrivals-only, full > arrivals-only slide count, no-current-staffing) updated
+for the new required `arrivals`/`shiftMenu` params, plus two NEW cases for R12's sandbox
+scope: an untouched sandbox exports without throwing (prefilled path), and a real sandbox
+scenario (both grids populated) exports without throwing. All six call the REAL `addSlide`/
+`addTable`/`addChart`/`addShape` methods (only `writeFile` is mocked), so a malformed chart-
+data shape or table-row shape would have failed these tests, not just gone unnoticed.
+**Additionally verified with a real, unmocked file write this session** (a temporary,
+not-committed test): `exportResultsToPptx` actually writes a `>20KB` `.pptx` file to disk and
+the file was deleted after confirming its size — stronger evidence than the mocked test suite
+alone that the deck's charts/tables are real, valid pptxgenjs output, not just non-throwing
+calls. **Not verified this session** (consistent with every prior PPTX-export note in this
+file): the generated file was not opened in PowerPoint/Keynote to visually inspect slide
+layout, chart rendering, or table fill colors — no such tooling is available in this
+environment.
+
+New `e2e/export.spec.ts` — confirms "Export to PPTX" is no longer in `.dashboard-topbar` and
+IS present in `.export-row`, positioned below `#ch-sandbox` in document order (a real
+`boundingBox()` Y-coordinate comparison, not just DOM order, since CSS could in principle
+reorder visually). 16 e2e tests total, all green.
+
+**Invariants:** no engine changes. `reconcile.test.ts` untouched. Vitest count reached 219 (2
+new pptxExport cases). `npm run build`/`npm test`/`oxlint`/`npm run test:e2e` all clean.
+
+**This completes `RESULTS_PAGE_V2_SPEC_2026-07-27.md` in full — PRs A0 through H, all nine,
+landed.** See CLAUDE.md's Feature Status for the consolidated summary and the session's final
+written account of every flagged judgment call, per §11's closing instruction.
+
+---
+
+## Panel 1 copy & queue-curve revision (2026-07-28, `PANEL1_COPY_REVISION_SPEC_2026-07-28.md`)
+
+Ben audited the just-completed Panel 1 (above) line by line in a Cowork planning chat and asked
+for eight scoped changes — **Panel 1 only** (`Panel1.tsx` + `engine/hiddenBoarding.ts`), no
+touching Panel 2-5/StepBar/VisualFrame's shared mechanics beyond what dropping one toggle
+strictly required. One genuine engine change (§4); everything else is copy/display.
+
+### §1 — wHPPV headline: categorical only, no raw band numbers, no percentile
+
+The old headline restated the peer band's actual p25/p75 numbers and implied a percentile
+position. Replaced with a plain three-branch categorical comparison (below/within/above),
+reusing the SAME band-position logic (`lookupWhppvBand` + the existing `position` comparison)
+that already drove the (unchanged) late-ramp sentence below it — no new comparison logic. "Week,"
+not "year," confirmed again: everything driving this stat is one representative week.
+
+### §2 — boarding ratio: plain line, no RN-understatement callout on this page
+
+The old text paired a full ratio sentence with a `banner banner-info` warning that RN-only
+boarding figures understate BH boarding's true cost. The banner is DELETED from Panel 1 entirely
+(no pointer back to setup either, per Ben's explicit ask) — it already lives on the setup page
+(`ShiftMenuStep.tsx`'s boarding-ratio card). The "boarding demands the equivalent of X wHPPV,
+about Y% of total nursing demand" sentence (a different concept, not named in the spec's
+"Current" excerpt) was NOT touched — only the ratio-plus-warning sentence was replaced with a
+single plain line pulling `boardingRatioTarget`/`bhBoardingRatioTarget` from the store, never
+hardcoded.
+
+### §3 — "effective wHPPV after boarding" paragraph: deleted outright
+
+No replacement text — Ben judged it duplicative with §1's band line and whatever the reworked
+queue section now conveys. The `consumed`/`effectiveAfterBoarding` local variables that fed only
+this paragraph were removed as dead code alongside it.
+
+### §4 — per-shift arrivals/boarding diagnostic (THE genuine engine change)
+
+`engine/hiddenBoarding.ts`'s `computeHiddenBoardingDiagnostic` (fixed 07:00-19:00/19:00-07:00
+calendar blocks, `HiddenBoardingBlock`) is RETIRED, replaced by `computePerShiftDiagnostic`
+(`PerShiftDiagnostic`/`ShiftDiagnosticGroup`) — rebuilt per actual shift in the (sorted-by-
+startHour) shift menu, per the spec's exact formulas:
+
+- `staffedHours(s)` = Σ over the week of `headcount(day, s) × s.lengthHours`.
+- `requiredHours(s)`/`floorSum(s)`/`ceilingSum(s)`/`boardingNeed(s)` — all computed the SAME
+  way: iterate all 168 global hours, split each hour's value evenly across whichever shifts
+  `coveringCellsByGlobalHour` says structurally cover it (the exact attribution convention
+  boarding's priority ranking and the backlog per-shift diagnostics already use — no new
+  convention invented). This means a swing/overlapping shift genuinely shares an hour's
+  requirement/floor/ceiling/boarding-need with whichever other shift(s) cover the same hour,
+  rather than double-counting it.
+- Arrivals verdict: `staffedHours(s) < floorSum(s)` → understaffed; `> ceilingSum(s)` →
+  overstaffed; else appropriate — against the SAME per-hour peer band
+  (`bandFloorHourly`/`bandCeilingHourly`) already driving the heatmap's color, not a new
+  threshold.
+- Boarding coverage (only when boarding data is present): `surplus(s) = max(0, staffedHours(s)
+  - requiredHours(s))`; `boardingCovered(s) = surplus(s) >= boardingNeed(s)`.
+
+**Merge logic:** shifts are grouped by the tuple `(arrivalsStatus, boardingCovered)` — or
+`arrivalsStatus` alone when boarding is absent — preserving first-appearance (startHour) order,
+with staffed/required/surplus/boardingNeed hours SUMMED across each group's members. Merging is
+NOT restricted to adjacent shifts — a 3-shift menu where Day and Night land on the same verdict
+while Evening differs merges Day+Night into one sentence even though Evening sits between them
+in the menu (tested directly, `hiddenBoarding.test.ts`). A zero-current-staffing 3-shift menu
+correctly collapses to ONE merged "understaffed" sentence, not three near-duplicates.
+
+**Sentence generation** moved to `lib/narrative.ts`'s new `shiftDiagnosticSentence` (replacing
+the retired `hiddenBoardingNightSentence`/`hiddenBoardingDaySentence`): "{Shift name(s)}
+{is/are} {understaffed/overstaffed/staffed about right} for arrivals on an average shift,
+{and/but} {does/doesn't or do/don't} have enough nursing hours left over to also cover
+{its/their} boarding load," with a conditional trailing clause only when `arrivalsStatus ===
+'overstaffed'` (either "...and those extra hours are enough to cover it" or "The extra N hours
+{it carries/they carry} don't fully close the M hours of boarding demand there"). The
+"and"/"but" conjunction is `'and'` when `boardingCovered` matches what you'd expect from the
+arrivals verdict (overstaffed-and-covers, or not-overstaffed-and-doesn't-cover) and `'but'` for
+the surprising combination — a judgment call, not something the spec's template literally
+resolved. **Bug caught by the actual Playwright screenshot review** (not by unit tests, which
+used hand-built fixtures that happened not to exercise it): the do/does/doesn't verb agreement
+didn't account for plural groups ("Day and Swing... doesn't have" — wrong). Fixed to
+`do`/`don't` for `labels.length > 1`, `does`/`doesn't` for singular — this is exactly why the
+checklist's screenshot-review step exists, not a redundant formality.
+
+`pptxExport.ts`'s boarding slide (outside Panel 1's own scope, but sharing the retired function)
+was updated to call `computePerShiftDiagnostic` + join every group's `shiftDiagnosticSentence`
+— a minimal compiling fix, not a re-verified PPTX content review.
+
+### §5 — queue section: actual curve, average-day sentence, honest framing
+
+**§5a — actual, not cyclical, curve.** Panel 1's `VisualFrame` views now pass
+`computeBacklog(currentStaffingGrid, thatToggle'sDemandCurve, sortedShiftMenu,
+bandCeilingHourly).backlog` (the ACTUAL curve) as `queueDepth168` for every toggle — a
+DELIBERATE, SCOPED EXCEPTION to how the rest of the results page treats the queue strip
+(elsewhere it isolates shape from size via the CYCLICAL curve). `VisualFrame.tsx`'s
+`queueDepth168` doc comment was updated to name this exception explicitly (the only
+`VisualFrame` edit this pass made beyond §6's toggle removal) — the component's OWN logic is
+completely unchanged; it just renders whichever curve it's handed. Per the spec's own
+literal instruction, EVERY toggle pairs the grid's actual full capacity with that toggle's own
+demand curve (`hourlyRequirement` / `boardingCurve` / `combinedRequirement`) — the boarding
+toggle's queue strip is NOT paired with `spareForBoarding` (the derived quantity its
+demand/capacity chart uses), it's paired with the same real current-staffing capacity as every
+other toggle. Three separate `computeBacklog` calls now exist (`backlogArrivals`/
+`backlogBoarding`/`backlogCombined`) where one shared call existed before.
+
+**§5b — average-day build/peak/clear sentence, replacing named-specific-days.** New local
+helpers in `Panel1.tsx` (not exported — page-specific prose, same pattern as the file's
+existing `sortByStartHour`/`fmtHour`):
+- `findBuildHour` — first hour, walking forward circularly from the day's own low point, where
+  the curve starts a SUSTAINED (2-hour) climb away from that low (not just any single-hour
+  uptick).
+- Peak — plain `indexOf(max(...))` on the averaged 24-point curve, plus the nurse-hours value
+  there.
+- `findClearHour` — reuses `engine/backlogModel.ts`'s exported `caughtUpThresholdForHour`
+  (~10% of that hour's own averaged requirement) applied to the averaged curve — the SAME
+  relative "caught up" logic already used elsewhere, not a new absolute threshold. Returns
+  `null` (never a fabricated clear time) if the curve never returns to near-baseline before
+  wrapping back to the peak.
+- **Weekday/weekend split** — `averageOverDays` computes the same averaged-day curve
+  separately for Mon-Fri (`WEEKDAY_DAYS`) and Sat-Sun (`WEEKEND_DAYS`, day-0-is-Sunday engine
+  convention). Split into two sentences when `PEAK_HOUR_DIFF_THRESHOLD_HOURS = 3` (circular
+  hour distance) OR `PEAK_MAGNITUDE_DIFF_FRACTION = 0.4` (40%) is exceeded — both named,
+  exported-as-local constants, explicitly flagged in code comments as **tunable display
+  heuristics, first-pass defaults per the spec's own framing, not load-bearing math** — same
+  convention as `BACKLOG_CAUGH_UP_ABSOLUTE_FLOOR`/`COLOR_EASE_GAMMA`/etc. elsewhere in this
+  codebase. Untuned/unvalidated against real department data this session; revisit if a real
+  case misfires per Ben's own "tune later if it misfires" framing.
+- The prose (§5b/§5c) always describes the ARRIVALS-toggle actual backlog
+  (`backlogArrivals.backlog`), regardless of which `VisualFrame` toggle is currently active —
+  it's a static description of "the department's real situation," not toggle-reactive. Only
+  the visual frame's queue STRIP changes per toggle (§5a).
+
+**§5c — callout rewrite.** The old "nurses don't let a line form, they go faster" claim (which
+implied the model doesn't already account for bounded catch-up capacity) is replaced with the
+spec's exact short text naming this as a modeled estimate, not measured wait-room data, that
+already assumes bounded catch-up absorption — accurate as of the 2026-07-28 capacity-elasticity
+backlog model (`engine/backlogModel.ts`'s `spare`/`stretch` terms, see
+`.claude/rules/engine-solver.md`'s matching dated section). Kept in the surrounding prose
+(`.banner.banner-info.queue-honesty-callout`, unchanged class), not on the chart.
+
+**§5d — minimal chart labeling, added to the SHARED `VisualFrame.tsx`.** Judgment call, flagged:
+the spec's ask (a compact Demand/Capacity legend, one "Nurse-hours" y-axis label, a handful of
+x-axis ticks, a one-line "Your current backlog" queue-strip label) is inherently a
+`VisualFrame`-level change since Panel 1's frame IS the shared component — there's no way to
+add this labeling "for Panel 1 only" without either forking the component or editing the shared
+one. Read this as in-scope ("strictly required" to satisfy §5d for Panel 1) rather than a
+drift into shared-mechanics territory: it's purely additive/presentational (no data, toggle, or
+layout-logic change), applies sensibly to every current/future `VisualFrame` consumer (Panels
+2-5 too), and the queue-strip label is skipped automatically when `queueDepth168` is `null`
+(Panel 3's deliberately blank strip is unaffected). New CSS: `.frame-chart-legend`/
+`.frame-legend-item`/`.frame-legend-swatch*`/`.frame-queue-label` in `App.css`. `xAxisTicks`
+returns 4 fixed clock points (12a/6a/12p/6p) for the 24-point average-day view, one per
+day-of-week (engine day-0-is-Sunday order) for the 168-point full-week view.
+
+### §6 — "Effective wHPPV" toggle dropped
+
+Removed from `Panel1.tsx`'s `views` array entirely (was the 4th of 4 toggles, now Panel 1 has
+exactly 3: Arrivals/Boarding/Combined) along with its `effectiveWhppv168` capacity-inversion
+computation and the flat-`wHppvTarget`-as-demand line. No shared `VisualFrame`/`WhppvHeatmap`
+mechanics needed to change for this — the toggle was purely a 4th entry in Panel 1's own
+`views` list. `e2e/panel1-2.spec.ts` was updated to assert the toggle's absence
+(`getByRole('tab', { name: 'Effective wHPPV' })` has count 0) instead of clicking it.
+
+### §7 — heatmap per-shift split cells
+
+New optional `WhppvHeatmapCell.perShift?: Array<{ label: string; headcount: number }>` field
+(`components/WhppvHeatmap.tsx`). When a global hour is covered by more than one shift (common
+for this department's 3x12 overlapping menu, not an edge case), the cell renders each covering
+shift's own headcount joined by `+` (e.g. "7+4"), ordered by each shift's `startHour` — reusing
+`coveringCellsByGlobalHour` for the per-hour attribution, same convention as everywhere else.
+Single-shift hours render the plain `onDuty` number, unchanged. The cell's hover tooltip always
+states the total PLUS the full labeled breakdown (`cellTitle`), regardless of what the cell
+text itself shows.
+
+**Judgment call, flagged:** the per-shift breakdown (`buildPerShiftBreakdown` in `Panel1.tsx`)
+is only computed and passed for the Arrivals and Combined toggle views, whose `onDuty168` is
+literal current-staffing headcount (`currentCapacity`, from `fullWeekCapacity`). The Boarding
+toggle's `onDuty168` is `spareForBoarding` (a DERIVED quantity — current capacity minus
+arrivals need) with no well-defined "each shift's own headcount" decomposition, so it's left
+without a `perShift` breakdown (falls back to the plain summed number, unchanged behavior) —
+not a bug, a scoping decision since a per-shift split of a derived spare-capacity number isn't
+a well-defined concept the way a literal headcount split is.
+
+Per Ben's own framing ("try it, and if it reads as too busy once rendered, he'll ask to revert
+to a plain sum") — verified via Playwright screenshot
+(`e2e/screenshots/panel1-copy-revision-current-3shift.png` and a closeup crop reviewed inline
+this session): split cells ("3+3" during the Day/Swing overlap, "3+10" during the Swing/Night
+overlap) render legibly against the existing color scale, with shift-boundary rows (DAY/
+SWING/NIGHT labels) making the overlap visually obvious. Not reverted this session; revisit if
+Ben asks after seeing it live.
+
+### §8 — heatmap legend rewrite
+
+Replaced the old three-swatch (leaner/typical/richer) row and its "against each hour's OWN
+typical range" line with the spec's exact new prose: what a cell shows (split by shift when
+more than one covers that hour), what red/blue mean (phrased relative to the per-hour band,
+never a fixed wHPPV number, since the band varies by hour), and a conditional "! Under the ENA
+on-duty floor" line — now rendered ONLY when `cells.some((c) => c.belowFloor)`, verified via
+Playwright to actually disappear on a zero-flagged-cell dataset AND actually appear on a
+flagged one (`lowVolumeFloorBinds` profile, both states screenshotted this session, temp specs
+not committed). **Confirmed, not silently assumed:** the underlying color mechanism
+(`cellVisual` in `WhppvHeatmap.tsx`) already matched the new legend's description exactly —
+per-hour band (each cell carries its own `bandFloor`/`bandCeiling`), asymmetric ramp
+(`LEAN_FULL_SATURATE_RATIO`/`RICH_CLAMP_MULTIPLE`), gamma-eased curve (subtle near the band,
+more saturated further out) — no color-math changes were needed, this was copy-only, per the
+spec's own instruction to check before assuming that.
+
+### Verification
+
+`npm run build`/`npm test` (227 vitest tests, up from 219 — new `hiddenBoarding.test.ts`
+describe block for `computePerShiftDiagnostic`, extended `narrative.test.ts`)/`oxlint` (only
+the pre-existing `StepIndicator.tsx` warning)/`npm run test:e2e` (19 e2e tests, up from 16 —
+new `e2e/panel1-copy-revision.spec.ts` covering both current-staffing-present, a 2-shift AND a
+3-shift menu, and current-staffing-absent states) all clean. `e2e/panel1-2.spec.ts` updated for
+the dropped toggle. Playwright screenshots reviewed inline this session (full-page + closeup
+crops of the prose panel, the heatmap with per-shift split cells, and both ENA-floor-legend
+states) — the plural-verb-agreement bug (§4) was caught this way, not by unit tests alone,
+which is the reason this verification step exists.
+
+
+**Follow-up (2026-07-28, same day, Ben's direct ask):** the plain boarding-ratio sentence §2
+introduced ("Medical boarding is staffed at 1:X, behavioral-health boarding at 1:Y") was
+removed from Panel 1 entirely — Ben found it added nothing on its own once the RN-
+understatement callout was already gone. `boardingRatioTarget`/`bhBoardingRatioTarget` were
+dropped from `Panel1.tsx`'s store destructure as dead code. The ratios themselves are still
+set and visible on `ShiftMenuStep.tsx`'s boarding-ratio card (unchanged) — this is a Panel-1-
+display-only removal, not a data/config change. `npm run build`/`npm test`/`oxlint`/`npm run
+test:e2e` all clean after the removal.
+
+## Panel 4 diminishing-returns curve rebuilt (2026-08-05) — toggle-aware, starts at true 0 shifts
+
+Ben corrected the original build of this curve (the same session it shipped) twice: (1) Y axis
+should be % of demand covered (nursing-hours, not severity), toggle-aware for both "Arrivals"
+and "Arrivals and Boarding"; (2) more fundamentally, the curve must start from a literal 0
+shifts scheduled, adding one at a time — the previously-used data source
+(`result.marginalCurve`, from `trimWeekToBudgetWithTrajectory`) only ever spans
+`[capped/budget state, full coverage]`, since it's produced by the TRIM walking DOWN from full
+coverage, not a fill-up walking UP from zero. No amount of axis relabeling could fix that; a
+genuinely different engine primitive was needed.
+
+**New `engine/solver.ts` export: `solveFullCoverageWeekWithTrajectory(demand168, shifts)` →
+`{ grid, trajectory: FullCoverageTrajectoryPoint[] }`.** A parallel function to
+`solveFullCoverageWeek` (NOT a modification of it — that function is a hot upper-bound step
+every solve path calls; this one is advisory-only, never called from `compute()`'s own
+pipeline) — identical greedy loop (start at an empty grid, each iteration bump whichever
+(day, shift) candidate relieves the most currently-deficient global hours against the passed-in
+`demand168` curve), but records `{ cumulativeShifts, hoursCovered }` after every shift-unit
+added. `hoursCovered = sum(min(capacity[g], demand168[g]))` at that point — naturally
+monotonic/diminishing BY CONSTRUCTION (greedy always picks the most-deficit-relieving candidate
+first), so unlike the old severity-based curve, no "best achievable so far" running-max
+envelope hack is needed to make it look sane.
+
+**Panel4.tsx wiring:** `marginalCurvePoints` is now computed by calling
+`solveFullCoverageWeekWithTrajectory` against the ACTIVE toggle's own demand curve
+(`result.hourlyRequirement` for Arrivals, `combinedRequirement` for Arrivals and Boarding) —
+a genuinely fresh solve per toggle, re-run on every render (cheap enough for this UI; not
+memoized). Y = `(hoursCovered / totalDemandHours) * 100`, prepended with an explicit `{x:0,
+y:0}` point so the line always starts at true zero. X is `cumulativeShifts` directly from the
+trajectory (a literal shift-unit count), while the three reference markers (target-implied
+hours / current staffing / recommended) are still positioned via the pre-existing
+`weeklyHours / typicalShiftLength` approximation (assumes uniform shift length — an existing,
+disclosed approximation pattern in this codebase, not new). The "Recommended" marker now uses
+`activeWeeklyHours` (toggles between `result.weeklyScheduledHours` and `combinedWeeklyHours`)
+instead of always `result.weeklyScheduledHours`, so it lines up correctly under the Combined
+toggle too.
+
+**What did NOT change:** the "Each additional N-hour shift removes roughly X hours..." prose
+paragraph above the curve — still driven by `result.marginalCurve`/`marginalKneePoint` (the
+trim-based severity curve), unchanged, since that paragraph is about the KNEE point specifically
+(a different question the new curve doesn't answer) and Ben's asks were scoped to the CURVE's
+own data source, not that paragraph. `hasMeaningfulMarginalCurve`'s gating logic (based on
+`approxHoursRemoved`) is also unchanged. This is a live inconsistency worth knowing: the prose
+paragraph and the curve below it now come from two different engine computations
+(trim-trajectory severity vs. fill-up-trajectory hours-covered) — not reconciled in this pass,
+flagged rather than silently glossed over.
+
+**Verified visually** (Playwright screenshots, `underTargetDayShort` profile, both toggles): the
+curve now genuinely starts at (0, 0%), rises with visible diminishing returns, and the three
+reference markers land near the top of the curve where coverage saturates — confirmed distinct,
+correctly-shaped curves for the Arrivals and Arrivals+Boarding toggles (the combined curve is
+visibly wider/shallower, reflecting the larger combined demand). `npm run build`/`npm test`
+(242 vitest tests)/`oxlint` all clean; `npm run test:e2e` clean except the pre-existing,
+unrelated `panel1-2.spec.ts` Panel 2 "Current" tab failure (documented above, in the
+2026-07-29 exact-hours-reallocation entry — not touched or caused by this change).
+
+### Follow-up, same day — reference marks reworked: dots for real grids, a band for the peer range
+
+Ben's own design critique of the just-shipped curve: the three reference marks were rendered as
+identical full-height dashed vertical LINES, which visually implies all three sit ON the curve
+at that X — false for "Current staffing" (a real, independently-solved grid whose actual %
+demand covered can differ from what the curve's own greedy fill-up would achieve with the same
+shift count) and arguably false for "Recommended" too (solved by `solveShiftFitWithBacklogFeedback`'s
+backlog-minimizing trim, not this curve's plain greedy-hours-covered fill-up).
+
+**Two changes, both in `Panel4.tsx`/`App.css`, no engine changes beyond reusing the existing
+`solveFullCoverageWeekWithTrajectory` output:**
+
+1. **"Current staffing" and "Recommended" are now DOTS, not lines** — each plotted at its own
+   real `(shiftCount, actualPctDemandCovered)`, computed via a new `pctDemandCovered(capacity168,
+   demand168)` helper (same `sum(min(capacity,demand))/sum(demand)` arithmetic the curve's own Y
+   already uses, so the dot lands on a directly comparable scale) — deliberately NOT constrained
+   to sit on the curve's line. `MarginalReturnsCurve`'s prop changed from `markers: Array<{x,
+   label, color}>` (full-height dashed lines) to `markerPoints: Array<{x, y, label, color}>`
+   (small filled circles at their own y).
+   - **New gap-disclosure paragraph** when "Recommended" sits materially off the curve at its
+     own shift count (`GAP_DISCLOSURE_THRESHOLD_PCT = 5` percentage points, a tunable display
+     heuristic — not load-bearing) — via a new `curveValueAt(points, x)` linear-interpolation
+     helper. States plainly that this is expected, not a bug: the recommendation minimizes
+     weighted backlog/severity, this curve maximizes raw hours covered, and those are different
+     objectives that can rank grids differently. Verified rendering by temporarily lowering the
+     threshold to force the paragraph on (screenshot reviewed, then reverted) — none of the
+     eight named synthetic profiles happened to trigger it naturally at the real threshold
+     (their recommendations all land close to full-hours-coverage for their own shift count), so
+     this is a real, working, but currently rarely-firing disclosure — not verified against a
+     genuinely large real-world gap this session.
+2. **"Target-implied hours" (a single dashed line) is GONE, replaced by a shaded vertical BAND**
+   spanning the peer cohort's p25-to-p75 wHPPV range (`lookupWhppvBand`, already computed as
+   `band` for other Panel 4 stats), converted to a shift-count span via `weeklyVisits =
+   annualVisits/52` → `wHppv × weeklyVisits` = implied weekly hours → the same `totalShiftsAt`
+   conversion every other marker already uses. Rationale: the target-implied figure is a POLICY
+   CHOICE with no grid shape of its own (nothing to plot a dot against), while a peer range reads
+   as "what a typical department would need" — a genuinely different, arguably more useful
+   reference than a single line tied to this department's own chosen target. Rendered as a
+   translucent `<rect>` behind the curve/dots (`opacity: 0.14`), not a line.
+
+**Verified visually** (Playwright screenshots, `underTargetDayShort` and
+`adequatelyStaffedBadlyShaped`/`nightShort`/`lowVolumeFloorBinds`/`shortDurationBoarding`/
+`alreadyFine` profiles): "Current staffing" dot correctly renders BELOW the curve (an
+under-target department's real staffing covers less than the curve says is achievable with that
+many shifts); "Recommended" dot renders very close to/on the curve at ~100% for every profile
+checked (none triggered the gap disclosure at the real 5-point threshold — confirmed the
+disclosure mechanism itself works via a forced-threshold screenshot, see above); the peer band
+renders as a soft gray rectangle near the top of the axis. `npm run build`/`npm test` (242
+vitest tests, unchanged — no new engine functions, only new pure-display helpers in
+`Panel4.tsx`)/`oxlint` clean.
+
+### Follow-up, same day — hover tooltips on the dots; "Recommended" renamed "ShiftLens Solver"
+
+Two more scoped changes, both `Panel4.tsx`-only, no engine/store impact:
+
+1. **Hover tooltips on the two marker dots.** Each `<circle>` in `MarginalReturnsCurve` now
+   carries a native SVG `<title>` child stating `"{label}: {shifts} shifts/week, {pct}% demand
+   covered"` — plain units already printed on the chart's own axes (shifts/week, % demand
+   covered), deliberately NOT a raw `"(x, y)"` coordinate pair, matching this app's established
+   convention of plain-language hover/tooltip text (e.g. the heatmap's own `cellTitle`) over
+   anything that reads as debug output. Shift counts round to whole numbers (`toFixed(0)`) —
+   these are already an approximation (`weeklyHours ÷ typicalShiftLength`, assumes uniform shift
+   length), so a decimal place would imply false precision.
+2. **"Recommended" renamed "ShiftLens Solver" — this marker/label ONLY, not a repo-wide
+   reversal of R11.** Ben's framing: this panel models and explains, it isn't issuing a
+   directive — "Recommended" reads as advice; naming the mechanism instead ("ShiftLens Solver")
+   keeps the panel in teaching/decision-support voice. **Scope, deliberately narrow:** only the
+   diminishing-returns curve's marker label + its own gap-disclosure paragraph
+   (`Panel4.tsx`'s `marginalCurveMarkerPoints`/`showRecommendedGapDisclosure` block) were
+   touched — NOT the panel's `<h2>ShiftLens Idealized Staffing</h2>` title, NOT the "Where the
+   extra hours land"/staffing-table copy, NOT any other panel's "recommended"/"recommendation"
+   language. A broader sweep renaming "recommended" everywhere R11 (2026-07-26 PR F,
+   `copyLayer.test.ts`) originally touched would be a real, separate reversal of that rule and
+   needs its own explicit ask — this wasn't it. **Also deliberately did NOT use "Idealized"**
+   (Ben's other suggested option) — `copyLayer.test.ts`'s R11 rule still bans the bare word
+   "idealized" in `src/screens`/`src/components` repo-wide (with one narrow, pre-existing
+   allowlist entry for the exact phrase `"ShiftLens Idealized Staffing"`, the panel's own H2) —
+   reusing "Idealized" for this marker would have needed a second allowlist entry and read as
+   quietly re-opening R11 rather than a scoped, separate word choice; "ShiftLens Solver" sidesteps
+   that collision entirely and needed no `copyLayer.test.ts` changes.
+
+**Verified visually** (Playwright, `underTargetDayShort` profile): legend now reads "ShiftLens
+Solver" instead of "Recommended"; tooltip text reads e.g. `"Current staffing: 112 shifts/week,
+49% demand covered"` / `"ShiftLens Solver: 137 shifts/week, 92% demand covered"` (read via
+Playwright's `allTextContents()` against the `<title>` elements, not just eyeballed — SVG
+`<title>` hover text doesn't screenshot). `npm run build`/`npm test` (242 vitest tests, all
+unchanged — copy-only)/`oxlint` clean.
+
+### Follow-up, same day — chart enlarged; dots given a much bigger hover hit-area
+
+Ben reported the hover tooltips "aren't working" and the chart itself "feels unnecessarily
+small." Root cause for both: `.marginal-curve-wrap` was capped at `max-width: 320px` (a leftover
+from the chart's very first build, before the peer-band/dot rework), while the prose column
+(`.panel-words`) is `flex: 1 1 380px` and typically renders far wider than that on a real
+screen — so the whole chart, including each marker dot (`r=4` in a 320-wide viewBox), rendered
+noticeably smaller than the column it sat in, and the dot's actual on-screen hit-area was only
+a few CSS pixels across — genuinely too small to hover reliably, not a broken hover mechanism.
+
+**Fix, both in `Panel4.tsx`/`App.css`, no data/logic changes:**
+- `.marginal-curve-wrap`'s `max-width: 320px` → `max-width: 100%` — the chart now fills
+  `.panel-words`'s actual width, whatever that is at the current viewport (same pattern
+  `VisualFrame`'s own chart already uses — `width: 100%; height: auto`, SVG `viewBox` aspect
+  ratio preserved automatically).
+- `MarginalReturnsCurve`'s internal `viewBox` grew from `320×190` to `480×260` (padding/font
+  sizes scaled up to match) — a bigger internal coordinate system so text/dots read clearly once
+  stretched to the column's real width, not just a raw CSS stretch of the old cramped layout.
+- **Each marker dot is now TWO circles, not one**: a small visible circle (`r=6`, up from `r=4`)
+  for the aesthetic, plus a separate, invisible (`fill="transparent"`) circle at `r=14` layered
+  underneath it that actually CARRIES the `<title>` and receives the hover — `pointerEvents:
+  'none'` on the visible circle so only the big invisible one handles the mouse. This is the
+  standard small-target hover-forgiveness pattern (a generous invisible hit-zone around a small
+  visible mark) — confirmed via Playwright's `boundingBox()` that the hit-circle now renders at
+  roughly 27×27 CSS px on a real column width (previously well under half that).
+
+**Verified visually** (Playwright screenshots, both toggles, `underTargetDayShort` profile): the
+chart now visibly fills the prose column's width, dots and axis text are clearly bigger, and the
+measured hit-circle bounding box confirms the larger hover target — the native OS/browser
+tooltip box itself doesn't reliably paint into a headless screenshot (a known Playwright
+limitation, not something this session could visually confirm further), so the actual "does the
+tooltip pop up" behavior should be spot-checked in a real browser if it's still ever in doubt.
+`npm run build`/`npm test` (242 vitest tests, unchanged)/`oxlint` clean.
+
+## Peer-range stat made below-floor-only; evidence surface removed; Panel 4 gets a consolidated solver explainer (2026-08-05)
+
+Ben's finding: Panel 4's "wHPPV range / % outside peer range / % variance vs current" stats can
+read as regressions after the solver adds hours, because the solver (per every reversal
+documented in `.claude/rules/engine-solver.md`) optimizes for minimizing queue cost/backlog, not
+for hugging the peer-typical wHPPV band — it can legitimately push some hours ABOVE p75 while
+fixing a worse hour elsewhere, in whole shift blocks that overshoot nearby quiet hours. Reporting
+that as "% outside range" made a correct, safer schedule look worse than it is. Three changes,
+all display/copy-only — no engine changes.
+
+**1. The peer-range stat is now below-floor-only, in all three places it's computed.**
+`pctHoursOutsideBand`-style helpers in `Panel1.tsx` (inline, not a named function),
+`Panel2.tsx`, and `Panel4.tsx` (both module-level `pctHoursOutsideBand` functions) all counted
+`value < p25 || value > p75`. Now each counts `value < p25` only — renamed
+`pctHoursBelowFloor`/`hoursBelowFloor`/`pctBelowFloor` throughout (Panel2/Panel4's functions
+dropped the now-unused `p75` parameter entirely rather than declaring an ignored one, per this
+repo's `noUnusedParameters` convention). Display copy changed to match: "X% of hours fall
+**below your peer-typical floor**" everywhere it used to say "fall outside your peer-typical
+range." The three copies are independent (each file computes its own stat over its own capacity
+curve — Panel 1's current grid, Panel 2's reallocated grid, Panel 4's recommended grid), so this
+is three coordinated edits, not one shared function — matches the pre-existing pattern (the three
+`pctHoursOutsideBand` implementations were already near-duplicates of each other before this
+change).
+
+**Checked for duplication with `computeBandFloorViolations`'s "Hours below the peer
+25th-percentile staffing floor" stat, per the ask — found it's not currently rendered
+anywhere.** `engine/bandFloor.ts`'s `computeBandFloorViolations` is still exported from
+`engine/index.ts` and still computed nowhere dead (it's simply unconsumed) — it was a stat on
+the old, now-deleted `CoreGridTab.tsx` (pre-Results-Page-V2), and no Panel component calls it.
+So there is currently no UI duplication to reconcile language with. If a future session wires
+that function back into a panel, it should reuse "below your peer-typical floor" as its label
+convention (or an equivalent below-only framing) rather than reintroducing "outside your typical
+staffing range" — the two stats would then be asking a near-identical question (hours below the
+peer floor) and should read consistently.
+
+**Peer-range "why" toggle bodies were NOT touched in Panel 1 or Panel 2** — their standalone
+"What is my peer-typical range?" `<details>` blocks still describe the full p25-p75 band (they're
+legitimate background for the heatmap's per-hour band coloring and the stat's own definition,
+which still reference p75 as the band's ceiling even though this ONE stat no longer flags
+above-p75 hours). Only Panel 4's copy of that toggle was removed — folded into the new explainer
+below.
+
+**2. `src/screens/dashboard/EvidenceSurfaceSection.tsx` — DELETED entirely, along with its
+`ch-evidence` chapter-rail entry.** This was Chapter 9, "How this works (for analysts)" — the
+pipeline walkthrough, the `constantsMetadata.ts`-generated constants table, data provenance,
+known approximations, the live reconciliation-invariant display, and decisions/rejected
+alternatives (built PR I, `RESULTS_COMPREHENSION_SPEC_2026-07-26.md` §8). Per Ben's ask, this
+content is **no longer surfaced anywhere in the UI** — removing it was a straight deletion, not
+a relocation.
+
+- `DashboardScreen.tsx`: removed the `EvidenceSurfaceSection` import, the `ch-evidence` entry
+  from the `CHAPTERS` array passed to `StepBar`, and the `<div id="ch-evidence">` wrapper +
+  `<EvidenceSurfaceSection />` render call. The file's own header comment (previously "PR G ...
+  `EvidenceSurfaceSection` stays exactly where it is, unmodified") was updated to say it was
+  removed 2026-08-05, pointing here.
+- **Confirmed nothing else imports it before deleting** — grepped the whole repo; only
+  `DashboardScreen.tsx` imported the component. **`lib/pptxExport.ts` is unaffected** — verified
+  directly: it imports `buildConstantsTable` from `lib/constantsMetadata.ts` (the same
+  generated-from-`DEFAULTS` table function `EvidenceSurfaceSection` also used) DIRECTLY, not
+  through the now-deleted component, so the PPTX deck's Method & Limitations slide is untouched.
+  `lib/constantsMetadata.ts` itself is UNCHANGED and still exported/tested
+  (`lib/__tests__/constantsMetadata.test.ts` still passes) — only its one UI consumer is gone.
+- Orphaned CSS removed from `App.css`: `.evidence-surface`, `.evidence-surface-body h3`
+  (+ `:first-child`), `.pipeline-walkthrough li`/`.evidence-surface-body ul li`, and
+  `.constants-table td`/`.provenance-table td` — grepped first to confirm no other component
+  referenced any of these class names before removing.
+- No dedicated test file existed for `EvidenceSurfaceSection.tsx` (this repo has no component-
+  level test tier below full-page e2e, per CLAUDE.md's Feature Status "Not yet built" note) and
+  no e2e spec referenced `ch-evidence`/`EvidenceSurfaceSection`/`evidence-surface`/"How this
+  works" — grepped `e2e/` to confirm before running the suite, and the full e2e run (21 tests)
+  came back clean aside from the pre-existing, unrelated `panel1-2.spec.ts` Panel 2 "Current"
+  tab failure (documented in the 2026-07-29 exact-hours-reallocation entry above).
+
+**3. New consolidated "How does the solver decide this?" explainer added to `Panel4.tsx`**, a
+collapsed-by-default `why-toggle`/`why-explainer` block (the same pattern `ConceptCallout.tsx`
+and every other collapsed explainer in this app uses — CLAUDE.md Section 6), placed directly
+below `<h2>ShiftLens Solver Staffing</h2>` and above the "This staffing realizes..." headline
+paragraph. Four short paragraphs, a plain-language distillation of `EvidenceSurfaceSection`'s
+old pipeline walkthrough (Steps 1-3) plus the deleted "What is my peer-typical range?" toggle
+that used to sit lower in this same file — not a transcription of either:
+1. How hourly nurse-need is worked out — nursing work lands mostly at arrival, tracked to when
+   patients show up, smoothed to be staffable, with extra protection at historically volatile
+   hours.
+2. Boarding as a second, separate demand (rendered only `{boarding && ...}` — omitted entirely
+   when boarding data is absent, matching this app's established graceful-degradation
+   convention rather than a stale/hardcoded claim).
+3. How the solver fits the actual shift menu to that demand — full coverage first, then trims
+   wherever safest, always above the peer-benchmark floor (states the actual
+   `{band.p25Whppv}–{band.p75Whppv} wHPPV` figures inline — this is where the deleted standalone
+   toggle's band-definition content was folded in, so that information isn't lost, just
+   relocated and shortened).
+4. The key point motivating this whole change: the solver minimizes backlog/queued-work over
+   the week, not closeness to the peer-typical band — so it can legitimately push some hours
+   further from that range while still producing a safer schedule overall (this paragraph is
+   the direct answer to Ben's original finding).
+
+**The old standalone "What is my peer-typical range?" `why-toggle` in `Panel4.tsx` was deleted**
+(folded into paragraph 3 above) — the file's other two existing toggles (the shift-menu-
+flexibility `<details>` and "Why might day-to-day numbers look uneven?") were left untouched, as
+asked. Panel 1's and Panel 2's own standalone "What is my peer-typical range?" toggles are
+UNCHANGED — this fold-in was scoped to Panel 4 only, per the ask.
+
+**Copy-layer guardrail:** `src/lib/__tests__/copyLayer.test.ts` (bans bare "budget"/"severity"/
+"idealized" in `src/screens`/`src/components`) still passes — the new explainer text uses
+"queue cost"/"backlog" and "peer-benchmark floor," never the banned words.
+
+**Invariants:** no engine/`compute()` changes anywhere in this pass — confirmed via
+`git diff --stat src/engine/` showing no files touched by this session.
+`engine/__tests__/reconcile.test.ts` itself was not modified and the full suite still passes
+(242 vitest tests unchanged in count — this pass added no new tests, since nothing here is
+new engine behavior to test, only renamed/relocated display logic). `npm run build`/`npm test`/
+`oxlint` clean (only the pre-existing `StepIndicator.tsx` warning); `npm run test:e2e` clean
+except the pre-existing, unrelated `panel1-2.spec.ts` Panel 2 "Current"-tab failure.
+
+## Panel 4 flex-menu toggle: renamed, moved, overlay-length gated, sentence/table reworked (2026-08-05)
+
+Four scoped changes to `Panel4.tsx`'s shift-menu-flexibility `<details>`, plus one real engine
+fix in `engine/flexMenu.ts`. All confirmed with Ben before building.
+
+**1. Renamed.** "And here is whether a different shift menu gets you closer for the same hours"
+-> "Could different shifts be more efficient?" (summary text only).
+
+**2. Moved to the bottom of the panel's prose column** — was between the marginal-returns curve
+and the "Where the extra hours land" staffing table; now sits after "Why might day-to-day
+numbers look uneven?", the last item before `.panel-frame`.
+
+**3. Real bug fix, `engine/flexMenu.ts` — overlay shift length is now gated on
+`axes.shiftLengths`, matching the regular-tiling family's own convention.** Found via Ben's
+report: enabling any single flex axis (e.g. "different start times" alone) could still surface
+a 4h swing-overlay shift, because `OVERLAY_LENGTHS = [4, 6, 8]` was applied whenever `anyAxis`
+was true — the overlay family's own length choice was never actually gated on the
+shift-LENGTHS axis specifically, unlike the regular tiling family's `lengths = axes.shiftLengths
+? CANDIDATE_LENGTHS : [curLength]`. Fixed the same way: `searchFlexibleMenus`'s overlay loop now
+computes `const overlayLengths = axes.shiftLengths ? OVERLAY_LENGTHS : [curLength]` — with that
+axis off, every candidate (tiling AND overlay) sticks to the user's own current shift length;
+the 4h/6h/8h overlay set is reachable only once shift-lengths is explicitly enabled.
+`OVERLAY_LENGTHS` itself is UNCHANGED (`[4, 6, 8]`) — the fix is entirely in when it's consulted,
+not what it contains. `flexMenu.test.ts`'s existing overlay tests (using `AXES({ shiftCount:
+true })`, i.e. shiftLengths off) still pass unmodified — with `curLength` typically 12h for
+those fixtures, the overlay candidate they check for now uses a 12h overlay instead of whatever
+`OVERLAY_LENGTHS` would have produced, but the test only asserts an overlay candidate exists
+(day/night ids present + length 3), not its specific length, so no test change was needed.
+
+**4. Result sentence rewritten + a staffing table added.** Old copy reported `totalShortfall`
+("reduces hours below need to N") and ended "— advisory only, never auto-adopted." New copy
+reports the candidate's own **% of hours below your peer-typical floor** — reusing this panel's
+existing `pctHoursBelowFloor(capacity168, arrivals168, p25)` helper (same formula/wording as the
+panel's headline stat), run against `fullWeekCapacity(bestCandidate.solve.grid,
+bestCandidate.menu)` — new locals `bestCandidateSortedMenu`/`bestCandidatePctBelowFloor`,
+computed alongside `bestCandidate` itself. Weekly hours is KEPT (confirmed with Ben this is a
+genuinely different number from the panel's headline hours — the flex-menu comparison runs
+through the plain one-shot `solveShiftFit`, not the primary grid's 8-pass
+`solveShiftFitWithBacklogFeedback` relaxation loop, PER PR C's documented fairness fix in
+`.claude/rules/engine-solver.md`, so even the CURRENT menu's own comparison number can differ
+from the headline — and different shift-block granularity can shift the total further still).
+"advisory only, never auto-adopted" was dropped (redundant with the panel's own framing
+elsewhere — nothing on this page auto-adopts anything). A day × shift staffing table for
+`bestCandidate.solve.grid` (same `staffing-grid diff-grid` shape as "Where the extra hours
+land," but plain headcounts, no diff — there is no "current" to diff a hypothetical alternate
+menu against) now renders directly below the sentence, sorted by the candidate menu's own
+`startHour` (`bestCandidateSortedMenu`, reusing this file's existing `sortByStartHour`).
+
+**Copy-layer guardrail unaffected** — no "budget"/"severity"/"idealized" introduced.
+
+**Invariants:** `reconcile.test.ts` untouched; `flexMenu.test.ts`'s 9 tests still pass unmodified
+(242 vitest tests total, unchanged in count — no new engine behavior, only a gating condition on
+an existing candidate family plus display logic). `npm run build`/`npm test`/`oxlint` clean
+(only the pre-existing `StepIndicator.tsx` warning); `npm run test:e2e` clean (21 tests) except
+the pre-existing, unrelated `panel1-2.spec.ts` Panel 2 "Current"-tab failure.
+
+**Follow-up, same day — the overlay family's gate itself was still wrong (found by Ben live,
+after the length fix above shipped): a 3-shift menu with ONLY "different start times" checked
+still surfaced a 4-shift candidate.** Root cause: the swing-overlay family's LENGTH is gated on
+`axes.shiftLengths` (the fix above), but the overlay family's very existence was still gated on
+`anyAxis` (any axis at all) rather than on `axes.shiftCount` — and an overlay candidate ALWAYS
+adds one shift on top of the current menu, by construction, regardless of what length it uses.
+So enabling `startTimes` alone was enough to unlock a count-changing candidate, even though "a
+different number of shifts" was explicitly left unchecked. Fixed in `searchFlexibleMenus`: the
+overlay loop's gate changed from `if (anyAxis)` to `if (axes.shiftCount)` — an overlay candidate
+is now unreachable unless the user opts into shift-count flexibility specifically, same as every
+other count-changing candidate in the regular tiling family. The header doc comment above
+`searchFlexibleMenus` was updated to match (the old "not gated behind any ONE specific axis...
+but gated on anyAxis" framing is superseded — an overlay is now explicitly gated on the ONE axis
+that actually describes what it does).
+
+New regression test in `flexMenu.test.ts` (10th test, "gated specifically on axes.shiftCount, not
+on any axis") reproduces the exact bug report — `AXES({ startTimes: true })` on a 3-shift menu,
+asserts every returned candidate's `menu.length` equals the current menu's own length. The
+pre-existing overlay-reachability test's `AXES({ shiftCount: true })` fixture already happened to
+use the correct axis (its own comment claiming "any single axis is enough" was stale/misleading
+even before this fix — corrected). `reconcile.test.ts` untouched. 243 vitest tests (was 242).
+`npm run build`/`npm test`/`oxlint` clean (only the pre-existing `StepIndicator.tsx` warning).
+
+## Panel 5 redesign: toggle-driven, hold-shift restrictions, joint ED+hold starting point, live curve (2026-08-05)
+
+Planned in a Cowork session, built the same day. **Supersedes the PR G section above wholesale**
+— read this section as the current architecture; the PR G section above is history (component-
+local grid state, the fixed three prefill buttons, the always-visible two-grid layout, and the
+"Hours below need this week" single-stat headline are all gone). `sandboxEdGrid`/
+`sandboxHoldGrid` (the store fields PR H moved these into) are UNCHANGED — still the same store
+shape, still `null` = untouched, still what `lib/pptxExport.ts` reads for "the user's sandbox
+scenario."
+
+**1. Arrivals / Arrivals + Boarding toggle, same mechanism as Panels 1/2/4 — not a new custom
+control.** `Panel5.tsx` now passes `activeKey`/`onActiveKeyChange` into `VisualFrame` (the exact
+controlled-toggle pattern Panel2/Panel4 use) instead of rendering its own tab bar — the
+`VisualFrame`'s own `.frame-toggle`/`.frame-toggle-btn` buttons ARE "the tab style used on Panels
+1/2," so there's no separate toggle UI to keep in sync. The toggle drives EVERYTHING: which
+demand curve (`result.hourlyRequirement` vs. `combinedRequirement`) scores every stat/curve on
+the panel, which starting-point buttons render, and whether the hold-nurse grid/table/shift-
+restriction row exist in the DOM at all (Arrivals mode never mounts them — not zeroed-and-
+hidden, structurally absent, satisfying the redesign's explicit "fully unmounted, not just
+hidden" instruction).
+
+**2. The two-grids/two-pools intro paragraph is gone entirely** — the panel opens straight on
+the starting-point buttons. §3.5's ED-vs-hold distinction is still made (in the hold-shift-
+restriction heading and the hold-surplus sentence), just not as an upfront explainer paragraph.
+
+**3. Starting-point buttons, replacing the old fixed three:**
+- **Arrivals toggle:** "Current Staffing" (ED = `currentStaffingGrid`, hold = 0)
+  — "Re-allocated Current Staffing" (ED = `computeScenarioB`'s grid, hold = 0) — "ShiftLens
+  Solver Staffing" (ED = `result.grid`, hold = 0).
+- **Arrivals + Boarding toggle:** "Current Staffing" — "Re-allocated Current Staffing" (ED =
+  `computeCombinedReallocation`'s grid, hold = 0 — reallocation doesn't split pools, it only
+  trades hours within one grid) — "ShiftLens Solver Staffing (All ED Nurses)" (unchanged from
+  the old "recommendation, all as ED nurses" button: `result.grid` + `recommendWeeklyBoardingGrid`
+  summed, hold = 0) — **"ShiftLens Solver Staffing (Hold Nurses for Boarding)" (NEW)**, which
+  calls the new engine function below instead of the old fixed "ED = result.grid, hold = the
+  recommended boarding grid" approximation.
+
+**4. Hold-shift restriction — new component-local `allowedHoldShiftIds: Set<string>`
+(default: every shift).** A checkbox per shift (reusing the existing `.flex-axes`/
+`.flex-axis-option` CSS the shift-menu-flexibility toggles already use, not a new checkbox
+style), visible only under Arrivals + Boarding, directly above the hold grid. A shift's column
+in the hold grid renders disabled (new `.sandbox-grid input:disabled` CSS, App.css) with its
+value forced to 0 the moment it's unchecked — unchecking a shift that already had hold headcount
+on it actively clears that headcount (not just future edits), and the disabled `<input>`'s
+`onChange` never fires, so a disallowed column can't be hand-edited around the restriction.
+JUDGMENT CALL, flagged: the spec names the state shape but not how it should react to the shift
+MENU itself changing (e.g. a shift added at setup mid-session) — implemented as "a newly-
+appearing shift starts allowed, tracked via a `seenShiftIdsRef` so a shift the user has
+EXPLICITLY unchecked doesn't silently reappear as allowed just because of an unrelated re-
+render." See `.claude/rules/engine-solver.md`'s dated section for the restriction's structural
+enforcement inside the new solver (not just a UI-level checkbox).
+
+**5. New engine function — the core new work, `engine/edHoldSolve.ts`'s
+`solveEdHoldJointCoverage`.** Full algorithm/rationale/tests in `.claude/rules/
+engine-solver.md`'s dated 2026-08-05 section — summary here: a from-empty greedy full-coverage
+fill over TWO pools (ED, hold) at once, where hold candidates are additionally gated on that
+hour still having uncapped medical boarding demand, and every candidate (either pool) is scored
+per shift-hour. Reused by the new "Hold Nurses for Boarding" starting-point button.
+
+**6. Stat line replaced.** The old single "Hours below need this week: N" headline is now the
+same three-sentence pattern Panel 1/4 use ("This staffing realizes X wHPPV at Y hours/week. Hour
+to hour, wHPPV ranges from A (day/hour) up to B (day/hour). C% of hours fall below your peer-
+typical floor.") — `Y` = total scheduled hours across BOTH pools (ED + hold, since both are real
+paid-for hours whenever hold is in play), scored against the combined ED+hold capacity curve
+(`edCapacity + sandbox.holdApplied`, i.e. hold's CAPPED contribution, matching
+`computeSandbox`'s own convention). `pctHoursBelowFloor`/`hourlyWhppvRange` are local copies in
+`Panel5.tsx`, same per-panel-duplication convention Panel 1/2/4 already follow (see each file's
+own copy) — reusing math, not engine calls, per the spec's explicit instruction. The old "Hours
+below need this week" sentence is KEPT as a fourth line (still useful, still names
+`sandbox.unmet`), with the hold-surplus clause now conditioned on the Arrivals + Boarding toggle
+(hold is always zero under Arrivals, so there's nothing to report there).
+
+**7. "% variance vs. current" sentence removed from every panel it appeared on.** Grepped
+`Panel1.tsx`/`Panel2.tsx`/`Panel4.tsx`/everywhere else for "variance" per the redesign's
+explicit ask (this was the 2026-08-05-dated stat mentioned in this file's own history —
+`Panel1.tsx` never had it in the first place, only `Panel2.tsx` and `Panel4.tsx` did). Removed
+the ternary block computing `variancePct`/`direction` and its trailing sentence fragment from
+both files, plus each file's now-unused `currentWhppvRange` local (the `hourlyWhppvRange`
+helper function itself stays — both files still use it for their own, non-current range). Where
+`currentCapacity` was used ONLY to feed the removed `currentWhppvRange`, it's gone too
+(`Panel4.tsx`); where it also feeds other live locals (`Panel2.tsx`'s `avgCurrentCapacity`/
+`arrivalsCapacity`/`combinedCapacity`), it stays. `copyLayer.test.ts` re-run and passes
+unmodified (this removal never touched the word "budget"). `MarginalReturnsCurve` — the SVG
+chart both panels' diminishing-returns section renders — was extracted from `Panel4.tsx` into a
+new shared `components/MarginalReturnsCurve.tsx` (byte-identical code, only the file moved) so
+Panel5's own new curve (§9 below) can reuse the exact same chart instead of a third copy.
+
+**8. Hold-nurse grid/table conditional rendering.** Both the hold `<GridEditor>` and the shift-
+restriction checkbox row are inside a single `{toggle === 'combined' && (...)}` block — fully
+absent from the render tree under Arrivals, not rendered-and-hidden via CSS.
+
+**9. Live "% demand covered vs. shifts/week" curve.** Background curve: computed via
+`useMemo` keyed on `[activeDemand168, sortedShiftMenu, totalDemandHours]` (so it only
+re-solves on a toggle change or shift-menu edit, not on every grid keystroke) — calls
+`solveFullCoverageWeekWithTrajectory(activeDemand168, sortedShiftMenu)`, same construction as
+`Panel4.tsx`'s own curve (a leading `{x:0,y:0}` point, then each trajectory point's
+`cumulativeShifts`/`% of totalDemandHours covered`). "The ED+hold shift menu," per the spec's
+wording, is read as `sortedShiftMenu` itself — the background curve doesn't know about the ED-
+vs-hold pool distinction (it's asking "how many shift-units of ANY kind would it take," a
+resource-agnostic question), only the live dot and the grids below it are pool-aware. The single
+live dot ("Your scenario") is NOT memoized — it's plain arithmetic derived straight from
+component state every render, so it visibly moves on every grid edit: x = total headcount units
+currently scheduled across both grids (literal shift-instance count, the SAME unit
+`cumulativeShifts` uses, so the dot is directly comparable to the curve's x-axis — deliberately
+NOT Panel4's `hours / typicalShiftLength` approximation, since Panel5 can just sum real
+headcount units directly), y = `pctDemandCovered` of the combined ED+hold capacity (or ED alone,
+under Arrivals) against the active demand curve. No band shading (Panel4's peer-typical-range
+band is intentionally omitted here — the spec asked for the background curve + live dot +
+tooltip, not a third reference band). Hover tooltip comes free from reusing
+`MarginalReturnsCurve` — same plain-language `"{label}: {x} shifts/week, {y}% demand covered"`
+`<title>` Panel 4's dots already use.
+
+**10. Two new +/- controls, one beside each grid** (hold's only offers `allowedHoldShiftMenu`,
+so a disallowed shift can never be added via the button either, on top of the grid-input
+restriction in §4). Both call the new `bestUnitToAdd`/`bestUnitToRemove` single-step primitives
+(`.claude/rules/engine-solver.md`'s dated section has the full detail + the two judgment calls
+around what demand/floor curves feed them under the Arrivals + Boarding toggle) — neither button
+duplicates the selection loop inline; they just call the extracted engine functions and apply
+the returned `{day, shiftId}` as a ±1 edit.
+
+**Tests:** `engine/__tests__/edHoldSolve.test.ts` (6, new) + a new describe block in
+`solver.test.ts` (4 tests) for `bestUnitToAdd`/`bestUnitToRemove` — both engine-solver.md's
+dated section. `e2e/panel5.spec.ts` REWRITTEN (7 tests, was 3): toggle defaults to Arrivals with
+only one `.sandbox-grid` mounted and no restriction row; switching to Arrivals + Boarding mounts
+the second grid + checkboxes + the two hold-aware starting-point buttons; prefill buttons
+populate the ED grid; unchecking a hold-shift checkbox disables and zeros that grid column;
+hold-nurse surplus still appears when hold nurses are pushed above medical boarding demand; the
+live curve/dot render and the stat line updates after a prefill; the heavy-BH-profile finding
+(`measuredBoardingCensus`) still reports a real, finite "hours below need" figure in both toggle
+states. All green.
+
+**Invariants:** no changes to `EngineResult`/`compute()`/`reconcile()` — `solveEdHoldJointCoverage`
+and the two new solver primitives are all pure, standalone, advisory-only functions, same
+category as `computeSandbox`/`searchFlexibleMenus`. `reconcile.test.ts` untouched. 253 vitest
+tests (was 243), 25 e2e tests (was 21) — `npm run build`/`npm test`/`oxlint`/`npm run test:e2e`
+all clean except the pre-existing, unrelated `panel1-2.spec.ts` Panel 2 "Current"-tab failure.

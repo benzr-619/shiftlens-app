@@ -7,6 +7,7 @@ import { recommendWeeklyBoardingGrid, weeklyArrivalsSpareByCell } from '../../en
 import { lookupWhppvBand } from '../../lib/edbaLookup';
 import { fullWeekCapacity, solveFullCoverageWeekWithTrajectory } from '../../engine/solver';
 import { FlexAxesToggles } from '../../components/FlexAxesToggles';
+import { MarginalReturnsCurve } from '../../components/MarginalReturnsCurve';
 import { VisualFrame, type VisualFrameView } from '../../components/VisualFrame';
 import type { WhppvHeatmapCell } from '../../components/WhppvHeatmap';
 import { DISPLAY_DAY_ORDER, DISPLAY_DAY_LABELS } from '../../lib/dayOrder';
@@ -85,116 +86,9 @@ function curveValueAt(points: { x: number; y: number }[], x: number): number {
   return points[points.length - 1].y;
 }
 
-/** Small inline diminishing-returns curve (prose column, not the shared VisualFrame). X is
- * TOTAL shifts scheduled that week, starting at a true 0. Y is % of the active toggle's own
- * demand curve covered, 0-100 — naturally monotonic by construction (the underlying trajectory
- * is a greedy fill-up from empty, see `solveFullCoverageWeekWithTrajectory`'s own header).
- *
- * `band` — the peer-typical wHPPV range (p25-p75), converted to a shift-count span — replaces
- * a single "target-implied hours" reference line: the target itself is a policy CHOICE with no
- * grid shape of its own, so a shaded range reads as "what a peer department would need" rather
- * than a specific point this department must hit.
- *
- * `markerPoints` — "Current staffing"/"ShiftLens Solver" are each a REAL grid, with its own
- * actual % of demand covered plotted at its own (shifts, %) — deliberately NOT constrained to
- * the curve's line, since both are solved by a different process than the curve's own greedy
- * fill-up and can legitimately sit above or below it (see the call site's gap-disclosure
- * paragraph for "ShiftLens Solver," which explains why a gap there isn't a bug). Each dot
- * carries a native SVG `<title>` hover tooltip stating its own shifts/week + % demand covered —
- * plain units already on the axes, not a raw "(x, y)" pair. */
-function MarginalReturnsCurve({
-  points,
-  band,
-  markerPoints,
-}: {
-  points: { x: number; y: number }[];
-  band: { xMin: number; xMax: number; label: string } | null;
-  markerPoints: Array<{ x: number; y: number; label: string; color: string }>;
-}) {
-  const width = 480;
-  const height = 260;
-  const padLeft = 36;
-  const padBottom = 32;
-  const padTop = 16;
-  const padRight = 16;
-  const plotW = width - padLeft - padRight;
-  const plotH = height - padTop - padBottom;
-  const maxX = Math.max(1e-6, ...points.map((p) => p.x), ...markerPoints.map((m) => m.x), band?.xMax ?? 0);
-  const sx = (x: number) => padLeft + (Math.max(0, Math.min(maxX, x)) / maxX) * plotW;
-  const sy = (yPct: number) => padTop + plotH - (Math.max(0, Math.min(100, yPct)) / 100) * plotH;
-  const path = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${sx(p.x).toFixed(1)} ${sy(p.y).toFixed(1)}`).join(' ');
-
-  return (
-    <>
-      <svg
-        viewBox={`0 0 ${width} ${height}`}
-        className="marginal-curve-chart"
-        role="img"
-        aria-label="Percent of demand covered as total scheduled shifts increase, with a shaded band for the peer-typical wHPPV range and points for current staffing and the ShiftLens Solver result"
-      >
-        {band && (
-          <rect
-            x={sx(band.xMin)}
-            y={padTop}
-            width={Math.max(0, sx(band.xMax) - sx(band.xMin))}
-            height={plotH}
-            fill="var(--text-muted)"
-            opacity={0.14}
-          />
-        )}
-        <line x1={padLeft} y1={padTop + plotH} x2={padLeft + plotW} y2={padTop + plotH} stroke="var(--border)" strokeWidth={1} />
-        <line x1={padLeft} y1={padTop} x2={padLeft} y2={padTop + plotH} stroke="var(--border)" strokeWidth={1} />
-        {points.length > 0 && <path d={path} fill="none" stroke="var(--accent)" strokeWidth={2.5} />}
-        {markerPoints.map((m) => (
-          <g key={m.label}>
-            {/* A generously-sized, invisible hit-circle carries the hover — the visible dot
-                below (r=6) is deliberately smaller than a comfortable mouse target, so hovering
-                anywhere within ~14px of the dot's center still triggers the tooltip. */}
-            <circle cx={sx(m.x)} cy={sy(m.y)} r={14} fill="transparent">
-              <title>
-                {m.label}: {m.x.toFixed(0)} shifts/week, {m.y.toFixed(0)}% demand covered
-              </title>
-            </circle>
-            <circle cx={sx(m.x)} cy={sy(m.y)} r={6} fill={m.color} stroke="var(--bg-card)" strokeWidth={2} pointerEvents="none" />
-          </g>
-        ))}
-        <text x={padLeft + 2} y={padTop + 10} fontSize={12} fill="var(--text-muted)">
-          100%
-        </text>
-        <text x={padLeft + 2} y={padTop + plotH - 2} fontSize={12} fill="var(--text-muted)">
-          0%
-        </text>
-        <text x={padLeft + plotW / 2} y={height - 6} fontSize={13} fill="var(--text-muted)" textAnchor="middle">
-          Total shifts/week
-        </text>
-        <text
-          x={12}
-          y={padTop + plotH / 2}
-          fontSize={13}
-          fill="var(--text-muted)"
-          textAnchor="middle"
-          transform={`rotate(-90 12 ${padTop + plotH / 2})`}
-        >
-          % demand covered
-        </text>
-      </svg>
-      <div className="marginal-curve-legend">
-        {band && (
-          <span className="marginal-curve-legend-item">
-            <span className="marginal-curve-legend-swatch marginal-curve-legend-swatch-band" />
-            {band.label}
-          </span>
-        )}
-        {markerPoints.map((m) => (
-          <span key={m.label} className="marginal-curve-legend-item">
-            <span className="marginal-curve-legend-swatch marginal-curve-legend-swatch-dot" style={{ background: m.color }} />
-            {m.label}
-          </span>
-        ))}
-      </div>
-    </>
-  );
-}
+// MarginalReturnsCurve moved to components/MarginalReturnsCurve.tsx (2026-08-05, Panel 5
+// redesign) so Panel5.tsx's own "% demand covered vs. shifts/week" curve (§9) can reuse the
+// exact same chart instead of duplicating the SVG — see that file's own header.
 
 function buildCells(onDuty168: number[], requirement168: number[], bandFloor168: number[], bandCeiling168: number[], arrivals168: number[]): WhppvHeatmapCell[] {
   const cells: WhppvHeatmapCell[] = [];
@@ -311,10 +205,7 @@ export function Panel4() {
   const { min: minHourlyWhppv, max: maxHourlyWhppv } = hourlyWhppvRange(activeCapacity, arrivals);
   const pctBelowFloor = pctHoursBelowFloor(activeCapacity, arrivals, band.p25Whppv);
 
-  // Same "variance vs. current staffing" comparison Panel 2 uses (range WIDTH, min to max),
-  // against the current-staffing grid's own hourly wHPPV range.
   const currentCapacity = fullWeekCapacity(currentGrid, sortedShiftMenu);
-  const currentWhppvRange = hourlyWhppvRange(currentCapacity, arrivals);
 
   // Diminishing-returns curve (prose column) — TOGGLE-AWARE, starting from a genuine 0
   // shifts scheduled, per Ben's correction: the trim-based `result.marginalCurve` only spans
@@ -480,19 +371,7 @@ export function Panel4() {
               {DAY_LABELS[minHourlyWhppv.day]} {fmtHour(minHourlyWhppv.hour)}) up to{' '}
               <strong>{maxHourlyWhppv.value.toFixed(2)}</strong> ({DAY_LABELS[maxHourlyWhppv.day]}{' '}
               {fmtHour(maxHourlyWhppv.hour)}). <strong>{pctBelowFloor.toFixed(0)}%</strong> of hours fall
-              below your peer-typical floor.{' '}
-              {currentWhppvRange.min && currentWhppvRange.max && (() => {
-                const activeWidth = maxHourlyWhppv.value - minHourlyWhppv.value;
-                const currentWidth = currentWhppvRange.max!.value - currentWhppvRange.min!.value;
-                if (currentWidth <= 0) return null;
-                const variancePct = ((activeWidth - currentWidth) / currentWidth) * 100;
-                const direction = variancePct >= 0 ? 'more' : 'less';
-                return (
-                  <>
-                    <strong>{Math.abs(variancePct).toFixed(0)}% {direction}</strong> variance compared to current staffing.
-                  </>
-                );
-              })()}
+              below your peer-typical floor.
             </p>
           )}
 

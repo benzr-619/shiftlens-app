@@ -28,8 +28,11 @@ export {
   totalSeverity,
   peakSeverityOf,
   SEVERITY_GAMMA,
+  bestUnitToAdd,
+  bestUnitToRemove,
   type MarginalCurvePoint,
 } from './solver';
+export { solveEdHoldJointCoverage } from './edHoldSolve';
 export {
   computeBacklog,
   summarizeBacklogSeverity,

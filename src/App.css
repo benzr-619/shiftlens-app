@@ -1403,3 +1403,12 @@ h1 {
 .sandbox-grid {
   margin-bottom: 16px;
 }
+
+/* 2026-08-05 redesign, §4 — a hold-nurse grid column for a shift the user has unchecked in
+   "Which shifts can hold nurses work?" renders grayed/disabled, value forced to 0. */
+.sandbox-grid input:disabled {
+  background: var(--bg);
+  color: var(--text-muted);
+  opacity: 0.5;
+  cursor: not-allowed;
+}

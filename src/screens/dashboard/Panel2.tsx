@@ -222,7 +222,6 @@ export function Panel2() {
   const reallocatedWeeklyHours = weeklyScheduledHoursOf(activeState.reallocatedGrid, sortedShiftMenu);
   const reallocatedRealizedWhppv = result.annualVisits > 0 ? (reallocatedWeeklyHours * 52) / result.annualVisits : 0;
   const reallocatedWhppvRange = hourlyWhppvRange(activeState.capacity, arrivals);
-  const currentWhppvRange = hourlyWhppvRange(currentCapacity, arrivals);
   const band = lookupWhppvBand(result.annualVisits);
   const pctBelowFloor = pctHoursBelowFloor(activeState.capacity, arrivals, band.p25Whppv);
 
@@ -305,19 +304,7 @@ export function Panel2() {
                 {DAY_LABELS[reallocatedWhppvRange.min.day]} {fmtHour(reallocatedWhppvRange.min.hour)}) up to{' '}
                 <strong>{reallocatedWhppvRange.max.value.toFixed(2)}</strong> ({DAY_LABELS[reallocatedWhppvRange.max.day]}{' '}
                 {fmtHour(reallocatedWhppvRange.max.hour)}). <strong>{pctBelowFloor.toFixed(0)}%</strong> of hours fall
-                below your peer-typical floor.{' '}
-                {currentWhppvRange.min && currentWhppvRange.max && (() => {
-                  const reallocatedWidth = reallocatedWhppvRange.max!.value - reallocatedWhppvRange.min!.value;
-                  const currentWidth = currentWhppvRange.max!.value - currentWhppvRange.min!.value;
-                  if (currentWidth <= 0) return null;
-                  const variancePct = ((reallocatedWidth - currentWidth) / currentWidth) * 100;
-                  const direction = variancePct >= 0 ? 'more' : 'less';
-                  return (
-                    <>
-                      <strong>{Math.abs(variancePct).toFixed(0)}% {direction}</strong> variance compared to current staffing.
-                    </>
-                  );
-                })()}
+                below your peer-typical floor.
               </p>
               <details className="why-toggle-wrap">
                 <summary className="btn-link why-toggle">What is my peer-typical range?</summary>

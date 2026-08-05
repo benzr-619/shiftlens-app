@@ -11,6 +11,8 @@ import {
   solveFullCoverageWeek,
   severity,
   totalSeverity,
+  bestUnitToAdd,
+  bestUnitToRemove,
   type MarginalCurvePoint,
 } from '../solver';
 import { NO_COMPRESSION_FLOOR_WHPPV } from '../backlogModel';
@@ -569,5 +571,54 @@ describe('2026-07-26 PR D — EngineResult.fullCoverage (SOLVER_REALISM_SPEC_202
     const expectedCustomFteDelta = (defaultResult.fullCoverage.fteDelta * 2080) / hoursPerFteAnnual36x52;
     expect(customResult.fullCoverage.fteDelta).toBeCloseTo(expectedCustomFteDelta, 6);
     expect(customResult.fullCoverage.fteDelta).toBeGreaterThan(defaultResult.fullCoverage.fteDelta);
+  });
+});
+
+describe('2026-08-05 — Panel 5 redesign single-step primitives (bestUnitToAdd/bestUnitToRemove)', () => {
+  const emptyGrid: Grid = { 0: { day: 0, night: 0 }, 1: { day: 0, night: 0 }, 2: { day: 0, night: 0 }, 3: { day: 0, night: 0 }, 4: { day: 0, night: 0 }, 5: { day: 0, night: 0 }, 6: { day: 0, night: 0 } };
+
+  it('bestUnitToAdd picks a candidate that relieves the most currently-deficient hours, and returns null once demand is fully covered', () => {
+    const demand = randomArrivals168(11);
+    let grid: Grid = JSON.parse(JSON.stringify(emptyGrid));
+    let guard = 0;
+    while (guard++ < 200) {
+      const candidate = bestUnitToAdd(grid, demand, shiftMenu);
+      if (!candidate) break;
+      grid[candidate.day][candidate.shiftId] += 1;
+    }
+    const capacity = fullWeekCapacity(grid, shiftMenu);
+    for (let g = 0; g < 168; g++) expect(capacity[g]).toBeGreaterThanOrEqual(demand[g]);
+    // Matches the batch full-coverage solve (same greedy candidate rule, applied one at a time).
+    expect(bestUnitToAdd(grid, demand, shiftMenu)).toBeNull();
+  });
+
+  it('bestUnitToAdd returns null against an all-zero demand curve (nothing would help)', () => {
+    expect(bestUnitToAdd(emptyGrid, new Array(168).fill(0), shiftMenu)).toBeNull();
+  });
+
+  it('bestUnitToRemove returns null once the grid has no headcount left anywhere', () => {
+    const requirement = new Array(168).fill(0);
+    const floor = new Array(168).fill(0);
+    const volatility = new Array(168).fill(0);
+    const arrivals = new Array(168).fill(0);
+    expect(bestUnitToRemove(emptyGrid, requirement, floor, volatility, arrivals, NO_COMPRESSION_FLOOR_WHPPV, shiftMenu)).toBeNull();
+  });
+
+  it('bestUnitToRemove picks a real (day, shift) cell that currently has headcount, and repeated removal empties the grid', () => {
+    const requirement = randomArrivals168(13);
+    const floor = new Array(168).fill(0);
+    const volatility = new Array(168).fill(0);
+    let grid = solveFullCoverageWeek(requirement, shiftMenu);
+    let guard = 0;
+    let totalBefore = Object.values(grid).reduce((a, hc) => a + shiftMenu.reduce((b, s) => b + (hc[s.id] ?? 0), 0), 0);
+    while (guard++ < 200) {
+      const candidate = bestUnitToRemove(grid, requirement, floor, volatility, requirement, NO_COMPRESSION_FLOOR_WHPPV, shiftMenu);
+      if (!candidate) break;
+      expect(grid[candidate.day]?.[candidate.shiftId] ?? 0).toBeGreaterThan(0);
+      grid[candidate.day][candidate.shiftId] -= 1;
+    }
+    const totalAfter = Object.values(grid).reduce((a, hc) => a + shiftMenu.reduce((b, s) => b + (hc[s.id] ?? 0), 0), 0);
+    expect(totalAfter).toBe(0);
+    expect(totalBefore).toBeGreaterThan(0);
   });
 });
