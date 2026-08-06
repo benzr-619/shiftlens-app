@@ -6,6 +6,7 @@ import { computeBacklog, computePerShiftDiagnostic } from '../../engine';
 import { fullWeekCapacity } from '../../engine/solver';
 import { shiftDiagnosticSentence } from '../../lib/narrative';
 import { lookupWhppvBand } from '../../lib/edbaLookup';
+import { computeColorDomain } from '../../lib/whppvColorDomain';
 import { VisualFrame, type VisualFrameView } from '../../components/VisualFrame';
 import { averageDay } from '../../lib/averageDay';
 import {
@@ -33,8 +34,6 @@ function sortByStartHour(shifts: ShiftDef[]): ShiftDef[] {
 function buildCells(
   onDuty168: number[],
   requirement168: number[],
-  bandFloor168: number[],
-  bandCeiling168: number[],
   arrivals168: number[],
   belowFloorSet: Set<string>,
   perShiftBreakdown168?: Array<Array<{ label: string; headcount: number }>>
@@ -50,9 +49,6 @@ function buildCells(
         hour,
         onDuty: onDuty168[g] ?? 0,
         requirement: requirement168[g] ?? 0,
-        bandFloor: bandFloor168[g] ?? 0,
-        bandCeiling: bandCeiling168[g] ?? 0,
-        whppv: null,
         arrivals: arrivals168[g] ?? 0,
         belowFloor,
         riskReasons: belowFloor ? ['below the ENA on-duty floor'] : [],
@@ -89,6 +85,7 @@ export function Panel1() {
   const hasCurrentStaffing = Object.values(grid).some((row) => row && Object.values(row).some((v) => (v ?? 0) > 0));
 
   const band = useMemo(() => lookupWhppvBand(result.annualVisits), [result.annualVisits]);
+  const whppvBand = computeColorDomain(result.annualVisits, wHppvTarget);
 
   const boardingCurve = result.boarding?.cellBoardingRnHours ?? null;
   const combinedRequirement = useMemo(
@@ -209,26 +206,8 @@ export function Panel1() {
 
   const enaFloorSet = new Set(current.enaFloorViolationsRemaining.map((v) => `${v.day}-${v.hour}`));
 
-  const arrivalsCells = buildCells(
-    currentCapacity,
-    result.hourlyRequirement,
-    result.bandFloorHourly,
-    result.bandCeilingHourly,
-    arrivals,
-    enaFloorSet,
-    perShiftBreakdown
-  );
-  const combinedBandFloor = result.bandFloorHourly.map((v, i) => v + (boardingCurve ? boardingCurve[i] : 0));
-  const combinedBandCeiling = result.bandCeilingHourly.map((v, i) => v + (boardingCurve ? boardingCurve[i] : 0));
-  const combinedCells = buildCells(
-    currentCapacity,
-    combinedRequirement,
-    combinedBandFloor,
-    combinedBandCeiling,
-    arrivals,
-    enaFloorSet,
-    perShiftBreakdown
-  );
+  const arrivalsCells = buildCells(currentCapacity, result.hourlyRequirement, arrivals, enaFloorSet, perShiftBreakdown);
+  const combinedCells = buildCells(currentCapacity, combinedRequirement, arrivals, enaFloorSet, perShiftBreakdown);
 
   // §6 — the "Effective wHPPV" toggle is dropped entirely; the "Boarding" toggle was dropped
   // 2026-07-30 (Ben's ask) — two toggles remain (Arrivals, Arrivals + Boarding — renamed from
@@ -246,7 +225,7 @@ export function Panel1() {
       structuralFloor: backlogArrivals.structuralFloorMin,
       queueLabel: 'Arrivals backlog',
       heatmapCells: arrivalsCells,
-      heatmapSubLabel: 'Colored by staffing vs. arrivals demand, hour by hour.',
+      heatmapSubLabel: 'Colored by realized wHPPV vs. your peer-typical range.',
     },
     {
       key: 'combined',
@@ -257,7 +236,7 @@ export function Panel1() {
       structuralFloor: backlogArrivals.structuralFloorMin,
       queueLabel: 'Arrivals backlog',
       heatmapCells: combinedCells,
-      heatmapSubLabel: 'Colored by staffing vs. arrivals + boarding demand combined.',
+      heatmapSubLabel: 'Colored by realized wHPPV vs. your peer-typical range.',
     },
   ];
 
@@ -345,13 +324,15 @@ export function Panel1() {
           ))}
 
           <details className="why-toggle-wrap">
-            <summary className="btn-link why-toggle">Why does this treat boarding as only using leftover nursing hours?</summary>
+            <summary className="btn-link why-toggle">Why does boarding's claim come first here?</summary>
             <div className="why-explainer">
               <p>
-                This treats boarding as drawing only on whatever nursing capacity arrivals leave
-                over. In reality, boarding patients compete for nursing time concurrently with
-                arrivals. The diagnostic isn't trying to model that real-time competition; it's
-                showing that both draw from the same finite pool of nurse-hours.
+                Boarding patients are already physically in the department, so this treats their
+                nursing demand as claiming a shift's capacity first, ahead of arrivals, against
+                the same finite pool of nurse-hours. In reality, boarding and arrivals compete for
+                nursing time concurrently, not in a fixed order — the diagnostic isn't trying to
+                model that real-time, minute-by-minute competition; it's showing what's left once
+                both draw against the same nurses on the same shift.
               </p>
             </div>
           </details>
@@ -384,7 +365,7 @@ export function Panel1() {
           </details>
         </div>
         <div className="panel-frame">
-          <VisualFrame views={views} shiftMenu={sortedShiftMenu} />
+          <VisualFrame views={views} shiftMenu={sortedShiftMenu} whppvBand={whppvBand} />
         </div>
       </div>
     </section>

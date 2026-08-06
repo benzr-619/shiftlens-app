@@ -126,7 +126,8 @@ export interface BacklogResult {
 
 /**
  * Compute the backlog diagnostic for ANY grid (idealized or current) against the requirement
- * curve. Pure function, no solver interaction.
+ * curve. Pure function, no solver interaction. Thin wrapper over `computeBacklogFromCapacity`
+ * below — derives capacity from the grid via `fullWeekCapacity`, then defers to it.
  *
  * @param arrivals168 raw visit counts (the recurrence's own "new demand" input, in VISITS) —
  *   pass `NO_COMPRESSION_FLOOR_WHPPV`/the demand-hours curve itself (see backlogModel.ts's
@@ -149,7 +150,26 @@ export function computeBacklog(
   // hours can be covered by the PREVIOUS day's shift (spillover), so this must always be
   // computed from the whole grid, not per-day.
   const capacity = fullWeekCapacity(grid, shifts);
+  return computeBacklogFromCapacity(capacity, arrivals168, hourlyRequirement168, shifts, floorWhppv);
+}
 
+/**
+ * 2026-08-05 (boarding-vs-arrivals-capacity fix) — the same diagnostic as `computeBacklog`,
+ * but taking an already-computed capacity168 array directly rather than deriving one from a
+ * grid. Extracted so a caller can net a claim (e.g. boarding demand) out of capacity FIRST,
+ * then run the real arrivals backlog recurrence against what's left — see Panel1.tsx's
+ * "Arrivals + Boarding" toggle for the reference shape of this pattern, and Panel2/Panel5's
+ * 'combined' views for the other call sites. `shifts` is still needed for the per-shift
+ * inherited/generated attribution below — it does not affect capacity, which the caller has
+ * already fully determined.
+ */
+export function computeBacklogFromCapacity(
+  capacity: Cell168,
+  arrivals168: Cell168,
+  hourlyRequirement168: Cell168,
+  shifts: ShiftDef[],
+  floorWhppv: number
+): BacklogResult {
   // The recurrence's own requirement-equivalent — the floor-pace-implied hours curve
   // (arrivals*floorWhppv). Used for (a) the per-shift generated/inherited attribution below,
   // and (b) rescaling capacity for the CYCLICAL pass — NOT `hourlyRequirement168` (see

@@ -121,34 +121,40 @@ function joinShiftNames(labels: string[]): string {
   return `${labels.slice(0, -1).join(', ')}, and ${labels[labels.length - 1]}`;
 }
 
+// 2026-08-05 rewrite (ShiftLens boarding-vs-arrivals-capacity fix) — sign-aware, one formula:
+// net = staffed − arrivalDemand − boardingDemand. The old copy framed boarding as drawing on
+// whatever nursing capacity arrivals leave over ("left over to also cover") — backwards:
+// boarding patients are already physically present and draw on the same nurses concurrently
+// with arrivals, not after them. This treats boarding's claim as coming FIRST against
+// arrivals-net (staffed − arrivalDemand), reporting the group's own signed shortfall/surplus
+// before and after that claim, rather than a covered/not-covered boolean.
 export function shiftDiagnosticSentence(group: ShiftDiagnosticGroup): string {
   const plural = group.labels.length > 1;
   const names = joinShiftNames(group.labels);
   const isAre = plural ? 'are' : 'is';
   const shiftWord = plural ? 'shifts' : 'shift';
+  const runWord = plural ? 'run' : 'runs';
   const verdict =
     group.arrivalsStatus === 'understaffed' ? 'understaffed' : group.arrivalsStatus === 'overstaffed' ? 'overstaffed' : 'staffed about right';
 
-  if (group.boardingCovered === null) {
+  if (group.boardingNeedHours === null) {
     return `On average, ${names} ${shiftWord} ${isAre} ${verdict} for arrivals.`;
   }
 
-  const covered = group.boardingCovered;
-  // "and" when the boarding-coverage fact matches what you'd expect from the arrivals verdict
-  // (overstaffed-and-covers, or not-overstaffed-and-doesn't-cover); "but" when it's the
-  // surprising combination (overstaffed yet still doesn't cover, or covers despite being
-  // short/appropriate on arrivals).
-  const conjunction = covered === (group.arrivalsStatus === 'overstaffed') ? 'and' : 'but';
-  const doesDoesnt = covered ? (plural ? 'do' : 'does') : plural ? "don't" : "doesn't";
-  const itsTheir = plural ? 'their' : 'its';
+  // arrivalsNet > 0 means staffed hours exceed arrivals demand alone (a surplus/"ahead");
+  // <= 0 means staffed hours fall short of arrivals demand alone (a shortfall).
+  const arrivalsNet = group.staffedHours - group.requiredHours;
+  const boardingNeed = group.boardingNeedHours;
+  const net = arrivalsNet - boardingNeed;
 
-  let sentence = `On average, ${names} ${shiftWord} ${isAre} ${verdict} for arrivals, ${conjunction} ${doesDoesnt} have enough nursing hours left over to also cover ${itsTheir} boarding demand.`;
-
-  if (group.arrivalsStatus === 'overstaffed' && !covered) {
-    const itThey = plural ? 'they carry' : 'it carries';
-    sentence += ` The extra ${group.surplus.toFixed(0)} hours ${itThey} don't fully close the ${(group.boardingNeedHours ?? 0).toFixed(0)} hours of boarding demand there.`;
+  if (arrivalsNet <= 0) {
+    const shortHours = Math.abs(arrivalsNet);
+    const totalShortfall = shortHours + boardingNeed;
+    return `On average, ${names} ${shiftWord} ${runWord} ${shortHours.toFixed(0)} nursing hours short of arrivals demand alone. Boarding adds another ${boardingNeed.toFixed(0)} hours of demand on the same nurses, widening the shortfall to ${totalShortfall.toFixed(0)} hours total.`;
   }
-  return sentence;
+
+  const cushionOrShortfall = net >= 0 ? 'cushion' : 'a shortfall';
+  return `On average, ${names} ${shiftWord} ${runWord} ${arrivalsNet.toFixed(0)} nursing hours ahead of arrivals demand alone. Boarding claims ${boardingNeed.toFixed(0)} of that surplus first, leaving ${Math.abs(net).toFixed(0)} hours of ${cushionOrShortfall}.`;
 }
 
 // --- Synthesis chapter (SynthesisSection.tsx) ---

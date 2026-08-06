@@ -2,9 +2,10 @@ import { useMemo, useState } from 'react';
 import { useStore } from '../../store';
 import { DAY_LABELS } from '../../engine/types';
 import type { Grid, ShiftDef } from '../../engine/types';
-import { computeBacklog, computeScenarioB, computeCombinedReallocation, NO_COMPRESSION_FLOOR_WHPPV } from '../../engine';
+import { computeBacklog, computeBacklogFromCapacity, computeScenarioB, computeCombinedReallocation, computePerShiftDiagnostic } from '../../engine';
 import { fullWeekCapacity } from '../../engine/solver';
 import { lookupWhppvBand } from '../../lib/edbaLookup';
+import { computeColorDomain } from '../../lib/whppvColorDomain';
 import { VisualFrame, type VisualFrameView } from '../../components/VisualFrame';
 import type { WhppvHeatmapCell } from '../../components/WhppvHeatmap';
 import { averageDay } from '../../lib/averageDay';
@@ -18,6 +19,7 @@ import {
   patternsDifferMeaningfully,
 } from '../../lib/queuePattern';
 import { buildPerShiftBreakdown } from '../../lib/shiftBreakdown';
+import { shiftDiagnosticSentence } from '../../lib/narrative';
 import { DISPLAY_DAY_ORDER, DISPLAY_DAY_LABELS } from '../../lib/dayOrder';
 
 function sortByStartHour(shifts: ShiftDef[]): ShiftDef[] {
@@ -31,8 +33,6 @@ function sortByStartHour(shifts: ShiftDef[]): ShiftDef[] {
 function buildCells(
   onDuty168: number[],
   requirement168: number[],
-  bandFloor168: number[],
-  bandCeiling168: number[],
   arrivals168: number[],
   perShiftBreakdown168?: Array<Array<{ label: string; headcount: number }>>
 ): WhppvHeatmapCell[] {
@@ -46,9 +46,6 @@ function buildCells(
         hour,
         onDuty: onDuty168[g] ?? 0,
         requirement: requirement168[g] ?? 0,
-        bandFloor: bandFloor168[g] ?? 0,
-        bandCeiling: bandCeiling168[g] ?? 0,
-        whppv: null,
         arrivals: arrivals168[g] ?? 0,
         belowFloor: false,
         riskReasons: [],
@@ -163,23 +160,17 @@ export function Panel2() {
   const arrivalsReallocatedGrid = scenarioB?.grid ?? grid;
   const combinedReallocatedGrid = combinedRealloc?.grid ?? grid;
 
-  // 'combined' blends in boarding demand, which has no honest "visits" concept — see
-  // backlogModel.ts's header and .claude/rules/engine-solver.md's ninth-shape section.
   const stateFor = (key: 'arrivals' | 'combined') =>
     key === 'arrivals'
       ? {
           demand: result.hourlyRequirement,
           capacity: arrivalsCapacity,
           reallocatedGrid: arrivalsReallocatedGrid,
-          recurrenceArrivals: arrivals,
-          floorWhppv: result.floorWhppv,
         }
       : {
           demand: combinedRequirement,
           capacity: combinedCapacity,
           reallocatedGrid: combinedReallocatedGrid,
-          recurrenceArrivals: combinedRequirement,
-          floorWhppv: NO_COMPRESSION_FLOOR_WHPPV,
         };
 
   const activeState = stateFor(active);
@@ -223,13 +214,37 @@ export function Panel2() {
   const reallocatedRealizedWhppv = result.annualVisits > 0 ? (reallocatedWeeklyHours * 52) / result.annualVisits : 0;
   const reallocatedWhppvRange = hourlyWhppvRange(activeState.capacity, arrivals);
   const band = lookupWhppvBand(result.annualVisits);
+  const whppvBand = computeColorDomain(result.annualVisits, inputs.wHppvTarget);
   const pctBelowFloor = pctHoursBelowFloor(activeState.capacity, arrivals, band.p25Whppv);
 
+  // Same per-shift diagnostic Panel 1 shows for current staffing (§4,
+  // engine/hiddenBoarding.ts), scored against THIS reallocated grid instead — boarding is only
+  // folded in under the 'combined' toggle, matching that toggle's own demand curve (unlike
+  // Panel 1, which has only one grid and always shows boarding when present).
+  const perShiftDiagnostic = computePerShiftDiagnostic(
+    result.hourlyRequirement,
+    activeState.reallocatedGrid,
+    sortedShiftMenu,
+    result.bandFloorHourly,
+    result.bandCeilingHourly,
+    active === 'combined' ? boardingCurve : null
+  );
+
+  // Backlog is fundamentally an arrivals-visits concept (queueing for a nurse); boarding has no
+  // such concept, so feeding a merged arrivals+boarding demand curve into the recurrence (the
+  // old 'combined' behavior, via NO_COMPRESSION_FLOOR_WHPPV) degenerates to a flat deficit
+  // carry-forward against a curve that was never real "backlog." Instead, same reference shape
+  // as Panel1.tsx's "Arrivals + Boarding" toggle: net boarding's claim out of capacity FIRST,
+  // then run the real arrivals backlog recurrence (real floorWhppv, real arrivals visits)
+  // against whatever capacity boarding leaves behind. The 'arrivals' toggle has nothing to net
+  // (boardingCurve168 all zero there in effect), so this is a no-op for it.
   const views: VisualFrameView[] = (['arrivals', 'combined'] as const)
     .filter((key) => key !== 'combined' || combinedRealloc)
     .map((key) => {
       const s = stateFor(key);
-      const b = computeBacklog(s.reallocatedGrid, s.recurrenceArrivals, s.demand, sortedShiftMenu, s.floorWhppv);
+      const netOfBoardingCapacity =
+        key === 'combined' && boardingCurve ? s.capacity.map((c, i) => Math.max(0, c - (boardingCurve[i] ?? 0))) : s.capacity;
+      const b = computeBacklogFromCapacity(netOfBoardingCapacity, arrivals, result.hourlyRequirement, sortedShiftMenu, result.floorWhppv);
       const label = key === 'arrivals' ? 'Arrivals' : 'Arrivals + Boarding';
       const perShiftBreakdown = buildPerShiftBreakdown(sortedShiftMenu, s.reallocatedGrid);
       return {
@@ -239,7 +254,7 @@ export function Panel2() {
         capacity168: s.capacity,
         queueDepth168: b.cyclicalBacklog,
         structuralFloor: b.structuralFloorMin,
-        heatmapCells: buildCells(s.capacity, s.demand, result.bandFloorHourly, result.bandCeilingHourly, arrivals, perShiftBreakdown),
+        heatmapCells: buildCells(s.capacity, s.demand, arrivals, perShiftBreakdown),
       } satisfies VisualFrameView;
     });
 
@@ -326,6 +341,10 @@ export function Panel2() {
             </>
           )}
 
+          {perShiftDiagnostic.groups.map((group) => (
+            <p key={group.shiftIds.join('-')}>{shiftDiagnosticSentence(group)}</p>
+          ))}
+
           {(rampGapBefore > 0 || rampGapAfter > 0) && (
             <p>
               On this reallocated schedule, demand peaks around <strong>{fmtHour(peakDemandHour)}</strong>
@@ -355,6 +374,7 @@ export function Panel2() {
           <VisualFrame
             views={views}
             shiftMenu={sortedShiftMenu}
+            whppvBand={whppvBand}
             activeKey={active}
             onActiveKeyChange={(k) => setActive(k as 'arrivals' | 'combined')}
           />

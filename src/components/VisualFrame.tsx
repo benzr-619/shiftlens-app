@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { ShiftDef } from '../engine/types';
 import { WhppvHeatmap, type WhppvHeatmapCell } from './WhppvHeatmap';
+import type { WhppvColorDomain } from '../lib/whppvColorDomain';
 import { averageDay } from '../lib/averageDay';
 import { DISPLAY_DAY_ORDER, DISPLAY_DAY_LABELS } from '../lib/dayOrder';
 
@@ -182,11 +183,15 @@ function QueueStrip({
 export function VisualFrame({
   views,
   shiftMenu,
+  whppvBand,
   activeKey: controlledActiveKey,
   onActiveKeyChange,
 }: {
   views: VisualFrameView[];
   shiftMenu: ShiftDef[];
+  /** The ED's own single peer-typical wHPPV band — same reference for every toggle/view in
+   * this frame, passed straight through to the heatmap (see WhppvHeatmap's own header). */
+  whppvBand: WhppvColorDomain;
   /** Optional controlled mode — pass both to let a parent panel keep its own left-column
    * stats (e.g. Panel 2's "hours below need," which must update WITH the toggle) in sync
    * with whichever view is active, rather than duplicating the toggle in two places.
@@ -243,7 +248,7 @@ export function VisualFrame({
           <span className="frame-heatmap-label">{active.heatmapLabel ?? 'Staffing heatmap'}</span>
           {active.heatmapSubLabel && <span className="frame-heatmap-sublabel">{active.heatmapSubLabel}</span>}
         </div>
-        <WhppvHeatmap cells={active.heatmapCells} shiftMenu={shiftMenu} />
+        <WhppvHeatmap cells={active.heatmapCells} shiftMenu={shiftMenu} whppvBand={whppvBand} />
       </div>
     </div>
   );

@@ -2,9 +2,10 @@ import { useState } from 'react';
 import { useStore } from '../../store';
 import type { ShiftDef } from '../../engine/types';
 import { DEFAULTS, DAY_LABELS } from '../../engine/types';
-import { searchFlexibleMenus } from '../../engine';
+import { searchFlexibleMenus, computePerShiftDiagnostic } from '../../engine';
 import { recommendWeeklyBoardingGrid, weeklyArrivalsSpareByCell } from '../../engine/boarding';
 import { lookupWhppvBand } from '../../lib/edbaLookup';
+import { computeColorDomain } from '../../lib/whppvColorDomain';
 import { fullWeekCapacity, solveFullCoverageWeekWithTrajectory } from '../../engine/solver';
 import { FlexAxesToggles } from '../../components/FlexAxesToggles';
 import { MarginalReturnsCurve } from '../../components/MarginalReturnsCurve';
@@ -12,6 +13,7 @@ import { VisualFrame, type VisualFrameView } from '../../components/VisualFrame'
 import type { WhppvHeatmapCell } from '../../components/WhppvHeatmap';
 import { DISPLAY_DAY_ORDER, DISPLAY_DAY_LABELS } from '../../lib/dayOrder';
 import { fmtHour } from '../../lib/queuePattern';
+import { shiftDiagnosticSentence } from '../../lib/narrative';
 
 function sortByStartHour(shifts: ShiftDef[]): ShiftDef[] {
   return [...shifts].sort((a, b) => a.startHour - b.startHour);
@@ -90,7 +92,7 @@ function curveValueAt(points: { x: number; y: number }[], x: number): number {
 // redesign) so Panel5.tsx's own "% demand covered vs. shifts/week" curve (§9) can reuse the
 // exact same chart instead of duplicating the SVG — see that file's own header.
 
-function buildCells(onDuty168: number[], requirement168: number[], bandFloor168: number[], bandCeiling168: number[], arrivals168: number[]): WhppvHeatmapCell[] {
+function buildCells(onDuty168: number[], requirement168: number[], arrivals168: number[]): WhppvHeatmapCell[] {
   const cells: WhppvHeatmapCell[] = [];
   for (let day = 0; day < 7; day++) {
     for (let hour = 0; hour < 24; hour++) {
@@ -100,9 +102,6 @@ function buildCells(onDuty168: number[], requirement168: number[], bandFloor168:
         hour,
         onDuty: onDuty168[g] ?? 0,
         requirement: requirement168[g] ?? 0,
-        bandFloor: bandFloor168[g] ?? 0,
-        bandCeiling: bandCeiling168[g] ?? 0,
-        whppv: null,
         arrivals: arrivals168[g] ?? 0,
         belowFloor: false,
         riskReasons: [],
@@ -167,6 +166,7 @@ export function Panel4() {
   // in a vacuum. See .claude/rules/boarding-seasonality.md.
   const boarding = result.boarding;
   const band = lookupWhppvBand(result.annualVisits);
+  const whppvBand = computeColorDomain(result.annualVisits, inputs.wHppvTarget);
   const arrivalsSpareByCell = weeklyArrivalsSpareByCell(result.grid, result.hourlyRequirement, sortedShiftMenu);
   const boardingGrid =
     boarding && result.lostProductivity
@@ -204,6 +204,20 @@ export function Panel4() {
   const avgWhppv = (activeWeeklyHours * 52) / result.annualVisits;
   const { min: minHourlyWhppv, max: maxHourlyWhppv } = hourlyWhppvRange(activeCapacity, arrivals);
   const pctBelowFloor = pctHoursBelowFloor(activeCapacity, arrivals, band.p25Whppv);
+
+  // Same per-shift diagnostic Panel 1 shows for current staffing (§4, engine/hiddenBoarding.ts),
+  // scored against THIS toggle's own recommended grid — boarding only folds in under 'combined',
+  // matching that toggle's own demand curve (unlike Panel 1, which has one grid and always shows
+  // boarding when present).
+  const activeGrid = active === 'arrivals' ? result.grid : combinedGrid;
+  const perShiftDiagnostic = computePerShiftDiagnostic(
+    result.hourlyRequirement,
+    activeGrid,
+    sortedShiftMenu,
+    result.bandFloorHourly,
+    result.bandCeilingHourly,
+    active === 'combined' ? boardingCurve : null
+  );
 
   const currentCapacity = fullWeekCapacity(currentGrid, sortedShiftMenu);
 
@@ -282,7 +296,7 @@ export function Panel4() {
       capacity168: arrivalsCapacity,
       queueDepth168: null,
       structuralFloor: null,
-      heatmapCells: buildCells(arrivalsCapacity, result.hourlyRequirement, result.bandFloorHourly, result.bandCeilingHourly, arrivals),
+      heatmapCells: buildCells(arrivalsCapacity, result.hourlyRequirement, arrivals),
     },
     ...(boarding
       ? [
@@ -293,7 +307,7 @@ export function Panel4() {
             capacity168: combinedCapacity,
             queueDepth168: null,
             structuralFloor: null,
-            heatmapCells: buildCells(combinedCapacity, combinedRequirement, result.bandFloorHourly, result.bandCeilingHourly, arrivals),
+            heatmapCells: buildCells(combinedCapacity, combinedRequirement, arrivals),
           } satisfies VisualFrameView,
         ]
       : []),
@@ -374,6 +388,10 @@ export function Panel4() {
               below your peer-typical floor.
             </p>
           )}
+
+          {perShiftDiagnostic.groups.map((group) => (
+            <p key={group.shiftIds.join('-')}>{shiftDiagnosticSentence(group)}</p>
+          ))}
 
           {hasMeaningfulMarginalCurve ? (
             <>
@@ -515,6 +533,7 @@ export function Panel4() {
           <VisualFrame
             views={views}
             shiftMenu={sortedShiftMenu}
+            whppvBand={whppvBand}
             activeKey={active}
             onActiveKeyChange={(k) => setActive(k as 'arrivals' | 'combined')}
           />

@@ -2,19 +2,15 @@ import { DISPLAY_DAY_ORDER, DISPLAY_DAY_LABELS } from '../lib/dayOrder';
 import { DAY_LABELS } from '../engine/types';
 import type { ShiftDef } from '../engine/types';
 import { ratioVisual, type CellVisual } from '../lib/heatmapColor';
+import type { WhppvColorDomain } from '../lib/whppvColorDomain';
+import { useHoverTooltip } from '../lib/useHoverTooltip';
+import { HoverTooltip } from './HoverTooltip';
 
 export interface WhppvHeatmapCell {
   day: number;
   hour: number;
   onDuty: number;
   requirement: number;
-  // 2026-07-26 PR D (SOLVER_REALISM_SPEC_2026-07-26.md, change 4) — the per-hour typical-
-  // staffing band (EngineResult.bandFloorHourly/bandCeilingHourly at this cell's global hour),
-  // in the SAME absolute-headcount units as onDuty/requirement. Drives the cell's COLOR (via
-  // cellVisual below) — a per-hour, not week-level, reference point.
-  bandFloor: number;
-  bandCeiling: number;
-  whppv: number | null; // realized wHPPV — tooltip only.
   arrivals: number;
   belowFloor: boolean; // under the ENA on-duty floor — a safety check, red outline + "!"
   riskReasons: string[];
@@ -26,26 +22,45 @@ export interface WhppvHeatmapCell {
   perShift?: Array<{ label: string; headcount: number }>;
 }
 
+/** Realized wHPPV for one cell — nurse-hours on duty ÷ arrivals that hour. `null` when there
+ * were no arrivals (no meaningful per-visit ratio, renders neutral). */
+function cellRealizedWhppv(cell: WhppvHeatmapCell): number | null {
+  return cell.arrivals > 0 ? cell.onDuty / cell.arrivals : null;
+}
+
 /**
- * Color is driven by `onDuty / requirement` against this cell's OWN `bandFloor`/`bandCeiling`,
- * expressed as ratios against `requirement` (so "1.0" always means "exactly at this hour's
- * point target," a per-cell, not week-level, reference point). `Math.max(requirement, 1)`
- * guards the divisor for requirement-0 cells (overnight hours in very low-volume EDs) — same
- * convention `engine/solver.ts`'s `severity` uses.
+ * 2026-08-05 — color reversed back to a SINGLE week-level wHPPV band (same numbers driving the
+ * "ranges from X to Y" prose sentence every panel already shows), not a per-hour one. The prior
+ * per-hour-band mechanism colored a cell by `onDuty/requirement` against THAT HOUR's own
+ * scaled band — mathematically the same peer band, just necessarily rescaled by that hour's
+ * own volume so headcount stayed comparable, but the practical effect read as "some hours have
+ * a different bar than others" and didn't line up with which hour prose called out as the
+ * week's actual wHPPV extreme (an hour can be the real outlier and still sit inside its own
+ * volume-scaled band). Comparing the SAME realized-wHPPV number the prose already cites against
+ * ONE fixed band fixes that mismatch directly, at the cost of more noise on very-low-volume
+ * cells (a couple of arrivals can swing wHPPV a lot). Normalized by `domain.target` (ratio 1.0
+ * = "at target") so `ratioVisual`'s asymmetric-ramp constants apply the same way Panel 2's own
+ * per-shift wHPPV coloring already uses them (see lib/heatmapColor.ts's own header).
  */
-function cellVisual(onDuty: number, requirement: number, bandFloor: number, bandCeiling: number): CellVisual {
-  const denom = Math.max(requirement, 1);
-  return ratioVisual(onDuty / denom, bandFloor / denom, bandCeiling / denom);
+function cellVisual(cell: WhppvHeatmapCell, domain: WhppvColorDomain): CellVisual {
+  const realized = cellRealizedWhppv(cell);
+  if (realized === null) return { background: 'transparent', textColor: undefined };
+  const denom = Math.max(domain.target, 1e-6);
+  return ratioVisual(realized / denom, domain.low / denom, domain.high / denom);
 }
 
 function cellTitle(cell: WhppvHeatmapCell): string {
-  const whppvPart = cell.whppv === null ? 'no arrivals recorded' : `${cell.whppv.toFixed(2)} realized wHPPV`;
-  let base = `${DAY_LABELS[cell.day]} ${cell.hour.toString().padStart(2, '0')}:00 — ${cell.onDuty}/${cell.requirement} on duty vs. required, ${whppvPart}, ${cell.arrivals} arrivals`;
+  const realized = cellRealizedWhppv(cell);
+  const whppvPart = realized === null ? 'no arrivals recorded' : `${realized.toFixed(2)} realized wHPPV`;
+  // Nurse-hour and arrivals curves are fractional (allocation shares, arrival-rate averages),
+  // not integers — round consistently to 2dp everywhere in the tooltip rather than letting
+  // some fields print long floats and others print short ones.
+  let base = `${DAY_LABELS[cell.day]} ${cell.hour.toString().padStart(2, '0')}:00 — ${cell.onDuty.toFixed(2)}/${cell.requirement.toFixed(2)} on duty vs. required, ${whppvPart}, ${cell.arrivals.toFixed(2)} arrivals`;
   // §7 — put the total plus a labeled per-shift breakdown in the tooltip so nothing is lost
   // even when the cell text itself just shows the split ("7+4"), not each shift's label.
   if (cell.perShift && cell.perShift.length > 1) {
-    const breakdown = cell.perShift.map((s) => `${s.label}: ${s.headcount}`).join(', ');
-    base += `\n${cell.onDuty} total (${breakdown})`;
+    const breakdown = cell.perShift.map((s) => `${s.label}: ${s.headcount.toFixed(2)}`).join(', ');
+    base += `\n${cell.onDuty.toFixed(2)} total (${breakdown})`;
   }
   return cell.riskReasons.length > 0 ? `${base}\n⚠ ${cell.riskReasons.join('; ')}` : base;
 }
@@ -76,10 +91,9 @@ function shiftBoundariesByHour(shiftMenu: ShiftDef[]): Map<number, string[]> {
  * index is unaffected).
  *
  * R1 (RESULTS_PAGE_V2_SPEC_2026-07-27.md §2) — THIRD change to this cell's displayed number:
- * headcount alone (`onDuty`), not `onDuty/requirement`. Color still encodes the ratio against
- * this cell's own typical band, unchanged — only the NUMBER simplified, so the visual frame's
- * repeated heatmap reads as "how many nurses" at a glance, with color carrying the
- * over/under-typical judgment rather than a second number doing the same job.
+ * headcount alone (`onDuty`), not `onDuty/requirement`. Color carries the over/under-typical
+ * judgment instead, so a second number doesn't do the same job (see `cellVisual`'s own header
+ * for the 2026-08-05 change to what color is computed against).
  *
  * R3 — the backlog spine overlay is REMOVED from this component entirely (was a left-edge
  * vertical spine, weight scaled by backlog magnitude). In the rendered page it appeared on
@@ -101,9 +115,21 @@ function shiftBoundariesByHour(shiftMenu: ShiftDef[]): Map<number, string[]> {
  * `.claude/rules/results-redesign.md`'s dated section for the judgment call on which toggle
  * views get a real per-shift breakdown vs. a plain number.
  */
-export function WhppvHeatmap({ cells, shiftMenu }: { cells: WhppvHeatmapCell[]; shiftMenu: ShiftDef[] }) {
+export function WhppvHeatmap({
+  cells,
+  shiftMenu,
+  whppvBand,
+}: {
+  cells: WhppvHeatmapCell[];
+  shiftMenu: ShiftDef[];
+  /** The ED's own single peer-typical wHPPV band (25th-75th percentile for its volume,
+   * widened to include its own target — see whppvColorDomain.ts) — SAME reference for every
+   * cell regardless of hour. Computed once per panel via `computeColorDomain`, not per cell. */
+  whppvBand: WhppvColorDomain;
+}) {
   const byDayHour = new Map(cells.map((c) => [`${c.day}-${c.hour}`, c]));
   const boundaries = shiftBoundariesByHour(shiftMenu);
+  const { tooltip, showTooltip, moveTooltip, hideTooltip } = useHoverTooltip();
 
   return (
     <div className="whppv-heatmap-wrap">
@@ -128,13 +154,16 @@ export function WhppvHeatmap({ cells, shiftMenu }: { cells: WhppvHeatmapCell[]; 
                 {DISPLAY_DAY_ORDER.map((day) => {
                   const cell = byDayHour.get(`${day}-${hour}`);
                   if (!cell) return <td key={day} />;
-                  const visual = cellVisual(cell.onDuty, cell.requirement, cell.bandFloor, cell.bandCeiling);
+                  const visual = cellVisual(cell, whppvBand);
+                  const title = cellTitle(cell);
                   return (
                     <td
                       key={day}
                       className={cell.belowFloor ? 'heat-cell-risk' : undefined}
                       style={{ backgroundColor: visual.background }}
-                      title={cellTitle(cell)}
+                      onMouseEnter={(e) => showTooltip(e, title)}
+                      onMouseMove={moveTooltip}
+                      onMouseLeave={hideTooltip}
                     >
                       <div className="heat-cell-inner">
                         <span className="heat-cell-value" style={{ color: visual.textColor }}>
@@ -150,15 +179,20 @@ export function WhppvHeatmap({ cells, shiftMenu }: { cells: WhppvHeatmapCell[]; 
           })}
         </tbody>
       </table>
+      <HoverTooltip tooltip={tooltip} />
       <div className="whppv-heatmap-legend">
         <div className="heat-legend-line">
           Each cell shows the number of nurses on duty, split by shift when more than one covers that hour.
         </div>
         <div className="heat-legend-line">
           <span className="heat-legend-swatch-inline heat-legend-swatch-lean" />
-          Red = short-staffed for how busy this hour runs.
+          Red = this hour's realized wHPPV falls below your peer-typical range.
           <span className="heat-legend-swatch-inline heat-legend-swatch-rich" />
-          Blue = over-staffed.
+          Blue = above it.
+        </div>
+        <div className="heat-legend-line">
+          Peer-typical range: <strong>{whppvBand.low.toFixed(2)}–{whppvBand.high.toFixed(2)} wHPPV</strong> (25th–75th
+          percentile for EDs your size).
         </div>
         {cells.some((c) => c.belowFloor) && (
           <div className="heat-legend-risk">

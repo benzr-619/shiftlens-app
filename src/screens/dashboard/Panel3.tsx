@@ -7,12 +7,13 @@ import type { WhppvHeatmapCell } from '../../components/WhppvHeatmap';
 import { DISPLAY_DAY_ORDER, DISPLAY_DAY_LABELS } from '../../lib/dayOrder';
 import { fmtHour } from '../../lib/queuePattern';
 import { lookupWhppvBand } from '../../lib/edbaLookup';
+import { computeColorDomain } from '../../lib/whppvColorDomain';
 
 function sortByStartHour(shifts: ShiftDef[]): ShiftDef[] {
   return [...shifts].sort((a, b) => a.startHour - b.startHour);
 }
 
-function buildCells(onDuty168: number[], requirement168: number[], bandFloor168: number[], bandCeiling168: number[], arrivals168: number[]): WhppvHeatmapCell[] {
+function buildCells(onDuty168: number[], requirement168: number[], arrivals168: number[]): WhppvHeatmapCell[] {
   const cells: WhppvHeatmapCell[] = [];
   for (let day = 0; day < 7; day++) {
     for (let hour = 0; hour < 24; hour++) {
@@ -22,9 +23,6 @@ function buildCells(onDuty168: number[], requirement168: number[], bandFloor168:
         hour,
         onDuty: onDuty168[g] ?? 0,
         requirement: requirement168[g] ?? 0,
-        bandFloor: bandFloor168[g] ?? 0,
-        bandCeiling: bandCeiling168[g] ?? 0,
-        whppv: null,
         arrivals: arrivals168[g] ?? 0,
         belowFloor: false,
         riskReasons: [],
@@ -135,25 +133,18 @@ export function Panel3() {
   const arrivalsAnnualHours = result.hourlyRequirement.reduce((a, b) => a + b, 0) * 52;
   const boardingAnnualHours = result.boarding?.annualBoardingHours ?? null;
 
-  const combinedBandFloor = result.bandFloorHourly.map((v, i) => v + (boardingCurve ? boardingCurve[i] : 0));
-  const combinedBandCeiling = result.bandCeilingHourly.map((v, i) => v + (boardingCurve ? boardingCurve[i] : 0));
-
-  // Per-toggle state — same shape both toggles share, only the demand curve/grid/band vary.
+  // Per-toggle state — same shape both toggles share, only the demand curve/grid vary.
   const stateFor = (key: 'arrivals' | 'combined') =>
     key === 'arrivals'
       ? {
           demand: result.hourlyRequirement,
           fullGrid: result.fullCoverage.grid,
           weeklyHours: result.fullCoverage.weeklyHours,
-          bandFloor: result.bandFloorHourly,
-          bandCeiling: result.bandCeilingHourly,
         }
       : {
           demand: combinedRequirement,
           fullGrid: result.fullCoverageCombined.grid,
           weeklyHours: result.fullCoverageCombined.weeklyHours,
-          bandFloor: combinedBandFloor,
-          bandCeiling: combinedBandCeiling,
         };
 
   const activeState = stateFor(active);
@@ -165,6 +156,7 @@ export function Panel3() {
   const activeCapacity = fullWeekCapacity(activeState.fullGrid, sortedShiftMenu);
   const avgWhppv = (activeState.weeklyHours * 52) / result.annualVisits;
   const peerBand = lookupWhppvBand(result.annualVisits);
+  const whppvBand = computeColorDomain(result.annualVisits, inputs.wHppvTarget);
   const showTooLargeNote = avgWhppv > peerBand.p75Whppv;
   // Same delta the wHPPV figure above expresses, converted to hours/week: this ED's own
   // representative-week visit count (annualVisits/52) times the wHPPV gap above the peer
@@ -194,7 +186,7 @@ export function Panel3() {
       capacity168: capacity,
       queueDepth168: null,
       structuralFloor: null,
-      heatmapCells: buildCells(capacity, s.demand, s.bandFloor, s.bandCeiling, arrivals),
+      heatmapCells: buildCells(capacity, s.demand, arrivals),
     } satisfies VisualFrameView;
   });
 
@@ -334,6 +326,7 @@ export function Panel3() {
           <VisualFrame
             views={views}
             shiftMenu={sortedShiftMenu}
+            whppvBand={whppvBand}
             activeKey={active}
             onActiveKeyChange={(k) => setActive(k as 'arrivals' | 'combined')}
           />

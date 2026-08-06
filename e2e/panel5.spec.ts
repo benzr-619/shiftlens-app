@@ -95,27 +95,33 @@ test('the live % demand covered curve renders and reflects the current scenario'
   await expect(panel5.locator('.marginal-curve-legend').getByText('Your scenario', { exact: true })).toBeVisible();
 
   await panel5.getByRole('button', { name: 'ShiftLens Solver Staffing', exact: true }).click();
-  await expect(panel5.getByText(/Hours below need this week: \d/)).toBeVisible();
+  // 2026-08-05: the old "Hours below need this week" aggregate was replaced by the same
+  // per-shift diagnostic Panel 1/2/4 show (shiftDiagnosticSentence) — assert one of its two
+  // sentence shapes renders instead.
+  await expect(panel5.getByText(/nursing hours (short|ahead) of arrivals demand alone|for arrivals\./).first()).toBeVisible();
 });
 
-test('a heavy-BH profile shows a real, finite result in both toggle states', async ({ page }) => {
+test('a heavy-BH profile shows a real, finite per-shift diagnostic in both toggle states', async ({ page }) => {
   const profile = NAMED_DEPARTMENT_PARAMS.measuredBoardingCensus;
   await seedAndGoToResults(page, profile);
   const panel5 = page.locator('#ch-sandbox');
 
-  const unmetText = async () => panel5.getByText(/Hours below need this week/).innerText();
-  const before = await unmetText();
+  const diagnosticPattern = /nursing hours (short|ahead) of arrivals demand alone|for arrivals\./;
+  const diagnosticText = async () => panel5.getByText(diagnosticPattern).first().innerText();
+  const before = await diagnosticText();
 
   await panel5.getByRole('tab', { name: 'Arrivals + Boarding' }).click();
   await panel5.getByRole('button', { name: 'ShiftLens Solver Staffing (Hold Nurses for Boarding)' }).click();
-  const after = await unmetText();
+  const after = await diagnosticText();
 
-  // Both states render a real, finite number — the specific claim (hold nurses barely move
-  // coverage when BH-heavy) is a finding about THIS profile's own BH/medical mix, not asserted
-  // as a fixed percentage here; the important thing is the page doesn't crash and reports
-  // something for both states.
-  expect(before).toMatch(/Hours below need this week: \d/);
-  expect(after).toMatch(/Hours below need this week: \d/);
+  // Both states render real, finite per-shift sentences — the specific claim (hold nurses
+  // barely move coverage when BH-heavy) is a finding about THIS profile's own BH/medical mix,
+  // not asserted as fixed text here; the important thing is the page doesn't crash and reports
+  // something sensible for both states.
+  expect(before).toMatch(diagnosticPattern);
+  expect(after).toMatch(diagnosticPattern);
+  expect(before).not.toContain('NaN');
+  expect(after).not.toContain('NaN');
 });
 
 async function sumDiffMain(scope: import('@playwright/test').Locator, tableIndex: number): Promise<number> {

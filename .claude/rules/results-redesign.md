@@ -20,7 +20,10 @@ No router, no tabs, no sidebar.
 | 2 | Could moving hours fix it? | `computeScenarioB`, `computeCombinedReallocation` |
 | 3 | What would it take to fully cover the department? | `fullCoverageCombined` (PR B) |
 | 4 | ShiftLens Solver staffing | `result.grid`, `searchFlexibleMenus`, `solveFullCoverageWeekWithTrajectory` |
-| 5 | Test it yourself (sandbox) | `computeSandbox`, `solveEdHoldJointCoverage`, `bestUnitToAdd/Remove` |
+| 5 | Test it yourself (sandbox) | `computeSandbox`, `computeBacklogFromCapacity`, `solveEdHoldJointCoverage`, `bestUnitToAdd/Remove` |
+
+2026-08-05: `computePerShiftDiagnostic`/`shiftDiagnosticSentence` (row 1) is now also called by
+Panels 2, 4, and 5, each against its own active-toggle grid — see the Panel 5 section below.
 
 **Deleted, do not resurrect:** `CoreGridTab`, `CurrentStaffingAnalysis`, `ScenarioBSection`,
 `HiddenBoardingSection`, `BoardingTransition`, `ConstrainedReallocationSection`,
@@ -44,15 +47,32 @@ day**, 24 points; full week is an expand toggle) + queue-depth strip + `WhppvHea
 - Which curve to pass: **Panel 1 passes the ACTUAL backlog curve** (per-toggle,
   `computeBacklog(currentStaffingGrid, thatToggle'sDemandCurve, ...)`), a scoped exception.
   Other panels pass the cyclical curve.
+- 2026-08-05 fix — a "combined" queue-depth strip must never feed a merged demand curve straight
+  into the recurrence (flat deficit-carry, previously identical across both Panel 5 toggles — a
+  real bug). Net boarding's claim out of capacity FIRST, then run the real arrivals recurrence on
+  what's left — `computeBacklogFromCapacity` (`engine/backlog.ts`), Panel 2 'combined' + Panel 5.
 
 ## Heatmap (`WhppvHeatmap.tsx`) — current mechanism
 
 - **Cell number** = headcount. When more than one shift covers that hour, split by shift
-  (`perShift`, e.g. "7+4"), ordered by `startHour`. Realized wHPPV lives in the tooltip only.
-- **Cell color** = `onDuty / requirement` against **that hour's own** band (each
-  `WhppvHeatmapCell` carries its own `bandFloor` / `bandCeiling`, from
-  `EngineResult.bandFloorHourly` / `bandCeilingHourly`; `target = 1.0`). Inside the band -> no
-  ink at all.
+  (`perShift`, e.g. "7+4"), ordered by `startHour`. Realized wHPPV (`onDuty/arrivals`) lives in
+  the tooltip only.
+- **Cell color** — REVERSED BACK 2026-08-05 to a **single week-level** band: each cell's own
+  realized wHPPV (`onDuty/arrivals`, `null`/no ink when `arrivals` is 0) against ONE
+  `computeColorDomain(annualVisits, wHppvTarget)` result (`lib/whppvColorDomain.ts`), normalized
+  by `domain.target` so `ratioVisual`'s asymmetric-ramp constants apply the same way regardless
+  of which panel's wHppvTarget is in play. `WhppvHeatmap` now takes a `whppvBand: WhppvColorDomain`
+  prop (computed once per panel, passed through `VisualFrame`'s own `whppvBand` prop — same value
+  for every toggle in that frame, since realized wHPPV doesn't change by which demand curve is
+  being displayed). Read the load-bearing history entry below before reversing this again — this
+  is the SECOND reversal, undoing the 2026-07-26 per-hour-band change (`docs/archive/rules/
+  results-redesign.md`'s "Change 4 — heatmap: SECOND reversal" section), because the per-hour
+  band, while the same underlying peer band, is necessarily rescaled by each hour's own volume —
+  an hour named as the week's real wHPPV extreme in the panel's own prose (`hourlyWhppvRange`)
+  could still land inside its own volume-scaled band and render uncolored, a direct
+  prose-vs-heatmap mismatch that was the actual complaint. `EngineResult.bandFloorHourly` /
+  `bandCeilingHourly` still exist and still drive `computePerShiftDiagnostic` (Panel 1) and the
+  solver's own floor/ceiling reporting — unrelated to heatmap color now.
 - **Asymmetric ramp:** lean saturates fast (a small dip reads alarming), rich ramps slowly and
   clamps ~2x. Both gamma-eased. `RICHER_RGB` is **saturated** blue, not muted — a real
   8-nurses-against-4 hour rendered pale gray was the single most actionable finding on a real
@@ -61,8 +81,12 @@ day**, 24 points; full week is an expand toggle) + queue-depth strip + `WhppvHea
   line renders only when some cell actually trips it. The p25 single-hour red-outline flag and
   the backlog spine overlay are both **retired**.
 - **Shift-boundary rules** land at each distinct `startHour`, labeled in the gutter.
-- `lib/whppvColorDomain.ts`'s week-level `computeColorDomain` still exists but no longer drives
-  heatmap color — narrative band language only.
+- **Legend** states the numeric peer-typical range (`whppvBand.low`–`whppvBand.high` wHPPV) —
+  restored, since there's a single range again to show.
+- **Tooltips** — heatmap cells and the marginal-curve markers (`MarginalReturnsCurve.tsx`) both
+  render through a shared JS-driven tooltip (`components/HoverTooltip.tsx` +
+  `lib/useHoverTooltip.ts`), not native `title`/SVG `<title>` — those turned out not to fire
+  reliably in practice. Don't reintroduce native title attributes for either without checking.
 
 ## Conventions
 
@@ -105,6 +129,28 @@ never a second hand-written set.
 | `currentStaffingGrid` | "What you actually staff today." Independent, starts blank, **never** seeded from `result.grid`. Written by both setup and results. |
 | `sandboxEdGrid` / `sandboxHoldGrid` | Panel 5's ephemeral what-if. `null` = untouched. In the store only so `pptxExport` can read it. |
 
+## Panel 5 (2026-08-05 redesign) — starting-point cards, `activeStrategy`, joint +/- control
+
+Replaces the flat `.button-row` of starting-point buttons and the separate ED/hold add/remove
+button rows. Builds on the queue-depth fix above — the marginal curve/queue strip needed correct
+numbers before the +/- control could be judged against them.
+
+- **Stacked starting-point cards** (title + description, "still editable after") replace the
+  button row. "Re-allocated Current Staffing" has different copy per toggle — `computeScenarioB`
+  vs. `computeCombinedReallocation`. A new "Mixed ED + Hold" card (combined only) wires up
+  `solveEdHoldJointCoverage` — previously unused by any Panel 5 button, see engine-solver.md;
+  its total won't match "All ED Nurses"/"Hold Nurses for Boarding," flagged in its own copy.
+- **`activeStrategy`** (`'current' | 'reallocated' | 'allEd' | 'holdSplit' | 'mixed'`) tracks the
+  last-clicked card. Resets to `'current'` on toggle change; a manual grid edit never touches it.
+- **The +/- control** moved to a single up/down next to `MarginalReturnsCurve`'s "Your scenario"
+  marker. Under Arrivals, or `activeStrategy === 'allEd'`, it operates on ED alone. Otherwise it
+  jointly picks ED vs. hold via `bestUnitToAdd`/`Remove` scored against `edResidualDemand168`/
+  `holdCandidateDemand168` on hours of deficit/slack — JUDGMENT CALL, flagged in `Panel5.tsx`:
+  not cost-normalized, can favor the pool with the longer best shift.
+- **ED `GridEditor` delta**: each cell shows a live `(+N)/(-N)` vs. `currentStaffingGrid`. Not on
+  the hold table — no baseline exists there.
+- **Per-shift diagnostic** (Panel 1's, see table above) replaces "Hours below need this week."
+
 ## Live inconsistency, flagged not fixed
 
 Panel 4's "each additional shift removes roughly X hours" prose is driven by the **trim-based**
@@ -118,6 +164,7 @@ engine computations answering adjacent questions. Not reconciled.
 |---|---|
 | Heatmap cell number | Changed three times (wHPPV -> ratio -> headcount). |
 | Heatmap rich-side color | Reversed twice. Muting it hid the most actionable finding on the page. |
+| Heatmap color's reference band | Reversed twice (week-level -> per-hour -> week-level, 2026-08-05). Per-hour, while mathematically the same peer band, reads as inconsistent and can leave the prose-cited extreme hour uncolored. |
 | Backlog overlay | Spine added, then removed entirely — it read as a table border, not data. |
 | Boarding output shape | Four reversals. See `boarding-seasonality.md`. |
 | The welcome/philosophy banner | Rewritten five times. |

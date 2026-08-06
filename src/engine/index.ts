@@ -35,6 +35,7 @@ export {
 export { solveEdHoldJointCoverage } from './edHoldSolve';
 export {
   computeBacklog,
+  computeBacklogFromCapacity,
   summarizeBacklogSeverity,
   BACKLOG_CAUGHT_UP_THRESHOLD,
   type BacklogResult,

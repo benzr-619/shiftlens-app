@@ -81,7 +81,7 @@ describe('narrative.ts — pure headline functions', () => {
     expect(general).toContain('cut modeled queued-arrivals-work by roughly');
   });
 
-  it('shiftDiagnosticSentence: per-shift groups render singular/plural, boarding-absent, and both overstaffed branches (PANEL1_COPY_REVISION_SPEC_2026-07-28.md §4)', () => {
+  it('shiftDiagnosticSentence: sign-aware net = staffed - arrivalDemand - boardingDemand, singular/plural, boarding-absent, and both surplus branches (2026-08-05 boarding-capacity-fix)', () => {
     const understaffedSingle: ShiftDiagnosticGroup = {
       shiftIds: ['night'],
       labels: ['Night'],
@@ -93,13 +93,15 @@ describe('narrative.ts — pure headline functions', () => {
       boardingCovered: false,
     };
     const s1 = shiftDiagnosticSentence(understaffedSingle);
-    expect(s1).toContain('On average, Night shift is understaffed for arrivals');
-    expect(s1).toContain("doesn't have enough nursing hours left over to also cover its boarding demand");
+    expect(s1).toBe(
+      'On average, Night shift runs 167 nursing hours short of arrivals demand alone. Boarding adds another 283 hours of demand on the same nurses, widening the shortfall to 450 hours total.'
+    );
 
     const understaffedNoBoarding: ShiftDiagnosticGroup = { ...understaffedSingle, boardingNeedHours: null, boardingCovered: null };
     const s2 = shiftDiagnosticSentence(understaffedNoBoarding);
     expect(s2).toBe('On average, Night shift is understaffed for arrivals.');
 
+    // arrivalsNet = 900 - 700 = 200 (ahead); boardingNeed 350 > 200 -> leaves a shortfall.
     const overstaffedPluralNotCovered: ShiftDiagnosticGroup = {
       shiftIds: ['day', 'evening'],
       labels: ['Day', 'Evening'],
@@ -111,20 +113,23 @@ describe('narrative.ts — pure headline functions', () => {
       boardingCovered: false,
     };
     const s3 = shiftDiagnosticSentence(overstaffedPluralNotCovered);
-    expect(s3).toContain('On average, Day and Evening shifts are overstaffed for arrivals');
-    expect(s3).toContain("but don't have enough nursing hours left over to also cover their boarding demand");
-    expect(s3).toContain("The extra 200 hours they carry don't fully close the 350 hours of boarding demand there.");
+    expect(s3).toBe(
+      'On average, Day and Evening shifts run 200 nursing hours ahead of arrivals demand alone. Boarding claims 350 of that surplus first, leaving 150 hours of a shortfall.'
+    );
 
+    // Same arrivalsNet, smaller boarding claim -> leaves a cushion instead.
     const overstaffedCovered: ShiftDiagnosticGroup = { ...overstaffedPluralNotCovered, boardingNeedHours: 50, boardingCovered: true };
     const s4 = shiftDiagnosticSentence(overstaffedCovered);
-    expect(s4).toBe('On average, Day and Evening shifts are overstaffed for arrivals, and do have enough nursing hours left over to also cover their boarding demand.');
+    expect(s4).toBe(
+      'On average, Day and Evening shifts run 200 nursing hours ahead of arrivals demand alone. Boarding claims 50 of that surplus first, leaving 150 hours of cushion.'
+    );
 
     const threeShifts: ShiftDiagnosticGroup = {
       ...understaffedSingle,
       shiftIds: ['a', 'b', 'c'],
       labels: ['Day', 'Evening', 'Night'],
     };
-    expect(shiftDiagnosticSentence(threeShifts)).toContain('On average, Day, Evening, and Night shifts are understaffed');
+    expect(shiftDiagnosticSentence(threeShifts)).toContain('On average, Day, Evening, and Night shifts run 167 nursing hours short');
   });
 
   it('synthesisHeadlineSentence: positive, negative, and near-zero gap all produce distinct endings (§12.3)', () => {
