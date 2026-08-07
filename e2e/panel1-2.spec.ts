@@ -14,11 +14,11 @@ test('Panel 1 renders, its toggle switches views, and the frame shows all three 
   await expect(panel1.locator('.frame-queue-strip')).toBeVisible();
   await expect(panel1.locator('.whppv-heatmap')).toBeVisible();
 
-  // PANEL1_COPY_REVISION_SPEC_2026-07-28.md §6 — the "Effective wHPPV" toggle is dropped;
+  // PANEL1_COPY_REVISION_SPEC_2026-07-28.md §6 — the "Effective WHPPV" toggle is dropped;
   // 2026-07-30 — the "Boarding" toggle is also dropped, and the remaining "Combined" toggle
   // is renamed "Arrivals + Boarding" (matching Panels 2/3). Panel 1 keeps exactly two toggles:
   // Arrivals, Arrivals + Boarding.
-  const effectiveToggle = panel1.getByRole('tab', { name: 'Effective wHPPV' });
+  const effectiveToggle = panel1.getByRole('tab', { name: 'Effective WHPPV' });
   await expect(effectiveToggle).toHaveCount(0);
 
   const boardingToggle = panel1.getByRole('tab', { name: 'Boarding', exact: true });

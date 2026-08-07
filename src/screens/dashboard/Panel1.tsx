@@ -34,6 +34,7 @@ function sortByStartHour(shifts: ShiftDef[]): ShiftDef[] {
 function buildCells(
   onDuty168: number[],
   requirement168: number[],
+  demandRaw168: number[],
   arrivals168: number[],
   belowFloorSet: Set<string>,
   perShiftBreakdown168?: Array<Array<{ label: string; headcount: number }>>
@@ -49,6 +50,7 @@ function buildCells(
         hour,
         onDuty: onDuty168[g] ?? 0,
         requirement: requirement168[g] ?? 0,
+        demandRaw: demandRaw168[g] ?? 0,
         arrivals: arrivals168[g] ?? 0,
         belowFloor,
         riskReasons: belowFloor ? ['below the ENA on-duty floor'] : [],
@@ -92,6 +94,12 @@ export function Panel1() {
     () => result.hourlyRequirement.map((v, i) => v + (boardingCurve ? boardingCurve[i] : 0)),
     [result.hourlyRequirement, boardingCurve]
   );
+  // Tooltip-only fractional counterparts of the two demand curves above, pre-`Math.ceil` — see
+  // WhppvHeatmapCell.demandRaw's header comment.
+  const combinedRequirementRaw = useMemo(
+    () => result.cellCoreHoursSmoothed.map((v, i) => v + (boardingCurve ? boardingCurve[i] : 0)),
+    [result.cellCoreHoursSmoothed, boardingCurve]
+  );
 
   // §5a — the ACTUAL curve (BacklogResult.backlog), never `.cyclicalBacklog`, computed against
   // ARRIVALS ONLY and shown on every toggle regardless of which demand curve that toggle's
@@ -105,7 +113,7 @@ export function Panel1() {
   //
   // 2026-07-28 (ninth shape, BACKLOG_MODEL_VISITS_BASED_SPEC_2026-07-28.md): real visits-based
   // compression (real `arrivals` counts + `result.floorWhppv`, the department's own
-  // peer-cohort p25 wHPPV). See backlogModel.ts's header and
+  // peer-cohort p25 WHPPV). See backlogModel.ts's header and
   // .claude/rules/engine-solver.md's ninth-shape section.
   const backlogArrivals = useMemo(
     () => computeBacklog(grid, arrivals, result.hourlyRequirement, sortedShiftMenu, result.floorWhppv),
@@ -129,7 +137,7 @@ export function Panel1() {
         <h2>Your current staffing</h2>
         <p>
           Add what you actually staff today — in the comparison grid, or back in setup — and this panel will open
-          with an analysis of it: how your realized wHPPV compares to the peer band, whether boarding is currently
+          with an analysis of it: how your realized WHPPV compares to the peer band, whether boarding is currently
           staffed for at all, and where your staffing runs lean across the week.
         </p>
       </section>
@@ -146,7 +154,7 @@ export function Panel1() {
         ? 'run light for your volume'
         : 'run rich for your volume';
 
-  // Hour-to-hour realized wHPPV range — direct per-cell nurse-hours ÷ arrivals (not the
+  // Hour-to-hour realized WHPPV range — direct per-cell nurse-hours ÷ arrivals (not the
   // scaled-to-reconcile approach the old CoreGridTab used; a min/max descriptive range
   // doesn't need to reconcile to the weekly aggregate ratio the way an averaged stat would).
   // Zero-arrival cells are skipped (no meaningful per-visit ratio there).
@@ -206,10 +214,17 @@ export function Panel1() {
 
   const enaFloorSet = new Set(current.enaFloorViolationsRemaining.map((v) => `${v.day}-${v.hour}`));
 
-  const arrivalsCells = buildCells(currentCapacity, result.hourlyRequirement, arrivals, enaFloorSet, perShiftBreakdown);
-  const combinedCells = buildCells(currentCapacity, combinedRequirement, arrivals, enaFloorSet, perShiftBreakdown);
+  const arrivalsCells = buildCells(
+    currentCapacity,
+    result.hourlyRequirement,
+    result.cellCoreHoursSmoothed,
+    arrivals,
+    enaFloorSet,
+    perShiftBreakdown
+  );
+  const combinedCells = buildCells(currentCapacity, combinedRequirement, combinedRequirementRaw, arrivals, enaFloorSet, perShiftBreakdown);
 
-  // §6 — the "Effective wHPPV" toggle is dropped entirely; the "Boarding" toggle was dropped
+  // §6 — the "Effective WHPPV" toggle is dropped entirely; the "Boarding" toggle was dropped
   // 2026-07-30 (Ben's ask) — two toggles remain (Arrivals, Arrivals + Boarding — renamed from
   // "Combined" 2026-07-30, key unchanged), not three or four. The queue strip always shows
   // ARRIVALS backlog, labeled "Arrivals backlog" — boarders can't backlog (they're already
@@ -225,7 +240,7 @@ export function Panel1() {
       structuralFloor: backlogArrivals.structuralFloorMin,
       queueLabel: 'Arrivals backlog',
       heatmapCells: arrivalsCells,
-      heatmapSubLabel: 'Colored by realized wHPPV vs. your peer-typical range.',
+      heatmapSubLabel: 'Colored by realized WHPPV vs. your peer-typical range.',
     },
     {
       key: 'combined',
@@ -236,7 +251,7 @@ export function Panel1() {
       structuralFloor: backlogArrivals.structuralFloorMin,
       queueLabel: 'Arrivals backlog',
       heatmapCells: combinedCells,
-      heatmapSubLabel: 'Colored by realized wHPPV vs. your peer-typical range.',
+      heatmapSubLabel: 'Colored by realized WHPPV vs. your peer-typical range.',
     },
   ];
 
@@ -268,7 +283,7 @@ export function Panel1() {
           </table>
 
           <p className="comparison-headline">
-            Your current staffing realizes <strong>{realized.toFixed(2)} wHPPV</strong> at{' '}
+            Your current staffing realizes <strong>{realized.toFixed(2)} WHPPV</strong> at{' '}
             <strong>{current.weeklyScheduledHours.toFixed(0)} hours/week</strong>. Averaged across the
             week, your staffed hours {staffedPhrase}.
           </p>
@@ -276,11 +291,11 @@ export function Panel1() {
           {minHourlyWhppv && maxHourlyWhppv && (
             <>
               <p>
-                Hour to hour, wHPPV ranges from <strong>{minHourlyWhppv.value.toFixed(2)}</strong> (
+                Hour to hour, WHPPV ranges from <strong>{minHourlyWhppv.value.toFixed(2)}</strong> (
                 {DAY_LABELS[minHourlyWhppv.day]} {fmtHour(minHourlyWhppv.hour)}) up to{' '}
                 <strong>{maxHourlyWhppv.value.toFixed(2)}</strong> ({DAY_LABELS[maxHourlyWhppv.day]}{' '}
                 {fmtHour(maxHourlyWhppv.hour)}). <strong>{pctBelowFloor.toFixed(0)}%</strong> of hours fall
-                below your peer-typical floor.
+                below your peer-typical range.
               </p>
               <details className="why-toggle-wrap">
                 <summary className="btn-link why-toggle">What is my peer-typical range?</summary>
@@ -288,9 +303,9 @@ export function Panel1() {
                   <p>
                     Your peer-typical range is{' '}
                     <strong>
-                      {band.p25Whppv.toFixed(2)}–{band.p75Whppv.toFixed(2)} wHPPV
+                      {band.p25Whppv.toFixed(2)}–{band.p75Whppv.toFixed(2)} WHPPV
                     </strong>{' '}
-                    — the 25th–75th percentile wHPPV reported by EDs of a similar annual volume to yours,
+                    — the 25th–75th percentile WHPPV reported by EDs of a similar annual volume to yours,
                     each measured as a single year-round average, not hour by hour. It's normal for individual
                     hours to fall outside this range even when your average staffing is appropriate — that's
                     expected, not a problem on its own. Think of it as a rough gauge of how over- or
@@ -305,16 +320,18 @@ export function Panel1() {
           {result.boarding && (
             <>
               <p>
-                Boarding demands the equivalent of <strong>{(result.lostProductivity?.wHppvConsumedByBoarding ?? 0).toFixed(2)} wHPPV</strong>,{' '}
+                On average, boarding demands <strong>{result.boarding.weeklyBoardingHours.toFixed(0)} hours/week</strong>,{' '}
                 <strong>
                   {result.annualVisits > 0
                     ? (((result.lostProductivity?.wHppvConsumedByBoarding ?? 0) / wHppvTarget) * 100).toFixed(0)
                     : 0}
                   %
                 </strong>{' '}
-                of your department's total nursing hours. Said differently, effective wHPPV after accounting for
-                boarding is <strong>{effectiveWhppv.toFixed(2)}</strong>, {effectivePositionPhrase} for a department
-                of your size.
+                of your department's total nursing hours, and the equivalent of{' '}
+                <strong>{(result.lostProductivity?.wHppvConsumedByBoarding ?? 0).toFixed(2)} WHPPV</strong>. Said
+                differently, effective WHPPV after accounting for boarding is{' '}
+                <strong>{effectiveWhppv.toFixed(2)}</strong>, {effectivePositionPhrase} for a department of your
+                size.
               </p>
             </>
           )}

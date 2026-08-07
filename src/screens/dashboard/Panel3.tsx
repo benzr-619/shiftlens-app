@@ -13,7 +13,12 @@ function sortByStartHour(shifts: ShiftDef[]): ShiftDef[] {
   return [...shifts].sort((a, b) => a.startHour - b.startHour);
 }
 
-function buildCells(onDuty168: number[], requirement168: number[], arrivals168: number[]): WhppvHeatmapCell[] {
+function buildCells(
+  onDuty168: number[],
+  requirement168: number[],
+  demandRaw168: number[],
+  arrivals168: number[]
+): WhppvHeatmapCell[] {
   const cells: WhppvHeatmapCell[] = [];
   for (let day = 0; day < 7; day++) {
     for (let hour = 0; hour < 24; hour++) {
@@ -23,6 +28,7 @@ function buildCells(onDuty168: number[], requirement168: number[], arrivals168: 
         hour,
         onDuty: onDuty168[g] ?? 0,
         requirement: requirement168[g] ?? 0,
+        demandRaw: demandRaw168[g] ?? 0,
         arrivals: arrivals168[g] ?? 0,
         belowFloor: false,
         riskReasons: [],
@@ -125,6 +131,8 @@ export function Panel3() {
 
   const boardingCurve = result.boarding?.cellBoardingRnHours ?? null;
   const combinedRequirement = result.hourlyRequirement.map((v, i) => v + (boardingCurve ? boardingCurve[i] : 0));
+  // Tooltip-only fractional counterpart, pre-`Math.ceil` — see WhppvHeatmapCell.demandRaw.
+  const combinedRequirementRaw = result.cellCoreHoursSmoothed.map((v, i) => v + (boardingCurve ? boardingCurve[i] : 0));
 
   const staffedHours = sortedShiftMenu.reduce(
     (acc, s) => acc + Object.keys(grid).reduce((a, d) => a + (grid[Number(d)]?.[s.id] ?? 0) * s.lengthHours, 0),
@@ -138,11 +146,13 @@ export function Panel3() {
     key === 'arrivals'
       ? {
           demand: result.hourlyRequirement,
+          demandRaw: result.cellCoreHoursSmoothed,
           fullGrid: result.fullCoverage.grid,
           weeklyHours: result.fullCoverage.weeklyHours,
         }
       : {
           demand: combinedRequirement,
+          demandRaw: combinedRequirementRaw,
           fullGrid: result.fullCoverageCombined.grid,
           weeklyHours: result.fullCoverageCombined.weeklyHours,
         };
@@ -150,7 +160,7 @@ export function Panel3() {
   const activeState = stateFor(active);
   const fteDelta = ((activeState.weeklyHours - staffedHours) * 52) / hoursPerFteAnnual;
 
-  // Average + hour-to-hour realized wHPPV for the active ceiling grid, same computation
+  // Average + hour-to-hour realized WHPPV for the active ceiling grid, same computation
   // Panel1/Panel2 use (realizedWHppv = weeklyHours*52/annualVisits; min/max is a direct
   // per-cell capacity/arrivals ratio, zero-arrival cells skipped).
   const activeCapacity = fullWeekCapacity(activeState.fullGrid, sortedShiftMenu);
@@ -158,8 +168,8 @@ export function Panel3() {
   const peerBand = lookupWhppvBand(result.annualVisits);
   const whppvBand = computeColorDomain(result.annualVisits, inputs.wHppvTarget);
   const showTooLargeNote = avgWhppv > peerBand.p75Whppv;
-  // Same delta the wHPPV figure above expresses, converted to hours/week: this ED's own
-  // representative-week visit count (annualVisits/52) times the wHPPV gap above the peer
+  // Same delta the WHPPV figure above expresses, converted to hours/week: this ED's own
+  // representative-week visit count (annualVisits/52) times the WHPPV gap above the peer
   // median — kept as one multiplication of the SAME (avgWhppv - medianWhppv) figure so the
   // two numbers in the sentence below can never drift apart from each other.
   const weeklyVisits = result.annualVisits / 52;
@@ -186,7 +196,7 @@ export function Panel3() {
       capacity168: capacity,
       queueDepth168: null,
       structuralFloor: null,
-      heatmapCells: buildCells(capacity, s.demand, arrivals),
+      heatmapCells: buildCells(capacity, s.demand, s.demandRaw, arrivals),
     } satisfies VisualFrameView;
   });
 
@@ -292,11 +302,11 @@ export function Panel3() {
           </details>
 
           <p>
-            This staffing comes out to <strong>{avgWhppv.toFixed(2)} wHPPV</strong> on average.
+            This staffing comes out to <strong>{avgWhppv.toFixed(2)} WHPPV</strong> on average.
             {minHourlyWhppv && maxHourlyWhppv && (
               <>
                 {' '}
-                Hour to hour, wHPPV ranges from <strong>{minHourlyWhppv.value.toFixed(2)}</strong> (
+                Hour to hour, WHPPV ranges from <strong>{minHourlyWhppv.value.toFixed(2)}</strong> (
                 {DAY_LABELS[minHourlyWhppv.day]} {fmtHour(minHourlyWhppv.hour)}) up to{' '}
                 <strong>{maxHourlyWhppv.value.toFixed(2)}</strong> ({DAY_LABELS[maxHourlyWhppv.day]}{' '}
                 {fmtHour(maxHourlyWhppv.hour)}).
@@ -307,7 +317,7 @@ export function Panel3() {
           {showTooLargeNote && (
             <p>
               This number is <strong>{Math.max(0, hoursAboveTypical).toFixed(0)} hours/week</strong> and{' '}
-              <strong>{(avgWhppv - peerBand.medianWhppv).toFixed(2)} wHPPV</strong> larger than typical average
+              <strong>{(avgWhppv - peerBand.medianWhppv).toFixed(2)} WHPPV</strong> larger than typical average
               staffing since it does not allow a single hour to fall below ideal staffing. The next panel is more
               rational, accepting the trade-offs of real world budgets.
             </p>

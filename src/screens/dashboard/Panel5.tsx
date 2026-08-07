@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '../../store';
 import type { ShiftDef, Grid } from '../../engine/types';
-import { DAY_LABELS } from '../../engine/types';
+import { DAY_LABELS, DEFAULTS } from '../../engine/types';
 import { fullWeekCapacity, solveFullCoverageWeekWithTrajectory, bestUnitToAdd, bestUnitToRemove, shiftGlobalHours } from '../../engine/solver';
 import { recommendWeeklyBoardingGrid, weeklyArrivalsSpareByCell } from '../../engine/boarding';
 import {
@@ -9,13 +9,20 @@ import {
   computeCombinedReallocation,
   computeBacklogFromCapacity,
   computePerShiftDiagnostic,
-  solveEdHoldJointCoverage,
-  NO_COMPRESSION_FLOOR_WHPPV,
 } from '../../engine';
 import { lookupWhppvBand } from '../../lib/edbaLookup';
 import { computeColorDomain } from '../../lib/whppvColorDomain';
 import { computeSandbox } from '../../engine/sandbox';
-import { fmtHour } from '../../lib/queuePattern';
+import { averageDay } from '../../lib/averageDay';
+import {
+  fmtHour,
+  computeQueuePattern,
+  queuePatternSentence,
+  WEEKDAY_DAYS,
+  WEEKEND_DAYS,
+  averageOverDays,
+  patternsDifferMeaningfully,
+} from '../../lib/queuePattern';
 import { shiftDiagnosticSentence } from '../../lib/narrative';
 import { DISPLAY_DAY_ORDER, DISPLAY_DAY_LABELS } from '../../lib/dayOrder';
 import { VisualFrame, type VisualFrameView } from '../../components/VisualFrame';
@@ -52,7 +59,12 @@ function totalHeadcountUnits(grid: Grid, shiftMenu: ShiftDef[]): number {
   return total;
 }
 
-function buildCells(onDuty168: number[], requirement168: number[], arrivals168: number[]): WhppvHeatmapCell[] {
+function buildCells(
+  onDuty168: number[],
+  requirement168: number[],
+  demandRaw168: number[],
+  arrivals168: number[]
+): WhppvHeatmapCell[] {
   const cells: WhppvHeatmapCell[] = [];
   for (let day = 0; day < 7; day++) {
     for (let hour = 0; hour < 24; hour++) {
@@ -62,6 +74,7 @@ function buildCells(onDuty168: number[], requirement168: number[], arrivals168: 
         hour,
         onDuty: onDuty168[g] ?? 0,
         requirement: requirement168[g] ?? 0,
+        demandRaw: demandRaw168[g] ?? 0,
         arrivals: arrivals168[g] ?? 0,
         belowFloor: false,
         riskReasons: [],
@@ -73,7 +86,7 @@ function buildCells(onDuty168: number[], requirement168: number[], arrivals168: 
 
 /** Local copy of the same per-panel helper Panel 1/2/4 each keep their own copy of (repo
  * convention — see those files' own copies) — % of hours (arrivals > 0 only) whose realized
- * wHPPV falls below the peer cohort's p25 floor. */
+ * WHPPV falls below the peer cohort's p25 floor. */
 function pctHoursBelowFloor(capacity168: number[], arrivals168: number[], p25: number): number {
   let total = 0;
   let below = 0;
@@ -121,23 +134,47 @@ function pctDemandCovered(capacity168: number[], demand168: number[]): number {
 
 type Toggle = 'arrivals' | 'combined';
 
-/** 2026-08-05 redesign, §3c — which starting-point card was last clicked. Tracked separately
- * from the grids themselves so the UI can highlight the active card without re-deriving it from
- * grid contents (which a hand-edit would make ambiguous anyway). Reset to 'current' on toggle
- * change; a manual `GridEditor` edit deliberately leaves it untouched — see `editCell` below,
- * which never touches this state. */
-type ActiveStrategy = 'current' | 'reallocated' | 'allEd' | 'holdSplit' | 'mixed';
+/** 2026-08-06 redesign — which mechanism+target cell was last clicked. Tracked separately from
+ * the grids themselves so the UI can highlight the active cell without re-deriving it from grid
+ * contents (which a hand-edit would make ambiguous anyway). Encodes BOTH the mechanism (which
+ * starting grid) and, where meaningful, the target it was built against (arrivals-only vs.
+ * combined) — two questions the page-level Arrivals / Arrivals + Boarding toggle used to
+ * conflate by silently swapping which underlying computation a card ran. The toggle no longer
+ * touches this state at all: flipping it re-scores whichever grid is selected against a
+ * different demand curve (mirroring Panel 1), it never changes the selection. A manual
+ * `GridEditor` edit also deliberately leaves it untouched — see `editCell` below. `holdSplit`
+ * has no arrivals-only counterpart — it's combined-only by definition (it funds a SEPARATE hold
+ * pool, which only exists as a concept once boarding is part of the demand being covered) — so
+ * it carries no target suffix.
+ *
+ * 2026-08-06: a "Mixed ED + Hold" mechanism (a from-scratch joint greedy solve,
+ * `engine/edHoldSolve.ts`) was tried and removed — under this model an ED-nurse-hour is never
+ * worse than a hold-nurse-hour (ED can cover arrivals, BH boarding, AND medical boarding; hold
+ * only medical boarding, capped) with no cost/FTE differential to offset that, so any
+ * coverage-maximizing joint solve provably always allocates 100% to ED and 0% to hold — a
+ * "mixed" mechanism with no way to ever actually produce a mix. Don't resurrect it without
+ * first giving hold pool some genuine advantage (e.g. an ED-hours ceiling) — see git history for
+ * `edHoldSolve.ts` if that's ever wanted. */
+type ActiveStrategy =
+  | 'current'
+  | 'reallocated-arrivals'
+  | 'reallocated-combined'
+  | 'allEd-arrivals'
+  | 'allEd-combined'
+  | 'holdSplit';
 
 /** Hours of deficit (or, for a remove candidate, hours of slack) a single (day, shift) unit
- * covers against a demand curve — the SAME scoring `solver.ts`'s internal `bestAddCandidate`/
- * `bestCutCandidate` already use, re-derived here (not exported, both are file-private) so §3d's
- * joint ED-vs-hold control can compare a candidate from EACH pool on one common, comparable
- * metric. `wantDeficit=true` scores "how much this unit would relieve" (for add); `false` scores
- * "how much slack this unit already sits on" (for remove — the more slack, the safer/cheaper the
- * cut). JUDGMENT CALL, flagged: comparing two differently-scaled pools (ED vs. hold) by raw
- * hours-covered rather than a cost-normalized metric can favor whichever pool's best shift
- * happens to be longer; deemed acceptable for a single-step advisory control, not a solver
- * objective — revisit if it visibly favors one pool over the other in practice.
+ * covers against a demand curve — a coarser, count-based cousin of `solver.ts`'s exact
+ * coverage-hours scorers (`bestUnitToAdd`/`bestUnitToRemove`'s internal `coverageDeltaForUnit`),
+ * re-derived here (not exported, file-private) so §3d's joint ED-vs-hold control can compare a
+ * candidate ALREADY chosen from each pool (by the exact scorer, within-pool) on one common,
+ * comparable metric across pools. `wantDeficit=true` scores "how much this unit would relieve"
+ * (for add); `false` scores "how much slack this unit already sits on" (for remove — the more
+ * slack, the safer/cheaper the cut). JUDGMENT CALL, flagged: comparing two differently-scaled
+ * pools (ED vs. hold) by raw hours-covered rather than a cost-normalized metric can favor
+ * whichever pool's best shift happens to be longer; deemed acceptable for a single-step
+ * advisory control, not a solver objective — revisit if it visibly favors one pool over the
+ * other in practice.
  */
 function candidateCoverageScore(day: number, shift: ShiftDef, capacity168: number[], demand168: number[], wantDeficit: boolean): number {
   const hours = shiftGlobalHours(day, shift);
@@ -145,15 +182,18 @@ function candidateCoverageScore(day: number, shift: ShiftDef, capacity168: numbe
 }
 
 /**
- * PANEL 5 REDESIGN (2026-08-05, planned in Cowork) — "Test it yourself." REPLACES the prior
- * two-grids/two-pools-always-visible build (PR G of RESULTS_PAGE_V2_SPEC_2026-07-27.md §5.4).
- * See .claude/rules/results-redesign.md's dated 2026-08-05 section for the full architecture.
+ * PANEL 5 REDESIGN (2026-08-06) — "Test it yourself." REPLACES the 2026-08-05 build's flat
+ * starting-point card stack, whose OFFERED cards (and, for "Re-allocated"/"Solver Staffing", the
+ * underlying compute call each ran) changed with the page's Arrivals / Arrivals + Boarding
+ * toggle — making the toggle behave like Panels 2/3 (changes what's recommended) instead of
+ * Panel 1 (a pure lens on the same selection). See .claude/rules/results-redesign.md's Panel 5
+ * section for the full architecture.
  *
- * Governing change: an Arrivals / Arrivals + Boarding toggle (same `VisualFrame` controlled-
- * toggle pattern Panels 1/2/4 already use) now drives EVERYTHING on the panel — which demand
- * curve scores every stat/curve, which starting-point cards render, and whether the hold-
- * nurse grid/table/shift-restriction row exist at all (fully unmounted under Arrivals, not
- * just zeroed).
+ * Governing change: the toggle now drives ONLY which demand curve scores the currently-selected
+ * grid (`VisualFrame`/`computeBacklog`, same as Panel 1) — never which grid is selected. Which
+ * starting grid to test is a separate, explicit choice made via the mechanism x target matrix
+ * below (`strategyMatrix`); every row is reachable regardless of `toggle`, and a selection
+ * persists across a toggle flip.
  */
 export function Panel5() {
   const {
@@ -173,9 +213,19 @@ export function Panel5() {
 
   const [toggle, setToggle] = useState<Toggle>('arrivals');
   const [activeStrategy, setActiveStrategy] = useState<ActiveStrategy>('current');
+  // Tracks whether the grids have been hand-edited (GridEditor cell edit or the +/- marginal
+  // control) since `activeStrategy` was last set by a matrix click. Cleared by every prefill*
+  // function, set by every mutation path that ISN'T a prefill — so the matrix can tell "this is
+  // still exactly what you started from" (Selected) from "you've since changed it" (Reset),
+  // without diffing grid contents cell-by-cell.
+  const [hasEdits, setHasEdits] = useState(false);
+  // 2026-08-06 redesign — the toggle is a pure lens (which demand curve scores the SAME selected
+  // grid), never a mechanism switch. It must never touch `activeStrategy` or either sandbox
+  // grid — a selection made under one toggle state stays selected after flipping it, exactly so
+  // a user can build "re-allocated for arrivals only" and then flip to combined to see what
+  // boarding costs a plan that never accounted for it.
   function changeToggle(next: Toggle) {
     setToggle(next);
-    setActiveStrategy('current');
   }
 
   // §4 — hold-shift restriction. Default: every shift is allowed. A shift newly added to the
@@ -299,34 +349,42 @@ export function Panel5() {
   const medBoarding168 = useMemo(() => combined.map((v) => v * medFraction), [combined, medFraction]);
   const bhBoarding168 = useMemo(() => combined.map((v) => v * (1 - medFraction)), [combined, medFraction]);
 
-  // §3 — starting-point cards, per toggle. Each sets `activeStrategy` itself (never `editCell`,
-  // which is what keeps a manual grid edit from silently changing which card reads as active).
+  // §3 — mechanism x target matrix cells. Each sets `activeStrategy` itself (never `editCell`,
+  // which is what keeps a manual grid edit from silently changing which cell reads as active).
+  // Every one of these is reachable regardless of the current page toggle — the matrix itself
+  // doesn't read `toggle` at all; each cell that has a target bakes it into its OWN name
+  // (`-arrivals`/`-combined`) rather than reading the ambient toggle, which is the entire fix.
   function prefillCurrent() {
     setEdGrid(currentStaffingGrid ? { ...currentStaffingGrid } : emptyGrid(sortedShiftMenu));
     setHoldGrid(emptyGrid(sortedShiftMenu));
     setActiveStrategy('current');
+    setHasEdits(false);
   }
   function prefillReallocatedArrivals() {
     const scenarioB = currentStaffingGrid ? computeScenarioB(result, inputs, currentStaffingGrid) : null;
     setEdGrid(scenarioB ? { ...scenarioB.grid } : currentStaffingGrid ? { ...currentStaffingGrid } : emptyGrid(sortedShiftMenu));
     setHoldGrid(emptyGrid(sortedShiftMenu));
-    setActiveStrategy('reallocated');
+    setActiveStrategy('reallocated-arrivals');
+    setHasEdits(false);
   }
   function prefillReallocatedCombined() {
     const combinedRealloc = currentStaffingGrid ? computeCombinedReallocation(result, inputs, currentStaffingGrid) : null;
     setEdGrid(combinedRealloc ? { ...combinedRealloc.grid } : currentStaffingGrid ? { ...currentStaffingGrid } : emptyGrid(sortedShiftMenu));
     setHoldGrid(emptyGrid(sortedShiftMenu));
-    setActiveStrategy('reallocated');
+    setActiveStrategy('reallocated-combined');
+    setHasEdits(false);
   }
-  function prefillSolverArrivals() {
+  function prefillSolverAllEdArrivals() {
     setEdGrid({ ...result.grid });
     setHoldGrid(emptyGrid(sortedShiftMenu));
-    setActiveStrategy('allEd');
+    setActiveStrategy('allEd-arrivals');
+    setHasEdits(false);
   }
-  function prefillSolverAllEd() {
+  function prefillSolverAllEdCombined() {
     setEdGrid(sumGrids(result.grid, boardingGridAllEd, sortedShiftMenu));
     setHoldGrid(emptyGrid(sortedShiftMenu));
-    setActiveStrategy('allEd');
+    setActiveStrategy('allEd-combined');
+    setHasEdits(false);
   }
   // ED stays exactly `result.grid` — the SAME budget-trimmed arrivals solve Panel4 shows as its
   // "Nurses for Arrivals" table, never re-solved from scratch here. When every shift is allowed
@@ -340,66 +398,104 @@ export function Panel5() {
     setEdGrid({ ...result.grid });
     setHoldGrid({ ...boardingGridForHold });
     setActiveStrategy('holdSplit');
-  }
-  // §3b — NEW: joint ED+hold full-coverage solve (`edHoldSolve.ts`, previously unused by any
-  // Panel 5 button — see .claude/rules/engine-solver.md's now-updated note). Solved from
-  // scratch against BOTH pools at once, restricted to whichever shifts hold nurses are allowed
-  // to work — its total will generally NOT match either `prefillSolverAllEd`'s or
-  // `prefillSolverHoldSplit`'s total, since those solve ED alone (or ED alone plus a
-  // separately-solved hold grid) rather than jointly.
-  function prefillSolverMixed() {
-    const { edGrid: mixedEd, holdGrid: mixedHold } = solveEdHoldJointCoverage(
-      combinedRequirement,
-      medBoarding168,
-      sortedShiftMenu,
-      allowedHoldShiftMenu
-    );
-    setEdGrid(mixedEd);
-    setHoldGrid(mixedHold);
-    setActiveStrategy('mixed');
+    setHasEdits(false);
   }
 
   // §5/§6/§9 — the current sandbox test schedule's own combined ED+hold picture.
   const edCapacity = fullWeekCapacity(edGrid, sortedShiftMenu);
   const holdCapacityRaw = fullWeekCapacity(holdGrid, sortedShiftMenu);
   const sandbox = computeSandbox(result.hourlyRequirement, medBoarding168, bhBoarding168, arrivals, edCapacity, holdCapacityRaw);
+  // Tooltip-only fractional counterpart of `sandbox.residualDemand`, pre-`Math.ceil` on the
+  // arrivals component — see WhppvHeatmapCell.demandRaw. Reuses `sandbox.holdApplied` (the
+  // real, already-computed capping) rather than re-deriving it, so this can never disagree with
+  // the actual solve about how much boarding hold nurses absorbed.
+  const residualDemandRaw = useMemo(
+    () => result.cellCoreHoursSmoothed.map((v, i) => v + (medBoarding168[i] - sandbox.holdApplied[i]) + bhBoarding168[i]),
+    [result.cellCoreHoursSmoothed, medBoarding168, bhBoarding168, sandbox.holdApplied]
+  );
   // The combined ED+hold capacity this staffing actually delivers — ED capacity plus hold's
   // capped contribution (never more than that hour's own medical boarding demand, per §5's
   // capping convention, same as `computeSandbox`'s `holdApplied`).
   const combinedCapacity168 = useMemo(() => edCapacity.map((v, i) => v + sandbox.holdApplied[i]), [edCapacity, sandbox.holdApplied]);
 
-  const cells = buildCells(edCapacity, sandbox.residualDemand, arrivals);
-  const holdSurplusTotal = sandbox.holdSurplus.reduce((a, b) => a + b, 0);
+  const cells = buildCells(edCapacity, sandbox.residualDemand, residualDemandRaw, arrivals);
 
-  // Same per-shift diagnostic Panel 1/2/4 show (§4, engine/hiddenBoarding.ts), REPLACING the
-  // old single "Hours below need this week" aggregate — that number blended ED and hold
-  // shortfall into one figure with no sense of WHICH shift is short or by how much; the
-  // per-shift sentences say that directly. Scored against the total staffed grid (ED + hold
-  // together — both are real, paid-for hours) under Arrivals + Boarding, ED alone under
-  // Arrivals (hold isn't part of that toggle's own story); boarding only folds in under
-  // 'combined', matching that toggle's own demand curve.
-  const diagnosticGrid = toggle === 'combined' ? sumGrids(edGrid, holdGrid, sortedShiftMenu) : edGrid;
+  // 2026-08-07 — boarding demand NET of what hold nurses actually absorb (`sandbox.holdApplied`,
+  // capped at that hour's own medical boarding demand — same capping the rest of the sandbox
+  // already uses). This is the boarding that's STILL a claim on ED capacity, so it's what both
+  // the boarding paragraph and the per-shift diagnostic below should read as "boarding demand" —
+  // otherwise a staffed hold pool would silently go uncredited and boarding would keep reading
+  // as if nothing had been done about it.
+  const netBoarding168 = useMemo(() => combined.map((v, i) => v - sandbox.holdApplied[i]), [combined, sandbox.holdApplied]);
+  const holdCoveredWeeklyHours = sandbox.holdApplied.reduce((a, b) => a + b, 0);
+  const remainingBoardingWeeklyHours = netBoarding168.reduce((a, b) => a + b, 0);
+
+  // 2026-08-07 — prose is now a static read of "this staffing," patterned after Panel 1: the
+  // Arrivals / Arrivals + Boarding toggle re-scores the SAME selected/edited grids against a
+  // different demand curve for the VISUALS only (VisualFrame, the marginal curve, the +/-
+  // control), exactly as it already did for `activeStrategy`. It must never change which prose
+  // sentences render or what they say. Capacity is ED ONLY here (not ED+hold) — "ahead of/short
+  // of arrivals demand alone" only means something measured against the pool that actually
+  // serves arrivals; hold's contribution is credited entirely by shrinking the boarding-need
+  // curve above (`netBoarding168`), not by adding to the capacity side too, which would double-
+  // count it.
   const perShiftDiagnostic = computePerShiftDiagnostic(
     result.hourlyRequirement,
-    diagnosticGrid,
+    edGrid,
     sortedShiftMenu,
     result.bandFloorHourly,
     result.bandCeilingHourly,
-    toggle === 'combined' ? combined : null
+    netBoarding168
   );
 
-  // §6 — the three-sentence stat pattern (Panel 1/4's own wording), scored against this
-  // staffing's actual scheduled hours (ED + hold combined — both pools are real, paid-for
-  // hours) and the combined ED+hold capacity curve above.
+  // §6 — the three-sentence stat pattern (Panel 1/4's own wording). The headline WHPPV/hours
+  // figure is ED hours ONLY, mirroring Panel 1's headline (which has no hold-pool concept
+  // either) — boarding/hold get their own separate sentences below rather than being blended
+  // into the arrivals-facing WHPPV number, matching "Panel 5 alone distinguishes ED nurses from
+  // hold nurses" (results-redesign.md).
   const edWeeklyHours = sortedShiftMenu.reduce((acc, s) => acc + Object.keys(edGrid).reduce((a, d) => a + (edGrid[Number(d)]?.[s.id] ?? 0) * s.lengthHours, 0), 0);
-  const holdWeeklyHours =
-    toggle === 'combined'
-      ? sortedShiftMenu.reduce((acc, s) => acc + Object.keys(holdGrid).reduce((a, d) => a + (holdGrid[Number(d)]?.[s.id] ?? 0) * s.lengthHours, 0), 0)
-      : 0;
-  const totalWeeklyHours = edWeeklyHours + holdWeeklyHours;
-  const avgWhppv = result.annualVisits > 0 ? (totalWeeklyHours * 52) / result.annualVisits : 0;
+  const holdWeeklyHours = sortedShiftMenu.reduce(
+    (acc, s) => acc + Object.keys(holdGrid).reduce((a, d) => a + (holdGrid[Number(d)]?.[s.id] ?? 0) * s.lengthHours, 0),
+    0
+  );
+  const avgWhppv = result.annualVisits > 0 ? (edWeeklyHours * 52) / result.annualVisits : 0;
   const { min: minHourlyWhppv, max: maxHourlyWhppv } = hourlyWhppvRange(combinedCapacity168, arrivals);
   const pctBelowFloor = pctHoursBelowFloor(combinedCapacity168, arrivals, band.p25Whppv);
+  // Same relative-FTE framing Panel 3/4 use — signed both ways, since this sandbox scenario can
+  // land above OR below current staffing.
+  const hoursPerFteAnnual = inputs.hoursPerFteAnnual ?? DEFAULTS.hoursPerFteAnnual;
+  const currentStaffedWeeklyHours = sortedShiftMenu.reduce(
+    (acc, s) =>
+      acc + Object.keys(currentStaffingGrid ?? {}).reduce((a, d) => a + (currentStaffingGrid?.[Number(d)]?.[s.id] ?? 0) * s.lengthHours, 0),
+    0
+  );
+  // ED-only comparison against "what you staff today" — apples to apples, since
+  // `currentStaffingGrid` has no hold-nurse concept of its own to compare against.
+  const fteDelta = ((edWeeklyHours - currentStaffedWeeklyHours) * 52) / hoursPerFteAnnual;
+  // Hold's own FTE ask is reported separately, never folded into `fteDelta` above — there's no
+  // "current hold staffing" to net it against, it's simply new headcount this scenario adds.
+  const holdFteDelta = (holdWeeklyHours * 52) / hoursPerFteAnnual;
+
+  // Boarding paragraph (Panel 1's own wording, extended with hold-nurse awareness) — ED-hours
+  // share of the total budget the STILL-UNCOVERED boarding demand consumes (net of whatever hold
+  // nurses already absorbed above), and the effective WHPPV once that's netted out of the
+  // headline figure above.
+  const totalBoardingWeeklyHours = result.boarding?.weeklyBoardingHours ?? 0;
+  const pctBoardingCoveredByHold = totalBoardingWeeklyHours > 0 ? (holdCoveredWeeklyHours / totalBoardingWeeklyHours) * 100 : 0;
+  const remainingBoardingWhppv = result.annualVisits > 0 ? (remainingBoardingWeeklyHours * 52) / result.annualVisits : 0;
+  const remainingBoardingPctOfNursingHours = inputs.wHppvTarget > 0 ? (remainingBoardingWhppv / inputs.wHppvTarget) * 100 : 0;
+  const effectiveWhppv = avgWhppv - remainingBoardingWhppv;
+  const effectivePosition = effectiveWhppv < band.p25Whppv ? 'below' : effectiveWhppv > band.p75Whppv ? 'above' : 'within';
+  const effectivePositionPhrase =
+    effectivePosition === 'within' ? 'within the target range' : effectivePosition === 'below' ? 'below the target range' : 'above the target range';
+
+  // Peak-lag sentence (Panel 1's own wording) — arrivals demand vs. ED capacity only, since hold
+  // nurses don't serve arrivals and so can't move when "your staffing" peaks for this purpose.
+  const avgDemand = averageDay(result.hourlyRequirement);
+  const avgEdCapacity = averageDay(edCapacity);
+  const peakDemandHour = avgDemand.indexOf(Math.max(...avgDemand));
+  const peakCapacityHour = avgEdCapacity.indexOf(Math.max(...avgEdCapacity));
+  const rampGap = (peakCapacityHour - peakDemandHour + 24) % 24;
 
   // §9 — background curve (computed once per toggle change) + a single live dot for the
   // current sandbox schedule, recomputed on every edit/prefill/toggle change since it's derived
@@ -438,12 +534,12 @@ export function Panel5() {
 
   // §10 — the two +/- controls' underlying candidates. ED: whatever's left of the active
   // demand after both pools' current (capped) contribution. Hold: capped medical-boarding-
-  // remaining-after-ED, same capping §5's joint solver uses. JUDGMENT CALL, flagged: removal
-  // needs a "requirement"/"protected floor" curve to score against; under the Arrivals +
-  // Boarding toggle there's no honest visits-based protected floor for a blended demand curve
-  // (same reasoning Panel 2's 'combined' branch already documents), so removal there scores
-  // against the combined demand curve itself with zero floor protection and the NO_COMPRESSION
-  // degenerate case, rather than inventing a new protected-floor concept for blended demand.
+  // remaining-after-ED, same capping §5's joint solver uses. 2026-08-06: Add and Remove now
+  // both score against this SAME demand curve via the SAME coverage metric
+  // (`sum(min(capacity, demand))`, `bestUnitToAdd`/`bestUnitToRemove` in solver.ts) — no
+  // separate "requirement"/"protected floor"/backlog concept for removal anymore, which used to
+  // make Remove hollow out one shift the trim's severity cost happened to call "cheapest"
+  // instead of moving smoothly back down this same curve Add moves up.
   const edResidualDemand168 = useMemo(
     () => activeDemand168.map((d, i) => Math.max(0, d - (toggle === 'combined' ? sandbox.holdApplied[i] : 0))),
     [activeDemand168, toggle, sandbox.holdApplied]
@@ -452,7 +548,6 @@ export function Panel5() {
     () => medBoarding168.map((m, i) => Math.min(m, Math.max(0, activeDemand168[i] - edCapacity[i]))),
     [medBoarding168, activeDemand168, edCapacity]
   );
-  const zero168 = useMemo(() => new Array(168).fill(0), []);
 
   function applyEdDelta(candidate: { day: number; shiftId: string } | null, delta: 1 | -1) {
     if (!candidate) return;
@@ -460,6 +555,7 @@ export function Panel5() {
       ...prev,
       [candidate.day]: { ...prev[candidate.day], [candidate.shiftId]: Math.max(0, (prev[candidate.day]?.[candidate.shiftId] ?? 0) + delta) },
     }));
+    setHasEdits(true);
   }
   function applyHoldDelta(candidate: { day: number; shiftId: string } | null, delta: 1 | -1) {
     if (!candidate) return;
@@ -467,12 +563,13 @@ export function Panel5() {
       ...prev,
       [candidate.day]: { ...prev[candidate.day], [candidate.shiftId]: Math.max(0, (prev[candidate.day]?.[candidate.shiftId] ?? 0) + delta) },
     }));
+    setHasEdits(true);
   }
 
   // §3d — the single up/down control next to the "Your scenario" marker, REPLACING the old
   // separate "+ Add best ED/hold shift" button rows.
-  //   - Under Arrivals, or under Arrivals + Boarding with the "All ED Nurses" solver card
-  //     active: no separate hold pool exists either way, so this always operates on the ED grid
+  //   - Under Arrivals, or with either "All ED Nurses" solver cell active (arrivals or combined
+  //     target): no separate hold pool exists either way, so this always operates on the ED grid
   //     alone — identical logic to the old addEdUnit/removeEdUnit.
   //   - Under Arrivals + Boarding with any other active strategy: jointly decide whether the
   //     next unit is better spent on ED or hold, by comparing each pool's own best candidate
@@ -480,7 +577,7 @@ export function Panel5() {
   //     edResidualDemand168 for ED, holdCandidateDemand168 for hold) on the SAME comparable
   //     metric (`candidateCoverageScore` — hours of deficit relieved, or hours of slack for a
   //     removal), and applies whichever pool's candidate scores higher.
-  const edOnlyControl = toggle === 'arrivals' || activeStrategy === 'allEd';
+  const edOnlyControl = toggle === 'arrivals' || activeStrategy === 'allEd-arrivals' || activeStrategy === 'allEd-combined';
 
   function incrementScenario() {
     if (edOnlyControl) {
@@ -500,32 +597,11 @@ export function Panel5() {
 
   function decrementScenario() {
     if (edOnlyControl) {
-      const requirement168 = toggle === 'arrivals' ? result.hourlyRequirement : combinedRequirement;
-      const protectedFloor168 = toggle === 'arrivals' ? result.protectedFloorHourly : zero168;
-      const volatility168 = toggle === 'arrivals' ? result.demandVolatilityHourly : zero168;
-      const recurrenceArrivals168 = toggle === 'arrivals' ? arrivals : combinedRequirement;
-      const floorWhppv = toggle === 'arrivals' ? result.floorWhppv : NO_COMPRESSION_FLOOR_WHPPV;
-      applyEdDelta(bestUnitToRemove(edGrid, requirement168, protectedFloor168, volatility168, recurrenceArrivals168, floorWhppv, sortedShiftMenu), -1);
+      applyEdDelta(bestUnitToRemove(edGrid, edResidualDemand168, sortedShiftMenu), -1);
       return;
     }
-    const edCandidate = bestUnitToRemove(
-      edGrid,
-      edResidualDemand168,
-      zero168,
-      zero168,
-      edResidualDemand168,
-      NO_COMPRESSION_FLOOR_WHPPV,
-      sortedShiftMenu
-    );
-    const holdCandidate = bestUnitToRemove(
-      holdGrid,
-      holdCandidateDemand168,
-      zero168,
-      zero168,
-      holdCandidateDemand168,
-      NO_COMPRESSION_FLOOR_WHPPV,
-      allowedHoldShiftMenu
-    );
+    const edCandidate = bestUnitToRemove(edGrid, edResidualDemand168, sortedShiftMenu);
+    const holdCandidate = bestUnitToRemove(holdGrid, holdCandidateDemand168, allowedHoldShiftMenu);
     const edShift = edCandidate ? sortedShiftMenu.find((s) => s.id === edCandidate.shiftId) : undefined;
     const holdShift = holdCandidate ? allowedHoldShiftMenu.find((s) => s.id === holdCandidate.shiftId) : undefined;
     const edScore = edCandidate && edShift ? candidateCoverageScore(edCandidate.day, edShift, edCapacity, edResidualDemand168, false) : -1;
@@ -557,6 +633,23 @@ export function Panel5() {
     return computeBacklogFromCapacity(netCapacity, arrivals, result.hourlyRequirement, sortedShiftMenu, result.floorWhppv).backlog;
   }, [edCapacity, boardingClaimOnEd168, arrivals, result.hourlyRequirement, sortedShiftMenu, result.floorWhppv]);
 
+  // §5b backlog build/peak/clear pattern (Panel 1's own wording), on the same arrivals-only,
+  // ED-capacity backlog curve above (`arrivalsQueueDepth`) — see that variable's own comment for
+  // why arrivals gets the real recurrence while boarding doesn't. Static, like every other prose
+  // stat on this panel now — not read from `combinedQueueDepth` or gated on `toggle`.
+  const avgBacklogArrivals = averageDay(arrivalsQueueDepth);
+  const avgRequirementArrivals = averageDay(result.hourlyRequirement);
+  const wholeWeekPattern = computeQueuePattern(avgBacklogArrivals, avgRequirementArrivals);
+  const weekdayPattern = computeQueuePattern(
+    averageOverDays(arrivalsQueueDepth, WEEKDAY_DAYS),
+    averageOverDays(result.hourlyRequirement, WEEKDAY_DAYS)
+  );
+  const weekendPattern = computeQueuePattern(
+    averageOverDays(arrivalsQueueDepth, WEEKEND_DAYS),
+    averageOverDays(result.hourlyRequirement, WEEKEND_DAYS)
+  );
+  const splitMeaningfully = patternsDifferMeaningfully(weekdayPattern, weekendPattern);
+
   const views: VisualFrameView[] = [
     {
       key: 'arrivals',
@@ -580,6 +673,7 @@ export function Panel5() {
 
   function editCell(setter: typeof setEdGrid, day: number, shiftId: string, value: number) {
     setter((prev) => ({ ...prev, [day]: { ...prev[day], [shiftId]: Math.max(0, value) } }));
+    setHasEdits(true);
   }
 
   function GridEditor({
@@ -642,80 +736,59 @@ export function Panel5() {
     );
   }
 
-  // §3a — stacked starting-point cards, per toggle. Each card pre-fills `sandboxEdGrid`/
-  // `sandboxHoldGrid` — a STARTING point, not a lock-in; every card's description says so, and
-  // `GridEditor` stays fully hand-editable afterward. "Re-allocated Current Staffing" carries
-  // different description text per toggle (§3a) since it calls a genuinely different function —
-  // `computeScenarioB` (arrivals-only) under Arrivals, `computeCombinedReallocation` (considers
-  // boarding too) under Arrivals + Boarding.
-  interface StrategyCard {
+  // 2026-08-06 redesign — mechanism (row) x target (column) matrix, replacing the old flat card
+  // stack whose OFFERED cards (and, for "Re-allocated"/"Solver Staffing", the underlying compute
+  // call each ran) used to change with the page-level toggle. That conflated two separate
+  // questions: which starting grid to test (a mechanism, chosen here) vs. which demand to score
+  // it against (the toggle, now a pure lens — see `changeToggle`). Every row below is reachable
+  // regardless of `toggle`; a target-bearing option bakes its target into its own name instead of
+  // reading the ambient toggle. Cells render as a plain "Choose"/"Selected" button, not a
+  // repeated paragraph — the one-line row `description` carries the explanation, once.
+  // `holdSplit` funds a genuinely separate hold pool, a concept that only exists once boarding
+  // is part of what's being covered — combined-only BY DEFINITION, so its button sits under the
+  // "Arrivals + Boarding" column only, with the arrivals-only column left blank rather than a
+  // disabled cell that implies one could exist. (A "Mixed ED + Hold" row existed briefly and was
+  // removed — see the `ActiveStrategy` doc comment above for why it can't work under this model.)
+  interface StrategyOption {
     id: ActiveStrategy;
-    title: string;
-    description: string;
     onClick: () => void;
     disabled?: boolean;
   }
-  const strategyCards: StrategyCard[] =
-    toggle === 'arrivals'
-      ? [
-          {
-            id: 'current',
-            title: 'Current Staffing',
-            description: 'Starts from what you actually staff today, exactly as entered in the comparison grid above.',
-            onClick: prefillCurrent,
-          },
-          {
-            id: 'reallocated',
-            title: 'Re-allocated Current Staffing',
-            description:
-              'Starts from your same current total hours, moved to better match arrivals demand alone — same hours, different placement.',
-            onClick: prefillReallocatedArrivals,
-          },
-          {
-            id: 'allEd',
-            title: 'ShiftLens Solver Staffing',
-            description: "Starts from the ShiftLens Solver's own recommended ED staffing — the same grid the solver panel above recommends.",
-            onClick: prefillSolverArrivals,
-          },
-        ]
-      : [
-          {
-            id: 'current',
-            title: 'Current Staffing',
-            description: 'Starts from what you actually staff today, exactly as entered in the comparison grid above.',
-            onClick: prefillCurrent,
-          },
-          {
-            id: 'reallocated',
-            title: 'Re-allocated Current Staffing',
-            description:
-              "Starts from your same current total hours, moved to better match arrivals AND boarding together — a different placement than the arrivals-only version, since it also weighs boarding's demand.",
-            onClick: prefillReallocatedCombined,
-          },
-          {
-            id: 'allEd',
-            title: 'ShiftLens Solver Staffing (All ED Nurses)',
-            description: 'Starts from the recommended ED + boarding coverage, all funded as ED nurses — no separate hold pool.',
-            onClick: prefillSolverAllEd,
-            disabled: !boarding,
-          },
-          {
-            id: 'holdSplit',
-            title: 'ShiftLens Solver Staffing (Hold Nurses for Boarding)',
-            description:
-              'Starts from the recommended ED staffing plus a SEPARATE hold-nurse grid funded to cover boarding — split into two pools instead of one.',
-            onClick: prefillSolverHoldSplit,
-            disabled: !boarding,
-          },
-          {
-            id: 'mixed',
-            title: 'ShiftLens Solver Staffing (Mixed ED + Hold)',
-            description:
-              "Jointly solves ED and hold staffing together, from scratch, to cover arrivals + boarding split across both pools. Its total will generally not match \"All ED Nurses\" or \"Hold Nurses for Boarding\" above — this is a different solve, not a rounding difference.",
-            onClick: prefillSolverMixed,
-            disabled: !boarding,
-          },
-        ];
+  interface StrategyRow {
+    key: string;
+    title: string;
+    description?: string;
+    /** No target split — one button spanning both columns (e.g. "Current Staffing"). */
+    span?: StrategyOption;
+    arrivals?: StrategyOption;
+    combined?: StrategyOption;
+  }
+  const strategyMatrix: StrategyRow[] = [
+    {
+      key: 'current',
+      title: 'Current Staffing',
+      description: 'Exactly what you staff today.',
+      span: { id: 'current', onClick: prefillCurrent },
+    },
+    {
+      key: 'reallocated',
+      title: 'Re-allocated Current Staffing',
+      description: 'Same total hours.',
+      arrivals: { id: 'reallocated-arrivals', onClick: prefillReallocatedArrivals },
+      combined: { id: 'reallocated-combined', onClick: prefillReallocatedCombined },
+    },
+    {
+      key: 'allEd',
+      title: 'ShiftLens Solver — All ED Nurses',
+      arrivals: { id: 'allEd-arrivals', onClick: prefillSolverAllEdArrivals },
+      combined: { id: 'allEd-combined', onClick: prefillSolverAllEdCombined, disabled: !boarding },
+    },
+    {
+      key: 'holdSplit',
+      title: 'ShiftLens Solver — Hold Nurses for Boarding',
+      combined: { id: 'holdSplit', onClick: prefillSolverHoldSplit, disabled: !boarding },
+    },
+  ];
 
   return (
     <section className="panel panel-5" id="ch-sandbox">
@@ -723,57 +796,80 @@ export function Panel5() {
         <div className="panel-words">
           <h2>Test it yourself</h2>
 
-          <div className="strategy-cards">
-            {strategyCards.map((c) => (
-              <button
-                key={c.id}
-                type="button"
-                aria-label={c.title}
-                className={`strategy-card${activeStrategy === c.id ? ' strategy-card-active' : ''}`}
-                onClick={c.onClick}
-                disabled={c.disabled}
-              >
-                <span className="strategy-card-title">{c.title}</span>
-                <span className="strategy-card-description">{c.description}</span>
-              </button>
+          <p>
+            Starting from one of the grids we just went through, test different staffing schedules. Toggle to see
+            how this matches demand for just "Arrivals" or "Arrivals + Boarding".
+          </p>
+
+          {/* Set BEFORE the matrix below, always visible (not gated by toggle/strategy) — the
+              "Hold Nurses for Boarding" mechanism reads this restriction at the moment its
+              "Choose" button is clicked, so it needs to already reflect the user's intent
+              before that click, not just become visible/adjustable after the fact. */}
+          <h3>Which shifts can hold nurses work?</h3>
+          <p className="WHPPV-caveat hold-shift-caveat">(Hold nurses can only cover boarding demand.)</p>
+          <div className="flex-axes">
+            {sortedShiftMenu.map((s) => (
+              <label key={s.id} className="flex-axis-option">
+                <input type="checkbox" checked={allowedHoldShiftIds.has(s.id)} onChange={() => toggleHoldShift(s.id)} />
+                <span>{s.label || s.id}</span>
+              </label>
             ))}
           </div>
-          <p className="strategy-cards-note">
-            Each card is a starting point — it pre-fills the grid(s) below, which you can still hand-edit afterward.
-          </p>
 
-          <p className="comparison-headline">
-            This staffing realizes <strong>{avgWhppv.toFixed(2)} wHPPV</strong> at{' '}
-            <strong>{totalWeeklyHours.toFixed(0)} hours/week</strong>.
-          </p>
-          {minHourlyWhppv && maxHourlyWhppv && (
-            <p>
-              Hour to hour, wHPPV ranges from <strong>{minHourlyWhppv.value.toFixed(2)}</strong> (
-              {DAY_LABELS[minHourlyWhppv.day]} {fmtHour(minHourlyWhppv.hour)}) up to{' '}
-              <strong>{maxHourlyWhppv.value.toFixed(2)}</strong> ({DAY_LABELS[maxHourlyWhppv.day]}{' '}
-              {fmtHour(maxHourlyWhppv.hour)}). <strong>{pctBelowFloor.toFixed(0)}%</strong> of hours fall below your
-              peer-typical floor.
-            </p>
-          )}
-
-          {perShiftDiagnostic.groups.map((group) => (
-            <p key={group.shiftIds.join('-')}>{shiftDiagnosticSentence(group)}</p>
-          ))}
-
-          {toggle === 'combined' && (
-            <p>
-              {holdSurplusTotal >= 0.5 ? (
-                <>
-                  Hold-nurse surplus: <strong>{holdSurplusTotal.toFixed(0)} hours</strong> — hold nurses staffed
-                  against medical boarders who aren't there. This is a real finding, not a rounding error: hold
-                  nurses can't help with BH boarders or arrivals, so surplus hold capacity just sits idle while
-                  other hours may still run short.
-                </>
-              ) : (
-                'No hold-nurse surplus in this scenario.'
-              )}
-            </p>
-          )}
+          <div className="strategy-matrix">
+            <div className="strategy-matrix-header">
+              <span />
+              <span>Arrivals only</span>
+              <span>Arrivals + Boarding</span>
+            </div>
+            {strategyMatrix.map((row) => {
+              function renderOption(option: StrategyOption, target: 'arrivals' | 'combined' | null) {
+                const isActive = activeStrategy === option.id;
+                // Once you've hand-edited the grid (GridEditor or the +/- control) away from
+                // the strategy you clicked, "Selected" would be lying about what's on screen —
+                // this cell becomes "Reset" instead, offering to re-apply the original starting
+                // point. Same active color, outline instead of filled, so it still reads as
+                // "this is the one you picked" without claiming the grid still matches it.
+                const isDirty = isActive && hasEdits;
+                const label =
+                  target === null ? row.title : `${row.title} — ${target === 'arrivals' ? 'Arrivals only' : 'Arrivals + Boarding'}`;
+                const ariaLabel = isDirty ? `${label} — reset to this starting point` : label;
+                return (
+                  <button
+                    key={option.id}
+                    type="button"
+                    aria-label={ariaLabel}
+                    className={`strategy-cell${isActive ? (isDirty ? ' strategy-cell-dirty' : ' strategy-cell-active') : ''}`}
+                    onClick={option.onClick}
+                    disabled={option.disabled}
+                  >
+                    {isActive ? (isDirty ? 'Reset' : 'Selected') : 'Choose'}
+                  </button>
+                );
+              }
+              return (
+                <div className="strategy-matrix-row" key={row.key}>
+                  <div className="strategy-matrix-row-label">
+                    <span className="strategy-matrix-row-title">{row.title}</span>
+                    {row.description && <span className="strategy-matrix-row-description">{row.description}</span>}
+                  </div>
+                  {row.span ? (
+                    <span className="strategy-matrix-cell strategy-matrix-cell-span">{renderOption(row.span, null)}</span>
+                  ) : row.arrivals && row.combined ? (
+                    <>
+                      <span className="strategy-matrix-cell">{renderOption(row.arrivals, 'arrivals')}</span>
+                      <span className="strategy-matrix-cell">{renderOption(row.combined, 'combined')}</span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="strategy-matrix-cell" />
+                      <span className="strategy-matrix-cell">{row.combined ? renderOption(row.combined, null) : null}</span>
+                    </>
+                  )}
+                </div>
+              );
+            })}
+          </div>
 
           {marginalCurvePoints.length >= 2 && (
             <div className="marginal-curve-wrap">
@@ -789,27 +885,83 @@ export function Panel5() {
           <h3>ED nurses</h3>
           <GridEditor grid={edGrid} setter={setEdGrid} label="ED" columns={sortedShiftMenu} deltaBaseline={currentStaffingGrid ?? undefined} />
 
-          {toggle === 'combined' && (
-            <>
-              <h3>Which shifts can hold nurses work?</h3>
-              <div className="flex-axes">
-                {sortedShiftMenu.map((s) => (
-                  <label key={s.id} className="flex-axis-option">
-                    <input type="checkbox" checked={allowedHoldShiftIds.has(s.id)} onChange={() => toggleHoldShift(s.id)} />
-                    <span>{s.label || s.id}</span>
-                  </label>
-                ))}
-              </div>
+          {/* Always visible, regardless of toggle or selected strategy — hold nurses can be
+              staffed and tested even under the Arrivals-only toggle, they just don't cover
+              arrivals demand, so adding them won't change that toggle's visuals. */}
+          <h3>Hold nurses</h3>
+          <GridEditor
+            grid={holdGrid}
+            setter={setHoldGrid}
+            label="Hold"
+            columns={sortedShiftMenu}
+            disabledShiftIds={new Set(sortedShiftMenu.filter((s) => !allowedHoldShiftIds.has(s.id)).map((s) => s.id))}
+          />
 
-              <h3>Hold nurses</h3>
-              <GridEditor
-                grid={holdGrid}
-                setter={setHoldGrid}
-                label="Hold"
-                columns={sortedShiftMenu}
-                disabledShiftIds={new Set(sortedShiftMenu.filter((s) => !allowedHoldShiftIds.has(s.id)).map((s) => s.id))}
-              />
+          <p className="comparison-headline">
+            This staffing realizes <strong>{avgWhppv.toFixed(2)} WHPPV</strong> at{' '}
+            <strong>{edWeeklyHours.toFixed(0)} hours/week</strong>.
+            {currentStaffedWeeklyHours > 0 &&
+              (Math.abs(fteDelta) < 0.05 ? (
+                ' — the same FTE as you staff today.'
+              ) : (
+                <>
+                  {' '}
+                  — <strong>{Math.abs(fteDelta).toFixed(1)} FTE</strong> {fteDelta >= 0 ? 'above' : 'below'} what you
+                  staff today.
+                </>
+              ))}
+            {holdWeeklyHours > 0 && (
+              <>
+                {' '}
+                Hold nurses call for an additional <strong>{holdFteDelta.toFixed(1)} FTE</strong>.
+              </>
+            )}
+          </p>
+          {minHourlyWhppv && maxHourlyWhppv && (
+            <p>
+              Hour to hour, WHPPV ranges from <strong>{minHourlyWhppv.value.toFixed(2)}</strong> (
+              {DAY_LABELS[minHourlyWhppv.day]} {fmtHour(minHourlyWhppv.hour)}) up to{' '}
+              <strong>{maxHourlyWhppv.value.toFixed(2)}</strong> ({DAY_LABELS[maxHourlyWhppv.day]}{' '}
+              {fmtHour(maxHourlyWhppv.hour)}). <strong>{pctBelowFloor.toFixed(0)}%</strong> of hours fall below your
+              peer-typical range.
+            </p>
+          )}
+
+          {result.boarding && (
+            <p>
+              On average, boarding demands <strong>{totalBoardingWeeklyHours.toFixed(0)} hours/week</strong>
+              {holdCoveredWeeklyHours >= 0.5 ? (
+                <>
+                  , <strong>{pctBoardingCoveredByHold.toFixed(0)}%</strong> of which is covered by hold nurses. The
+                  remaining <strong>{remainingBoardingWeeklyHours.toFixed(0)} hours</strong> is{' '}
+                </>
+              ) : (
+                ', '
+              )}
+              <strong>{remainingBoardingPctOfNursingHours.toFixed(0)}%</strong> of your department's total nursing
+              hours, and the equivalent of <strong>{remainingBoardingWhppv.toFixed(2)} WHPPV</strong>. Said
+              differently, effective WHPPV after accounting for boarding is{' '}
+              <strong>{effectiveWhppv.toFixed(2)}</strong>, {effectivePositionPhrase} for a department of your size.
+            </p>
+          )}
+
+          {perShiftDiagnostic.groups.map((group) => (
+            <p key={group.shiftIds.join('-')}>{shiftDiagnosticSentence(group)}</p>
+          ))}
+
+          <p>
+            On an average day, demand peaks around <strong>{fmtHour(peakDemandHour)}</strong>, but your staffing
+            doesn't peak until <strong>{fmtHour(peakCapacityHour)}</strong>
+            {rampGap > 0 ? ` — roughly a ${rampGap}-hour lag` : ' — no lag'}.
+          </p>
+
+          {splitMeaningfully ? (
+            <>
+              <p>{queuePatternSentence(weekdayPattern, 'On weekdays, ', result.floorWhppv)}</p>
+              <p>{queuePatternSentence(weekendPattern, 'On weekends, ', result.floorWhppv)}</p>
             </>
+          ) : (
+            <p>{queuePatternSentence(wholeWeekPattern, 'Based on your schedule, ', result.floorWhppv)}</p>
           )}
         </div>
         <div className="panel-frame">

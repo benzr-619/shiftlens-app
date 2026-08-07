@@ -9,7 +9,7 @@
 //
 // SCOPE (not exhaustive — flagged, not hidden): this extraction covers the sections built or
 // touched in PRs E-G (Scenario B, the hidden-boarding diagnostic, the synthesis chapter, the
-// funding-ask headline, the core-grid comparison headline, the wHPPV-range sentence), WORDED
+// funding-ask headline, the core-grid comparison headline, the WHPPV-range sentence), WORDED
 // IDENTICALLY to what those components currently render inline via JSX. Older sections
 // (`CurrentStaffingAnalysis`, `BoardingTransition`, `BoardingCoverageSection`,
 // `ShiftMenuFlexibilitySection`) still generate their headline text inline and have NOT been
@@ -30,6 +30,7 @@ import { DEFAULTS, type EngineResult, type EngineInputs } from '../engine/types'
 import type { ShiftDiagnosticGroup } from '../engine/hiddenBoarding';
 import type { ScenarioBResult } from '../engine';
 import type { SynthesisResult } from '../engine/synthesis';
+import { fmtHour } from './queuePattern';
 
 const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -64,7 +65,7 @@ export function whppvRangeSentence(
   maxAt: { day: number; hour: number },
   realizedWHppv: number
 ): string {
-  return `Across the 168 hours of the week, the schedule actually realizes as low as ${minWHppv.toFixed(2)} wHPPV (around ${fmtDayHour(minAt)}) and as high as ${maxWHppv.toFixed(2)} wHPPV (around ${fmtDayHour(maxAt)}), even though the weekly average lands at ${realizedWHppv.toFixed(2)}.`;
+  return `Across the 168 hours of the week, the schedule actually realizes as low as ${minWHppv.toFixed(2)} WHPPV (around ${fmtDayHour(minAt)}) and as high as ${maxWHppv.toFixed(2)} WHPPV (around ${fmtDayHour(maxAt)}), even though the weekly average lands at ${realizedWHppv.toFixed(2)}.`;
 }
 
 // --- Comparison unit (idealized vs. current) — CoreGridTab.tsx ---
@@ -141,10 +142,11 @@ export function shiftDiagnosticSentence(group: ShiftDiagnosticGroup): string {
     return `On average, ${names} ${shiftWord} ${isAre} ${verdict} for arrivals.`;
   }
 
-  // arrivalsNet > 0 means staffed hours exceed arrivals demand alone (a surplus/"ahead");
-  // <= 0 means staffed hours fall short of arrivals demand alone (a shortfall).
-  const arrivalsNet = group.staffedHours - group.requiredHours;
-  const boardingNeed = group.boardingNeedHours;
+  // staffedHours/requiredHours/boardingNeedHours are summed across the full representative
+  // week (see hiddenBoarding.ts); divide by 7 so this sentence reports a single day's hours,
+  // matching its own "on average" framing rather than a weekly total.
+  const arrivalsNet = (group.staffedHours - group.requiredHours) / 7;
+  const boardingNeed = group.boardingNeedHours / 7;
   const net = arrivalsNet - boardingNeed;
 
   if (arrivalsNet <= 0) {
@@ -184,7 +186,7 @@ export function synthesisHeadlineSentence(synthesis: SynthesisResult): string {
 // --- Funding ask (FundingAskSection.tsx) ---
 
 export function fundingAskAlreadyFundedSentence(fullCoverageWeeklyHours: number, impliedWhppv: number, wHppvTarget: number): string {
-  return `Full coverage of every hour would take ${fullCoverageWeeklyHours.toFixed(0)} hrs/week — and what delivering your target already funds covers that (equivalent to running at ${impliedWhppv.toFixed(2)} wHPPV, at or below your ${wHppvTarget} target). There's no funding ask to make here; the idealized grid above already covers every hour without trimming.`;
+  return `Full coverage of every hour would take ${fullCoverageWeeklyHours.toFixed(0)} hrs/week — and what delivering your target already funds covers that (equivalent to running at ${impliedWhppv.toFixed(2)} WHPPV, at or below your ${wHppvTarget} target). There's no funding ask to make here; the idealized grid above already covers every hour without trimming.`;
 }
 
 export function fundingAskKneeLeadSentence(
@@ -203,7 +205,7 @@ export function fundingAskKneeLeadSentence(
   } else if (worstStretchLabel && worstStretchHours !== null && worstStretchHours > 0) {
     stretchClause = ` and eliminates the ${worstStretchHours}-hour ${worstStretchLabel} stretch`;
   }
-  return `The ask that buys the most: about ${kneeFte.toFixed(1)} FTE removes roughly ${pctSeverityRemoved.toFixed(0)}% of the modeled queued-patient-work${stretchClause}. Past about ${kneeFte.toFixed(1)} FTE, each additional FTE buys progressively less — full coverage of every hour, the far end of that range, would take ${fullCoverageWeeklyHours.toFixed(0)} hrs/week in total (${fteDelta.toFixed(1)} FTE above what delivering your target costs today), equivalent to running at ${impliedWhppv.toFixed(2)} wHPPV instead of your ${wHppvTarget} target.`;
+  return `The ask that buys the most: about ${kneeFte.toFixed(1)} FTE removes roughly ${pctSeverityRemoved.toFixed(0)}% of the modeled queued-patient-work${stretchClause}. Past about ${kneeFte.toFixed(1)} FTE, each additional FTE buys progressively less — full coverage of every hour, the far end of that range, would take ${fullCoverageWeeklyHours.toFixed(0)} hrs/week in total (${fteDelta.toFixed(1)} FTE above what delivering your target costs today), equivalent to running at ${impliedWhppv.toFixed(2)} WHPPV instead of your ${wHppvTarget} target.`;
 }
 
 // --- Best-effort (result, inputs)-only entry points, for the synthetic sweep's narrative hook
@@ -222,4 +224,81 @@ export function deliveryPremiumFromResult(result: EngineResult, inputs: EngineIn
     inputs.shiftMenu.map((s) => s.lengthHours),
     inputs.hoursPerFteAnnual ?? DEFAULTS.hoursPerFteAnnual
   );
+}
+
+// --- PPTX export (Panel 1/3/5-sourced slides, de-personalized: no second-person "your"/"you")
+// — `lib/pptxExport.ts`'s 10-slide deck reuses these rather than hand-writing slide prose. Each
+// one mirrors an existing on-page sentence (Panel1.tsx/Panel3.tsx/Panel5.tsx), edited only to
+// drop second-person address ("your department" -> "the department", "you staff" -> "staffed").
+
+export type WhppvPosition = 'below' | 'within' | 'above';
+
+/** Panel 1's "staffed hours ___ for your volume" framing, de-personalized. */
+export function staffingLevelPhrase(position: WhppvPosition): string {
+  if (position === 'within') return "look reasonable for the department's volume, before looking at individual hours or accounting for boarding";
+  if (position === 'below') return "run light for the department's volume";
+  return "run rich for the department's volume";
+}
+
+/** Panel 1's realized-WHPPV headline sentence, de-personalized. */
+export function currentStaffingSummarySentence(realizedWHppv: number, weeklyScheduledHours: number, position: WhppvPosition): string {
+  return `Current staffing realizes ${realizedWHppv.toFixed(2)} WHPPV at ${weeklyScheduledHours.toFixed(0)} hours/week. Averaged across the week, staffed hours ${staffingLevelPhrase(position)}.`;
+}
+
+/** Panel 1's boarding-impact paragraph, de-personalized. */
+export function boardingImpactSentence(
+  weeklyBoardingHours: number,
+  pctOfTotalNursingHours: number,
+  wHppvEquivalent: number,
+  effectiveWhppv: number,
+  effectivePosition: WhppvPosition
+): string {
+  const positionPhrase =
+    effectivePosition === 'within' ? 'within the target range' : effectivePosition === 'below' ? 'below the target range' : 'above the target range';
+  return (
+    `On average, boarding demands ${weeklyBoardingHours.toFixed(0)} hours/week, ${pctOfTotalNursingHours.toFixed(0)}% of the department's total ` +
+    `nursing hours, and the equivalent of ${wHppvEquivalent.toFixed(2)} WHPPV. Said differently, effective WHPPV after accounting for boarding is ` +
+    `${effectiveWhppv.toFixed(2)}, ${positionPhrase} for a department of this size.`
+  );
+}
+
+/** Panel 1/5's "demand peaks before staffing does" sentence, de-personalized. Guards against
+ * non-numeric hours (rather than silently rendering "NaN:00") — `syntheticSweep.test.ts`'s
+ * best-effort (result, inputs) call would otherwise pass two whole objects through `fmtHour`,
+ * which has no throw path of its own (it's a plain modulo/padStart), and the test only catches
+ * placeholder residue in a returned STRING, never a thrown error. */
+export function peakLagSentence(peakDemandHour: number, peakCapacityHour: number, rampGapHours: number): string {
+  if (![peakDemandHour, peakCapacityHour, rampGapHours].every((v) => typeof v === 'number' && Number.isFinite(v))) {
+    throw new TypeError('peakLagSentence requires finite numeric hours');
+  }
+  const lagClause = rampGapHours > 0 ? ` — roughly a ${rampGapHours}-hour lag` : ' — no lag';
+  return `On an average day, demand peaks around ${fmtHour(peakDemandHour)}, but staffing doesn't peak until ${fmtHour(peakCapacityHour)}${lagClause}.`;
+}
+
+/** Panel 3's "what full coverage would take" headline, de-personalized and combining the
+ * arrivals-only ask with boarding's separate additional ask (Panel 3's "Additional Nurses for
+ * Boarding" table, expressed as FTE rather than a second grid). */
+export function fullCoverageAskSentence(additionalShiftsPerWeek: number, arrivalsFteDelta: number, boardingFteDelta: number): string {
+  const base = `Fully covering arrivals demand, with zero deficit hours anywhere, would take about ${Math.max(0, additionalShiftsPerWeek).toFixed(0)} additional shifts a week (${Math.max(0, arrivalsFteDelta).toFixed(1)} FTE) above what's staffed today.`;
+  if (boardingFteDelta < 0.05) return base;
+  return `${base} Fully covering boarding on top of that would take a separate ${boardingFteDelta.toFixed(1)} FTE.`;
+}
+
+/** Panel 5's scenario-vs-current-staffing comparison, de-personalized — % of demand covered and
+ * the additional ED/hold shifts a week the scenario adds relative to current staffing. */
+export function sandboxComparisonSentence(pctMoreCoveredPts: number, additionalEdShiftsPerWeek: number, additionalHoldShiftsPerWeek: number): string {
+  const coverageClause =
+    pctMoreCoveredPts >= 0.5
+      ? `covers ${pctMoreCoveredPts.toFixed(0)} percentage points more of total demand than current staffing`
+      : pctMoreCoveredPts <= -0.5
+        ? `covers ${Math.abs(pctMoreCoveredPts).toFixed(0)} percentage points less of total demand than current staffing`
+        : 'covers about the same share of total demand as current staffing';
+  const edClause =
+    additionalEdShiftsPerWeek >= 0.5
+      ? `${additionalEdShiftsPerWeek.toFixed(0)} more ED shifts a week`
+      : additionalEdShiftsPerWeek <= -0.5
+        ? `${Math.abs(additionalEdShiftsPerWeek).toFixed(0)} fewer ED shifts a week`
+        : 'about the same number of ED shifts a week';
+  const holdClause = additionalHoldShiftsPerWeek >= 0.5 ? ` and ${additionalHoldShiftsPerWeek.toFixed(0)} hold shifts a week` : '';
+  return `This scenario ${coverageClause}. It uses ${edClause}${holdClause}.`;
 }

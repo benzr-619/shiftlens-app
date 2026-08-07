@@ -207,7 +207,7 @@ export function ShiftMenuStep() {
           {headcountIncludesIndirectCare === false && (
             <div className="indirect-care-correction">
               <p className="degrade-note">
-                The peer wHPPV benchmark assumes charge/triage hours are counted in headcount — leaving them out of
+                The peer WHPPV benchmark assumes charge/triage hours are counted in headcount — leaving them out of
                 your current staffing grid understates your staffing relative to that target. If you know roughly
                 how many charge/triage (or other indirect-care) staff are typically on duty per shift, add that
                 count to every cell of your current staffing grid below as a one-time correction.

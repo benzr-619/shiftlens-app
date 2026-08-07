@@ -1,6 +1,6 @@
 export const SETUP_STEP_LABELS = [
   'Data',
-  'Volume & wHPPV',
+  'Volume & WHPPV',
   'Shift menu',
   'Review',
 ];

@@ -32,7 +32,6 @@ export {
   bestUnitToRemove,
   type MarginalCurvePoint,
 } from './solver';
-export { solveEdHoldJointCoverage } from './edHoldSolve';
 export {
   computeBacklog,
   computeBacklogFromCapacity,
@@ -51,7 +50,7 @@ export { solveShiftFitWithBacklogFeedback, type BacklogFeedbackDiagnostics, type
 export { NO_COMPRESSION_FLOOR_WHPPV } from './backlogModel';
 export { reallocateHoursExact, type ExactReallocationResult } from './exactReallocation';
 
-/** The single callable engine function: (arrivals, wHPPV target, shift menu, optional inputs) -> full result. */
+/** The single callable engine function: (arrivals, WHPPV target, shift menu, optional inputs) -> full result. */
 export function compute(inputs: EngineInputs): EngineResult {
   const acuityWeights = inputs.acuityWeights ?? DEFAULTS.acuityWeights;
   const smoothingWeights = inputs.smoothingWeights ?? DEFAULTS.smoothingWeights;
@@ -100,7 +99,7 @@ export function compute(inputs: EngineInputs): EngineResult {
   const protectedFloorHourly = applyVolatilityBuffer(cohortBandFloor, demandVolatilityHourly, hourlyRequirement);
   const bandFloorHourly = protectedFloorHourly.map((v, i) => Math.min(v, hourlyRequirement[i]));
 
-  // 2026-07-28 (ninth shape) — the single flat department-level peer-cohort p25 wHPPV the
+  // 2026-07-28 (ninth shape) — the single flat department-level peer-cohort p25 WHPPV the
   // visits-based backlog recurrence compresses down to (never past). See EngineResult's
   // `floorWhppv` field doc and backlogModel.ts's header for the full formula.
   const floorWhppv = lookupWhppvBand(annualVisits).p25Whppv;
@@ -217,7 +216,7 @@ export function compute(inputs: EngineInputs): EngineResult {
   const fullCoverageCombined = { weeklyHours: fullCoverageCombinedWeeklyHours, grid: fullCoverageCombinedGrid };
 
   // Productivity Target Buffer method (ENA-referenced): what the boarding load would cost
-  // in ED-facing wHPPV if it were absorbed by core staff rather than separately covered.
+  // in ED-facing WHPPV if it were absorbed by core staff rather than separately covered.
   const lostProductivity = boarding
     ? {
         wHppvConsumedByBoarding: boarding.annualBoardingHours / annualVisits,
@@ -356,7 +355,7 @@ export function reconcile(cellCoreHours: number[], annualBudget: number): Reconc
   return { annualFromGrid, annualBudget, gapPct, passes: gapPct < 1e-9 };
 }
 
-/** Live-edit recompute after a manual grid edit: cheap arithmetic wHPPV + shortfall recheck,
+/** Live-edit recompute after a manual grid edit: cheap arithmetic WHPPV + shortfall recheck,
  * plus a 5.6 department-floor re-check (also arithmetic, no re-solve) so a manual edit that
  * drops an hour below enaFloor is caught immediately rather than only at the next full solve. */
 export function recomputeAfterEdit(

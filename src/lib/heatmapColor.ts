@@ -1,6 +1,6 @@
 // The generic neutral-band + log-ratio + asymmetric-ramp color mechanism behind
 // `WhppvHeatmap.tsx`'s per-cell coloring — split into its own `lib/` file (2026-07-28, Panel
-// 2's per-shift wHPPV coloring, a second consumer) for the same reason `whppvColorDomain.ts`
+// 2's per-shift WHPPV coloring, a second consumer) for the same reason `whppvColorDomain.ts`
 // documents for `computeColorDomain`: a component file exporting a non-component function
 // trips oxlint's fast-refresh rule.
 //
@@ -27,7 +27,7 @@ export interface CellVisual {
 
 /**
  * `ratio`/`low`/`high` are all already normalized to the same reference point (1.0 = "at
- * target"). The heatmap normalizes by a cell's own `requirement`; Panel 2's per-shift wHPPV
+ * target"). The heatmap normalizes by a cell's own `requirement`; Panel 2's per-shift WHPPV
  * coloring normalizes by `wHppvTarget` (via `computeColorDomain`) — same shape, different
  * denominator.
  */

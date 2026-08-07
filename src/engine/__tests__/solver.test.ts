@@ -57,9 +57,9 @@ describe('Step 3 shift-fit solver', () => {
     expect(result.overcoveragePct).toBeLessThanOrEqual(0.12);
   });
 
-  it('always reports shortfall alongside wHPPV rather than netting it against the total (5.5)', () => {
+  it('always reports shortfall alongside WHPPV rather than netting it against the total (5.5)', () => {
     const result = compute({ arrivals: randomArrivals168(11), wHppvTarget: 0.3, shiftMenu });
-    // low wHPPV target forces trimming -> some shortfall should exist and be enumerated, not hidden
+    // low WHPPV target forces trimming -> some shortfall should exist and be enumerated, not hidden
     expect(Array.isArray(result.shortfall)).toBe(true);
   });
 
@@ -551,7 +551,7 @@ describe('2026-07-26 PR D — EngineResult.fullCoverage (SOLVER_REALISM_SPEC_202
     expect(result.marginalKneePoint).toBeNull();
   });
 
-  it('impliedWhppv is a genuine wHPPV figure, computed the same way realizedWHppv is elsewhere (weeklyHours * 52 / annualVisits)', () => {
+  it('impliedWhppv is a genuine WHPPV figure, computed the same way realizedWHppv is elsewhere (weeklyHours * 52 / annualVisits)', () => {
     const result = compute({ arrivals: randomArrivals168(71), wHppvTarget: 0.3, shiftMenu });
     const expected = (result.fullCoverage.weeklyHours * 52) / result.annualVisits;
     expect(result.fullCoverage.impliedWhppv).toBeCloseTo(expected, 6);
@@ -574,10 +574,16 @@ describe('2026-07-26 PR D — EngineResult.fullCoverage (SOLVER_REALISM_SPEC_202
   });
 });
 
-describe('2026-08-05 — Panel 5 redesign single-step primitives (bestUnitToAdd/bestUnitToRemove)', () => {
+function coverageSum(capacity: number[], demand: number[]): number {
+  let total = 0;
+  for (let g = 0; g < 168; g++) total += Math.min(capacity[g], demand[g] ?? 0);
+  return total;
+}
+
+describe('2026-08-06 — Panel 5 redesign single-step primitives (bestUnitToAdd/bestUnitToRemove score the SAME coverage metric)', () => {
   const emptyGrid: Grid = { 0: { day: 0, night: 0 }, 1: { day: 0, night: 0 }, 2: { day: 0, night: 0 }, 3: { day: 0, night: 0 }, 4: { day: 0, night: 0 }, 5: { day: 0, night: 0 }, 6: { day: 0, night: 0 } };
 
-  it('bestUnitToAdd picks a candidate that relieves the most currently-deficient hours, and returns null once demand is fully covered', () => {
+  it('bestUnitToAdd walks up to full coverage one unit at a time, and returns null once demand is fully covered', () => {
     const demand = randomArrivals168(11);
     let grid: Grid = JSON.parse(JSON.stringify(emptyGrid));
     let guard = 0;
@@ -588,7 +594,6 @@ describe('2026-08-05 — Panel 5 redesign single-step primitives (bestUnitToAdd/
     }
     const capacity = fullWeekCapacity(grid, shiftMenu);
     for (let g = 0; g < 168; g++) expect(capacity[g]).toBeGreaterThanOrEqual(demand[g]);
-    // Matches the batch full-coverage solve (same greedy candidate rule, applied one at a time).
     expect(bestUnitToAdd(grid, demand, shiftMenu)).toBeNull();
   });
 
@@ -596,23 +601,38 @@ describe('2026-08-05 — Panel 5 redesign single-step primitives (bestUnitToAdd/
     expect(bestUnitToAdd(emptyGrid, new Array(168).fill(0), shiftMenu)).toBeNull();
   });
 
+  it('bestUnitToAdd picks the candidate with the largest exact coverage-hours gain, not merely the most deficient-hour COUNT', () => {
+    // Two 3-hour shifts on day 0, non-overlapping. Shift 'a' touches 3 hours each 0.9 short
+    // (coverage-hours gain 0.9*3 = 2.7, deficient-hour COUNT also 3). Shift 'b' touches 3 hours
+    // each >=1 short (coverage-hours gain capped at 1/hour = 1+1+1 = 3, COUNT also 3). A
+    // count-based scorer ties these two candidates (3 == 3); the exact coverage-hours metric
+    // must prefer 'b' (3 > 2.7).
+    const localMenu: ShiftDef[] = [
+      { id: 'a', label: 'a', startHour: 0, lengthHours: 3 },
+      { id: 'b', label: 'b', startHour: 3, lengthHours: 3 },
+    ];
+    const demand = new Array(168).fill(0);
+    demand[0] = 0.9;
+    demand[1] = 0.9;
+    demand[2] = 0.9;
+    demand[3] = 1;
+    demand[4] = 1;
+    demand[5] = 3;
+    const grid: Grid = { 0: { a: 0, b: 0 }, 1: { a: 0, b: 0 }, 2: { a: 0, b: 0 }, 3: { a: 0, b: 0 }, 4: { a: 0, b: 0 }, 5: { a: 0, b: 0 }, 6: { a: 0, b: 0 } };
+    expect(bestUnitToAdd(grid, demand, localMenu)).toEqual({ day: 0, shiftId: 'b' });
+  });
+
   it('bestUnitToRemove returns null once the grid has no headcount left anywhere', () => {
-    const requirement = new Array(168).fill(0);
-    const floor = new Array(168).fill(0);
-    const volatility = new Array(168).fill(0);
-    const arrivals = new Array(168).fill(0);
-    expect(bestUnitToRemove(emptyGrid, requirement, floor, volatility, arrivals, NO_COMPRESSION_FLOOR_WHPPV, shiftMenu)).toBeNull();
+    expect(bestUnitToRemove(emptyGrid, new Array(168).fill(0), shiftMenu)).toBeNull();
   });
 
   it('bestUnitToRemove picks a real (day, shift) cell that currently has headcount, and repeated removal empties the grid', () => {
     const requirement = randomArrivals168(13);
-    const floor = new Array(168).fill(0);
-    const volatility = new Array(168).fill(0);
     let grid = solveFullCoverageWeek(requirement, shiftMenu);
     let guard = 0;
     let totalBefore = Object.values(grid).reduce((a, hc) => a + shiftMenu.reduce((b, s) => b + (hc[s.id] ?? 0), 0), 0);
     while (guard++ < 200) {
-      const candidate = bestUnitToRemove(grid, requirement, floor, volatility, requirement, NO_COMPRESSION_FLOOR_WHPPV, shiftMenu);
+      const candidate = bestUnitToRemove(grid, requirement, shiftMenu);
       if (!candidate) break;
       expect(grid[candidate.day]?.[candidate.shiftId] ?? 0).toBeGreaterThan(0);
       grid[candidate.day][candidate.shiftId] -= 1;
@@ -620,5 +640,55 @@ describe('2026-08-05 — Panel 5 redesign single-step primitives (bestUnitToAdd/
     const totalAfter = Object.values(grid).reduce((a, hc) => a + shiftMenu.reduce((b, s) => b + (hc[s.id] ?? 0), 0), 0);
     expect(totalAfter).toBe(0);
     expect(totalBefore).toBeGreaterThan(0);
+  });
+
+  it('bestUnitToRemove picks the candidate causing the SMALLEST decrease in sum(min(capacity, demand)) — not the lowest queue-harm severity cost', () => {
+    const requirement = randomArrivals168(13);
+    const grid = solveFullCoverageWeek(requirement, shiftMenu);
+    const coverageBefore = coverageSum(fullWeekCapacity(grid, shiftMenu), requirement);
+
+    const candidate = bestUnitToRemove(grid, requirement, shiftMenu);
+    expect(candidate).not.toBeNull();
+
+    const decreaseOf = (day: number, shiftId: string): number => {
+      const trial: Grid = JSON.parse(JSON.stringify(grid));
+      trial[day][shiftId] -= 1;
+      return coverageBefore - coverageSum(fullWeekCapacity(trial, shiftMenu), requirement);
+    };
+    const actualDecrease = decreaseOf(candidate!.day, candidate!.shiftId);
+
+    // Exhaustively confirm no other removable unit anywhere causes a smaller decrease.
+    for (let day = 0; day < 7; day++) {
+      for (const s of shiftMenu) {
+        if ((grid[day]?.[s.id] ?? 0) <= 0) continue;
+        expect(decreaseOf(day, s.id)).toBeGreaterThanOrEqual(actualDecrease - 1e-9);
+      }
+    }
+  });
+
+  it('Add then Remove (or Remove then Add) of the same candidate exactly round-trips the coverage sum — Add/Remove score the identical metric', () => {
+    const demand = randomArrivals168(17);
+    let grid: Grid = JSON.parse(JSON.stringify(emptyGrid));
+    // Walk partway up the coverage curve.
+    for (let i = 0; i < 10; i++) {
+      const candidate = bestUnitToAdd(grid, demand, shiftMenu);
+      if (!candidate) break;
+      grid[candidate.day][candidate.shiftId] += 1;
+    }
+    const coverageBefore = coverageSum(fullWeekCapacity(grid, shiftMenu), demand);
+
+    const removeCandidate = bestUnitToRemove(grid, demand, shiftMenu)!;
+    const afterRemove: Grid = JSON.parse(JSON.stringify(grid));
+    afterRemove[removeCandidate.day][removeCandidate.shiftId] -= 1;
+    const coverageAfterRemove = coverageSum(fullWeekCapacity(afterRemove, shiftMenu), demand);
+    expect(coverageAfterRemove).toBeLessThanOrEqual(coverageBefore + 1e-9);
+
+    // Adding back the SAME (day, shift) unit that was just removed must exactly restore the
+    // original coverage sum, since it exactly reverses the one perturbation that caused the
+    // decrease — a direct check that Add's gain and Remove's loss are the same signed quantity.
+    const restored: Grid = JSON.parse(JSON.stringify(afterRemove));
+    restored[removeCandidate.day][removeCandidate.shiftId] += 1;
+    const coverageRestored = coverageSum(fullWeekCapacity(restored, shiftMenu), demand);
+    expect(coverageRestored).toBeCloseTo(coverageBefore, 9);
   });
 });

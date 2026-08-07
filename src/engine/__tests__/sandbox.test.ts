@@ -71,7 +71,7 @@ describe('PR C — sandbox model (§5.4)', () => {
     for (const v of result.queueDepth) expect(v).toBeCloseTo(0, 6);
   });
 
-  it('effective wHPPV can go negative and is never silently clamped', () => {
+  it('effective WHPPV can go negative and is never silently clamped', () => {
     const arrivalsRequirement = flat(1);
     const bhBoarding = flat(0);
     const medBoarding = flat(20); // heavy boarding, no hold at all
@@ -83,7 +83,7 @@ describe('PR C — sandbox model (§5.4)', () => {
     expect(result.effectiveWhppv[0]).toBeCloseTo(-8.5, 6);
   });
 
-  it('effective wHPPV is 0 at an hour with zero arrivals, not NaN/Infinity', () => {
+  it('effective WHPPV is 0 at an hour with zero arrivals, not NaN/Infinity', () => {
     const arrivalsRequirement = flat(10);
     const bhBoarding = flat(0);
     const medBoarding = flat(0);

@@ -410,12 +410,12 @@ describe('§2.6.1 staffing FTE vs. coverage FTE (efficiency overhead of fixed-le
   });
 });
 
-describe('Effective ED wHPPV at a given coverage level (ASSUMPTION: linear proportional recovery)', () => {
-  it('at 0% coverage, effective wHPPV equals target minus the full amount consumed by boarding', () => {
+describe('Effective ED WHPPV at a given coverage level (ASSUMPTION: linear proportional recovery)', () => {
+  it('at 0% coverage, effective WHPPV equals target minus the full amount consumed by boarding', () => {
     expect(effectiveEdWhppvAtCoverage(1.7, 0.3, 0)).toBeCloseTo(1.4, 9);
   });
 
-  it('at 100% coverage, effective wHPPV equals the full target (nothing lost to boarding)', () => {
+  it('at 100% coverage, effective WHPPV equals the full target (nothing lost to boarding)', () => {
     expect(effectiveEdWhppvAtCoverage(1.7, 0.3, 1)).toBeCloseTo(1.7, 9);
   });
 
@@ -436,7 +436,7 @@ describe('Lost-productivity metric (Productivity Target Buffer method)', () => {
     expect(result.lostProductivity).toBeNull();
   });
 
-  it('reports ED-facing wHPPV as the target minus wHPPV consumed by boarding', () => {
+  it('reports ED-facing WHPPV as the target minus WHPPV consumed by boarding', () => {
     const arrivals = randomArrivals168(29);
     const result = compute({
       arrivals,

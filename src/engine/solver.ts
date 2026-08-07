@@ -121,15 +121,80 @@ function bestAddCandidate(capacity: number[], demand168: number[], shifts: Shift
   return bestShiftId === null || bestScore <= 0 ? null : { day: bestDay, shiftId: bestShiftId, score: bestScore };
 }
 
-/** Standalone single-step "which unit should I add next" primitive — the same candidate
- * selection `solveFullCoverageWeek`'s greedy loop uses, exposed for Panel 5's ED/hold +
- * controls (§10 of the Panel 5 redesign) so that UI doesn't duplicate the loop inline. Scores
- * every (day, shift) in `shifts` by how many currently-deficient hours of `demand168` one more
- * unit would relieve; returns `null` when nothing would help (already at/above the demand
- * curve everywhere `shifts` can reach). */
+/** Exact change in `sum(min(capacity[g], demand168[g]))` over one (day, shift) candidate's own
+ * covered hours (all a single headcount unit there can ever affect) from adding (`direction:
+ * 1`) or removing (`direction: -1`) one unit of it — the SAME coverage metric
+ * `MarginalReturnsCurve` (Panel 5) plots. Shared by `bestUnitToAdd`/`bestUnitToRemove` below so
+ * the two single-step controls score both directions identically; NOT used by
+ * `solveFullCoverageWeek`'s own greedy loop (`bestAddCandidate` above), which deliberately
+ * counts deficient hours touched (classic greedy set-cover) rather than this exact hours-added
+ * figure — the two happen to agree whenever `demand168` is integer-valued but can diverge on a
+ * fractional demand curve, which is exactly why Panel 5's controls need their own scorer. */
+function coverageDeltaForUnit(capacity: number[], demand168: number[], hours: number[], direction: 1 | -1): number {
+  let delta = 0;
+  for (const g of hours) {
+    const before = Math.min(capacity[g], demand168[g] ?? 0);
+    const after = Math.min(capacity[g] + direction, demand168[g] ?? 0);
+    delta += after - before;
+  }
+  return delta;
+}
+
+/** Panel 5's Add candidate: the (day, shift) whose next unit yields the largest increase in
+ * `sum(min(capacity[g], demand168[g]))`. Returns `null` when nothing would help (already at/
+ * above the demand curve everywhere `shifts` can reach). */
+function bestAddCoverageCandidate(capacity: number[], demand168: number[], shifts: ShiftDef[]): AddCandidate | null {
+  let bestDay = -1;
+  let bestShiftId: string | null = null;
+  let bestScore = -1;
+  for (let day = 0; day < 7; day++) {
+    for (const s of shifts) {
+      const score = coverageDeltaForUnit(capacity, demand168, shiftGlobalHours(day, s), 1);
+      if (score > bestScore) {
+        bestScore = score;
+        bestDay = day;
+        bestShiftId = s.id;
+      }
+    }
+  }
+  return bestShiftId === null || bestScore <= 0 ? null : { day: bestDay, shiftId: bestShiftId, score: bestScore };
+}
+
+/** Panel 5's Remove candidate: among (day, shift) cells that currently have headcount, the one
+ * whose removal causes the SMALLEST decrease in `sum(min(capacity[g], demand168[g]))` — the
+ * mirror image of `bestAddCoverageCandidate`, so Remove moves smoothly back down the same
+ * coverage curve Add moves up, instead of `trimWeekToBudgetCore`'s convex severity cost
+ * (`candidateCutCost`/`bestCutCandidate`), which optimizes a different objective (queue-harm
+ * shape, not raw coverage) and can hollow out one shift that happens to be "cheap" by that
+ * measure. `coverageDeltaForUnit(..., -1)` is always <= 0 here; "smallest decrease" means
+ * picking the candidate with the highest (closest-to-zero) delta. */
+function bestRemoveCoverageCandidate(grid: Grid, capacity: number[], demand168: number[], shifts: ShiftDef[]): AddCandidate | null {
+  let bestDay = -1;
+  let bestShiftId: string | null = null;
+  let bestScore = -Infinity;
+  for (let day = 0; day < 7; day++) {
+    for (const s of shifts) {
+      if ((grid[day]?.[s.id] ?? 0) <= 0) continue;
+      const score = coverageDeltaForUnit(capacity, demand168, shiftGlobalHours(day, s), -1);
+      if (score > bestScore) {
+        bestScore = score;
+        bestDay = day;
+        bestShiftId = s.id;
+      }
+    }
+  }
+  return bestShiftId === null ? null : { day: bestDay, shiftId: bestShiftId, score: bestScore };
+}
+
+/** Standalone single-step "which unit should I add next" primitive for Panel 5's ED/hold +
+ * control (§10 of the Panel 5 redesign) — scores every (day, shift) in `shifts` by the exact
+ * increase in coverage-hours (`sum(min(capacity[g], demand168[g]))`) one more unit would add;
+ * returns `null` when nothing would help. Deliberately its own scorer
+ * (`bestAddCoverageCandidate`), not `solveFullCoverageWeek`'s `bestAddCandidate` — see that
+ * function's header. */
 export function bestUnitToAdd(grid: Grid, demand168: number[], shifts: ShiftDef[]): { day: number; shiftId: string } | null {
   const capacity = fullWeekCapacity(grid, shifts);
-  const candidate = bestAddCandidate(capacity, demand168, shifts);
+  const candidate = bestAddCoverageCandidate(capacity, demand168, shifts);
   return candidate ? { day: candidate.day, shiftId: candidate.shiftId } : null;
 }
 
@@ -527,8 +592,12 @@ function trimWeekToBudgetCore(
 
 /** Extracted from `trimWeekToBudgetCore`'s inner loop — the single-best-candidate-to-cut
  * selection (`candidateCutCost`, lowest cost, ties broken by lower resulting peak severity),
- * with no mutation. Shared by the trim loop above and by `bestUnitToRemove` below (Panel 5's
- * §10 single-step remove control), so neither duplicates this selection logic. */
+ * with no mutation. Used ONLY by the trim loop above now — Panel 5's `bestUnitToRemove` used
+ * to share this (queue-harm severity), but that produced visibly different behavior from
+ * `bestUnitToAdd`'s coverage-based selection; see `bestRemoveCoverageCandidate` instead. Left
+ * un-inlined into `trimWeekToBudgetCore` on purpose: this stays the one place that selection
+ * logic lives for the actual budget trim, which is still load-bearing (do not touch — see
+ * .claude/rules/engine-solver.md's "Load-bearing history"). */
 function bestCutCandidate(
   grid: Grid,
   capacity: number[],
@@ -574,38 +643,18 @@ function bestCutCandidate(
   return bestShiftId === null ? null : { day: bestDay, shiftId: bestShiftId };
 }
 
-/** Standalone single-step "which unit should I remove next" primitive — the same candidate
- * selection `trimWeekToBudgetCore`'s greedy loop uses, exposed for Panel 5's ED/hold - controls
- * (§10 of the Panel 5 redesign). Computes the current capacity/cyclical-capacity/baseline
- * backlog itself (the "once per outer iteration" recompute `trimWeekToBudgetCore` does), so
- * callers just pass the grid and demand curves, same convention as `bestUnitToAdd`. Returns
- * `null` when the grid has no headcount left to remove anywhere. */
-export function bestUnitToRemove(
-  grid: Grid,
-  hourlyRequirement168: number[],
-  protectedFloorHourly168: number[],
-  demandVolatilityHourly168: number[],
-  arrivals168: number[],
-  floorWhppv: number,
-  shifts: ShiftDef[]
-): { day: number; shiftId: string } | null {
+/** Standalone single-step "which unit should I remove next" primitive for Panel 5's ED/hold -
+ * control (§10 of the Panel 5 redesign) — scores every (day, shift) with headcount by the exact
+ * DECREASE in coverage-hours (`sum(min(capacity[g], demand168[g]))`) removing one unit would
+ * cause, picking the smallest decrease (`bestRemoveCoverageCandidate`). Deliberately the SAME
+ * coverage metric and same (grid, demand168, shifts) call convention as `bestUnitToAdd` above —
+ * see `bestRemoveCoverageCandidate`'s header for why this replaced the trim's severity-cost
+ * selection (`bestCutCandidate`/`candidateCutCost`, which still drives `trimWeekToBudget` itself
+ * and is untouched). Returns `null` when the grid has no headcount left to remove anywhere. */
+export function bestUnitToRemove(grid: Grid, demand168: number[], shifts: ShiftDef[]): { day: number; shiftId: string } | null {
   const capacity = fullWeekCapacity(grid, shifts);
-  const requirementEquivalent168 = arrivals168.map((a) => (a ?? 0) * floorWhppv);
-  const { rescaled: cyclicalCapacity, scale: capacityScale } = rescaleCapacityToRequirementTotal(capacity, requirementEquivalent168);
-  const baselineBacklog = backlogFromCapacity(cyclicalCapacity, arrivals168, floorWhppv);
-  return bestCutCandidate(
-    grid,
-    capacity,
-    cyclicalCapacity,
-    capacityScale,
-    baselineBacklog,
-    hourlyRequirement168,
-    protectedFloorHourly168,
-    demandVolatilityHourly168,
-    arrivals168,
-    floorWhppv,
-    shifts
-  );
+  const candidate = bestRemoveCoverageCandidate(grid, capacity, demand168, shifts);
+  return candidate ? { day: candidate.day, shiftId: candidate.shiftId } : null;
 }
 
 export function trimWeekToBudget(

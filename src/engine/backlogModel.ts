@@ -21,7 +21,7 @@
 //
 // THE REPLACEMENT: nurses can compress how much time they spend per patient, down to — but
 // never past — the worst pace still considered acceptable for a department of this volume:
-// this department's own peer-cohort p25 wHPPV (`lookupWhppvBand(annualVisits).p25Whppv` — the
+// this department's own peer-cohort p25 WHPPV (`lookupWhppvBand(annualVisits).p25Whppv` — the
 // SAME flat number that already drives the "below/within/above the typical range" headline
 // stat). That's the ceiling on how fast anyone can defensibly go; beyond it, extra patients
 // simply don't get adequately seen that hour and become unmet demand carried into the next.

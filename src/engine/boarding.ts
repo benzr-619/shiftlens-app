@@ -517,7 +517,7 @@ export function weeklyArrivalsSpareByCell(
 
 /**
  * Default single representative-week coverage grid: funds the highest-value weekly +1 units
- * (stacking within a cell, up to that cell's weekly demand) until effective ED wHPPV clears
+ * (stacking within a cell, up to that cell's weekly demand) until effective ED WHPPV clears
  * `targetWhppv` at FULL month scope — a recommended starting point (spec §2.6), not a floor or
  * ceiling. Computed once at full scope; it does NOT change when month toggles change. Funds at
  * least the top unit so the recommendation is never a fully empty grid (mirroring the removed
@@ -591,7 +591,7 @@ export function boardingCoverageFte(annualCoveredHours: number, hoursPerFteAnnua
 /**
  * ASSUMPTION, not yet validated against real data: linear proportional recovery — funding
  * X% of ranked boarding coverage (by `cumulativePct`) is assumed to recover exactly X% of
- * the wHPPV consumed by boarding (`lostProductivity.wHppvConsumedByBoarding`), uniformly
+ * the WHPPV consumed by boarding (`lostProductivity.wHppvConsumedByBoarding`), uniformly
  * across the coverage curve. Real recovery is very unlikely to be perfectly linear (the
  * ranking funds the highest-value slots first, so early coverage plausibly recovers MORE
  * than proportionally, with diminishing returns as cheaper slots get funded) — this is a

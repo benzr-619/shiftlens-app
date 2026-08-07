@@ -7,7 +7,7 @@
 //
 // "Pure" here means deterministic/no I/O, not "never calls compute()" — deriving the current-
 // staffing grid's absolute hours needs the target-implied weekly budget, which only compute()
-// knows how to derive (wHPPV target + smoothing + band pipeline). Same inputs -> same output,
+// knows how to derive (WHPPV target + smoothing + band pipeline). Same inputs -> same output,
 // always; no Date.now()/Math.random() anywhere in this file.
 import { compute } from '../../engine';
 import { lookupWhppvBand } from '../edbaLookup';

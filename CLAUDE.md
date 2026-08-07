@@ -120,7 +120,6 @@ src/
     backlogFeedback.ts  the iterative relaxation loop wrapping the trim
     demandBand.ts    cohort band floor + arrivals-volatility buffer
     exactReallocation.ts  Panel 2's hour-conserving reallocation
-    edHoldSolve.ts   Panel 5's joint ED+hold coverage solve
     sandbox.ts       Panel 5's pure arithmetic
     synthesis.ts     combined arrivals+boarding reader-facing totals
     flexMenu.ts      bounded advisory alternate-shift-menu search

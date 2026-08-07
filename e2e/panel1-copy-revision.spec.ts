@@ -4,7 +4,7 @@ import { seedAndGoToResults } from './seed';
 
 // PANEL1_COPY_REVISION_SPEC_2026-07-28.md verification checklist — a Playwright screenshot
 // review of Panel 1 in both states (current staffing entered / absent), confirming the
-// "Effective wHPPV" and "Boarding" toggles are gone (two toggles remain: Arrivals,
+// "Effective WHPPV" and "Boarding" toggles are gone (two toggles remain: Arrivals,
 // Arrivals + Boarding — renamed from "Combined" 2026-07-30), the per-shift diagnostic renders
 // for both a 2-shift and a 3-shift overlapping menu, and the heatmap's split-shift cells + new
 // legend render together correctly.
@@ -18,12 +18,12 @@ test('Panel 1 with current staffing entered (3-shift menu): two toggles, per-shi
   await expect(panel1).toBeVisible();
 
   // Exactly two toggles remain — Arrivals, Arrivals + Boarding — no bare "Boarding", no
-  // "Effective wHPPV". `exact: true` on 'Arrivals' since 'Arrivals + Boarding' would otherwise
+  // "Effective WHPPV". `exact: true` on 'Arrivals' since 'Arrivals + Boarding' would otherwise
   // also match a substring lookup.
   await expect(panel1.getByRole('tab', { name: 'Arrivals', exact: true })).toBeVisible();
   await expect(panel1.getByRole('tab', { name: 'Boarding', exact: true })).toHaveCount(0);
   await expect(panel1.getByRole('tab', { name: 'Arrivals + Boarding' })).toBeVisible();
-  await expect(panel1.getByRole('tab', { name: 'Effective wHPPV' })).toHaveCount(0);
+  await expect(panel1.getByRole('tab', { name: 'Effective WHPPV' })).toHaveCount(0);
 
   // Legend: no old three-swatch leaner/typical/richer row.
   await expect(panel1.locator('.heat-legend-band')).toHaveCount(0);
@@ -41,7 +41,7 @@ test('Panel 1 with current staffing entered (2-shift Day/Night menu) renders the
   await seedAndGoToResults(page, TWO_SHIFT);
   const panel1 = page.locator('#ch-current-staffing');
   await expect(panel1).toBeVisible();
-  await expect(panel1.getByRole('tab', { name: 'Effective wHPPV' })).toHaveCount(0);
+  await expect(panel1.getByRole('tab', { name: 'Effective WHPPV' })).toHaveCount(0);
   await page.screenshot({ path: 'e2e/screenshots/panel1-copy-revision-current-2shift.png', fullPage: true });
 });
 

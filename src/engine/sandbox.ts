@@ -46,7 +46,7 @@ export interface SandboxResult {
  * @param medBoarding168 medical boarding demand, nurse-hours (EngineResult.boarding.cellBoardingRnHours,
  *   medical share only — see the caller for how BH/medical are split when a combined census is used)
  * @param bhBoarding168 BH boarding demand, nurse-hours (0 everywhere if not tracked separately)
- * @param arrivals168 raw arrivals counts (for the effective-wHPPV denominator)
+ * @param arrivals168 raw arrivals counts (for the effective-WHPPV denominator)
  * @param edNurses168 the "ED nurses" sandbox grid's per-hour on-duty headcount
  * @param hold168 the "hold nurses" sandbox grid's per-hour on-duty headcount
  *

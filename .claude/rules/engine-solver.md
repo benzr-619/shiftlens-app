@@ -87,8 +87,7 @@ A shift assigned to day `d` covers global hours `(d*24 + startHour + i) mod 168`
 | Function | File | What it does |
 |---|---|---|
 | `reallocateHoursExact` | `exactReallocation.ts` | Panel 2. Hill-climbing over gcd-based hour-neutral **trades** — total hours conserved **exactly**, by construction. Never adds/removes, never runs the ENA floor (that could only add hours). Shift *count* is deliberately not a second constraint. |
-| `solveEdHoldJointCoverage` | `edHoldSolve.ts` | Joint ED+hold full-coverage greedy fill, no trim phase. 2026-08-05: now wired to Panel 5's "ShiftLens Solver Staffing (Mixed ED + Hold)" starting-point card (reverses the prior "not called by any button" note) — a from-scratch full-coverage fill, so its total deliberately does NOT match the trim-based `result.grid`/"All ED Nurses"/"Hold Nurses for Boarding" totals; the card copy says so. |
-| `bestUnitToAdd` / `bestUnitToRemove` | `solver.ts` | Panel 5's +/- controls. Extracted from `solveFullCoverageWeek`'s and `trimWeekToBudgetCore`'s own selection loops — not duplicates. |
+| `bestUnitToAdd` / `bestUnitToRemove` | `solver.ts` | Panel 5's +/- controls. 2026-08-06: both score the SAME metric, `sum(min(capacity[g], demand168[g]))` — MarginalReturnsCurve's own coverage curve — via a shared `coverageDeltaForUnit` helper, so Remove moves smoothly back down the curve Add moves up. Deliberately its OWN objective, not `trimWeekToBudgetCore`'s convex severity cost (`candidateCutCost`/`bestCutCandidate`) — those previously drove Remove too and produced visibly inconsistent behavior (Remove could hollow out a shift the severity cost called "cheapest" while Add climbed a totally different curve). |
 | `searchFlexibleMenus` | `flexMenu.ts` | Bounded, opt-in, advisory alternate-shift-menu search (<=57 candidates). Never auto-adopted. Overlay (swing-shift) candidates gated on `axes.shiftCount`; overlay *lengths* on `axes.shiftLengths`. Stays on one-shot `solveShiftFit`, never the relaxation loop. |
 | `computeSandbox` | `sandbox.ts` | Panel 5 arithmetic, pure/no-solve. Nets hold + ED into ONE `residualDemand`/`unmet`/`spare` — **never attributed by source**. `holdSurplus` always surfaced. |
 | `computeBacklog`, `computeBandFloorViolations`, `computePerShiftDiagnostic` | `backlog.ts`, `bandFloor.ts`, `hiddenBoarding.ts` | Diagnostic-only, read an already-solved grid. |
@@ -122,6 +121,14 @@ A shift assigned to day `d` covers global hours `(d*24 + startHour + i) mod 168`
 | Shift wraparound | Reversed from day-local to global-week as a genuine bug fix. |
 | flexMenu existing at all | Reverses a documented "no auto-optimizing search" decision. |
 | Backlog feeding the solver | Reverses "backlog is diagnostic-only." |
+
+**Do NOT resurrect `edHoldSolve.ts`/`solveEdHoldJointCoverage`** (Panel 5's "Mixed ED + Hold",
+removed 2026-08-06). Built, budget-capped, then removed within the same day: an ED-nurse-hour is
+never worse than a hold-nurse-hour under this model (ED covers arrivals + BH + medical boarding;
+hold only medical boarding, capped) with no cost/FTE differential to offset that — any
+coverage-maximizing joint solve therefore provably allocates 100% to ED, 0% to hold, every time.
+Don't rebuild without first giving hold a genuine structural advantage (e.g. an ED-hours ceiling
+forcing real overflow) — see git history for the full implementation if reviving this.
 
 Constants named `*_GAMMA`, `*_WEIGHT`, `*_THRESHOLD`, `COLOR_*` are tunable display/cost
 heuristics. `floorWhppv`, `SEVERITY_GAMMA`, the reconciliation identity, and the ENA floor are

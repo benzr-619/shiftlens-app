@@ -81,14 +81,25 @@ function areaPath(values: number[], width: number, height: number, pad: number, 
   return `${top} L ${x(values.length - 1).toFixed(1)} ${(height - pad).toFixed(1)} L ${x(0).toFixed(1)} ${(height - pad).toFixed(1)} Z`;
 }
 
+/** Earliest `startHour` across the shift menu — the shift menu applies identically every day
+ * (`ShiftDef` has no day-of-week variation), so this one offset is reused for every day. */
+function firstShiftStartHour(shiftMenu: ShiftDef[]): number {
+  if (shiftMenu.length === 0) return 0;
+  return Math.min(...shiftMenu.map((s) => ((s.startHour % 24) + 24) % 24));
+}
+
 // PANEL1_COPY_REVISION_SPEC_2026-07-28.md §5d — minimal chart-level labeling (a compact
 // legend, one y-axis label, a handful of x-axis ticks) so the small strip stays legible
 // without captioning it; the fuller explanation lives in each panel's own prose, not here.
 /** A handful of x-axis tick positions/labels — 4 fixed clock points for the 24-point average-
  * day view, one per day-of-week (Mon-Sun DISPLAY order, `lib/dayOrder.ts` — matching the
  * `toDisplayWeekOrder` reorder applied to the underlying curves) for the 168-point full-week
- * view. Never one tick per hour — that's exactly the clutter this is scoped to avoid. */
-function xAxisTicks(length: number): Array<{ pos: number; label: string }> {
+ * view. Never one tick per hour — that's exactly the clutter this is scoped to avoid. Each
+ * day's tick sits at that day's FIRST shift start (`firstShiftStartHour`), not at midnight —
+ * midnight is rarely when a department's day actually turns over, so a tick there landed
+ * mid-shift more often than not; anchoring to the first shift's start makes the tick line up
+ * with where the demand/capacity curves themselves visibly step up for the day. */
+function xAxisTicks(length: number, shiftMenu: ShiftDef[]): Array<{ pos: number; label: string }> {
   if (length <= 24) {
     return [
       { pos: 0, label: '12a' },
@@ -97,18 +108,19 @@ function xAxisTicks(length: number): Array<{ pos: number; label: string }> {
       { pos: 18, label: '6p' },
     ];
   }
-  return DISPLAY_DAY_LABELS.map((label, i) => ({ pos: i * 24, label }));
+  const offset = firstShiftStartHour(shiftMenu);
+  return DISPLAY_DAY_LABELS.map((label, i) => ({ pos: i * 24 + offset, label }));
 }
 
 /** Demand vs. capacity — two lines, the gap shaded. §4's element 1. */
-function DemandCapacityChart({ demand, capacity }: { demand: number[]; capacity: number[] }) {
+function DemandCapacityChart({ demand, capacity, shiftMenu }: { demand: number[]; capacity: number[]; shiftMenu: ShiftDef[] }) {
   const width = 640;
   const height = 150;
   const pad = 24;
   const max = Math.max(...demand, ...capacity, 1e-9) * 1.1;
   const gapAbove = demand.map((d, i) => Math.max(d, capacity[i] ?? 0));
   const gapBelow = demand.map((d, i) => Math.min(d, capacity[i] ?? 0));
-  const ticks = xAxisTicks(demand.length);
+  const ticks = xAxisTicks(demand.length, shiftMenu);
   const xOf = (i: number) => pad + (i / Math.max(demand.length - 1, 1)) * (width - 2 * pad);
   return (
     <>
@@ -189,7 +201,7 @@ export function VisualFrame({
 }: {
   views: VisualFrameView[];
   shiftMenu: ShiftDef[];
-  /** The ED's own single peer-typical wHPPV band — same reference for every toggle/view in
+  /** The ED's own single peer-typical WHPPV band — same reference for every toggle/view in
    * this frame, passed straight through to the heatmap (see WhppvHeatmap's own header). */
   whppvBand: WhppvColorDomain;
   /** Optional controlled mode — pass both to let a parent panel keep its own left-column
@@ -242,7 +254,7 @@ export function VisualFrame({
             {fullWeek ? 'Show average day' : 'Show full week'}
           </button>
         </div>
-        <DemandCapacityChart demand={demand} capacity={capacity} />
+        <DemandCapacityChart demand={demand} capacity={capacity} shiftMenu={shiftMenu} />
         <QueueStrip queueDepth={queueDepth} structuralFloor={active.structuralFloor} label={active.queueLabel ?? 'Backlog'} />
         <div className="frame-heatmap-header">
           <span className="frame-heatmap-label">{active.heatmapLabel ?? 'Staffing heatmap'}</span>

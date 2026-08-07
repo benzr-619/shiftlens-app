@@ -111,7 +111,7 @@ describe('§2.4 backlog diagnostic (no-compression degenerate case, floorWhppv =
 });
 
 // The genuine, new mechanic: nurses compressing pace down to a single flat peer-cohort floor
-// wHPPV — replacing the retired per-hour "stretch to a ceiling" concept.
+// WHPPV — replacing the retired per-hour "stretch to a ceiling" concept.
 describe('real compression (floorWhppv < the pace capacity alone would imply)', () => {
   it('a smaller floorWhppv (faster achievable pace) clears the SAME visit spike faster than a larger one', () => {
     const arrivals = zeros();

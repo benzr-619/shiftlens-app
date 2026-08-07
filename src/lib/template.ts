@@ -139,7 +139,7 @@ function staffingRows(shiftMenu: ShiftDef[], grid?: Grid | null): (string | numb
 // Setup Decisions tab (2026-07-27, follow-up to Part 3) — workflow ANSWERS specific to this
 // department's data (which boarding path was used, headcount semantics, which flex axes were
 // explored), NOT tool-wide policy constants. Deliberately distinct from the REVERTED Settings
-// tab (wHPPV target/ratios/ENA floor — see .claude/rules/template-parsing.md's
+// tab (WHPPV target/ratios/ENA floor — see .claude/rules/template-parsing.md's
 // reversal section): those stay UI-only, set fresh on every setup pass; these are closer to
 // data than policy — answers about how THIS dataset should be read, lost otherwise on
 // re-import (the boarding fork would have to be re-answered even though the underlying
@@ -154,7 +154,7 @@ export const DECISIONS_TEMPLATE_FIELDS = [
   'Flexible Shift Lengths',
   // 2026-07-28, Ben's direct ask — the two boarding nursing ratios, so a re-imported dataset
   // doesn't reset them to the DEFAULTS (4/10). Deliberately scoped to ONLY these two fields —
-  // wHPPV target and ENA floor still never appear in any exported file (see
+  // WHPPV target and ENA floor still never appear in any exported file (see
   // .claude/rules/template-parsing.md's Settings-tab reversal section for why that line
   // otherwise holds).
   'Boarding Ratio (RN : Medical Boarders)',
@@ -231,7 +231,7 @@ export function downloadConsolidatedTemplateXlsx() {
 // blank templates use (`hourGridRows`/`seasonalityRows`/`scalarsRows`/`boardingCensusRows`/
 // `staffingRows`), just fed with real values instead of blanks, so the exported file has
 // EXACTLY the shape `parseXlsxFile`/`parseStaffingUploadFile` already know how to read.
-// **Tool-wide POLICY constants (wHPPV target, both boarding ratios, ENA floor) still never
+// **Tool-wide POLICY constants (WHPPV target, both boarding ratios, ENA floor) still never
 // go in this file** — that's the standing rule the reverted Settings tab violated (see
 // .claude/rules/template-parsing.md). What DOES belong here, added in this same-day
 // extension: the current-staffing grid (genuinely data — what you actually staff, not a tool

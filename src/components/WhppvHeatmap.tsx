@@ -11,6 +11,11 @@ export interface WhppvHeatmapCell {
   hour: number;
   onDuty: number;
   requirement: number;
+  /** Same quantity as `requirement`, before `Math.ceil` (engine/index.ts's `hourlyRequirement =
+   * cellCoreHoursSmoothed.map(Math.ceil)`) — `requirement` stays the solver's actual integer
+   * target (used for coloring/floor comparisons elsewhere); this is tooltip-display-only, so a
+   * genuinely fractional demand curve doesn't read as a suspiciously round number. */
+  demandRaw: number;
   arrivals: number;
   belowFloor: boolean; // under the ENA on-duty floor — a safety check, red outline + "!"
   riskReasons: string[];
@@ -22,25 +27,25 @@ export interface WhppvHeatmapCell {
   perShift?: Array<{ label: string; headcount: number }>;
 }
 
-/** Realized wHPPV for one cell — nurse-hours on duty ÷ arrivals that hour. `null` when there
+/** Realized WHPPV for one cell — nurse-hours on duty ÷ arrivals that hour. `null` when there
  * were no arrivals (no meaningful per-visit ratio, renders neutral). */
 function cellRealizedWhppv(cell: WhppvHeatmapCell): number | null {
   return cell.arrivals > 0 ? cell.onDuty / cell.arrivals : null;
 }
 
 /**
- * 2026-08-05 — color reversed back to a SINGLE week-level wHPPV band (same numbers driving the
+ * 2026-08-05 — color reversed back to a SINGLE week-level WHPPV band (same numbers driving the
  * "ranges from X to Y" prose sentence every panel already shows), not a per-hour one. The prior
  * per-hour-band mechanism colored a cell by `onDuty/requirement` against THAT HOUR's own
  * scaled band — mathematically the same peer band, just necessarily rescaled by that hour's
  * own volume so headcount stayed comparable, but the practical effect read as "some hours have
  * a different bar than others" and didn't line up with which hour prose called out as the
- * week's actual wHPPV extreme (an hour can be the real outlier and still sit inside its own
- * volume-scaled band). Comparing the SAME realized-wHPPV number the prose already cites against
+ * week's actual WHPPV extreme (an hour can be the real outlier and still sit inside its own
+ * volume-scaled band). Comparing the SAME realized-WHPPV number the prose already cites against
  * ONE fixed band fixes that mismatch directly, at the cost of more noise on very-low-volume
- * cells (a couple of arrivals can swing wHPPV a lot). Normalized by `domain.target` (ratio 1.0
+ * cells (a couple of arrivals can swing WHPPV a lot). Normalized by `domain.target` (ratio 1.0
  * = "at target") so `ratioVisual`'s asymmetric-ramp constants apply the same way Panel 2's own
- * per-shift wHPPV coloring already uses them (see lib/heatmapColor.ts's own header).
+ * per-shift WHPPV coloring already uses them (see lib/heatmapColor.ts's own header).
  */
 function cellVisual(cell: WhppvHeatmapCell, domain: WhppvColorDomain): CellVisual {
   const realized = cellRealizedWhppv(cell);
@@ -51,16 +56,16 @@ function cellVisual(cell: WhppvHeatmapCell, domain: WhppvColorDomain): CellVisua
 
 function cellTitle(cell: WhppvHeatmapCell): string {
   const realized = cellRealizedWhppv(cell);
-  const whppvPart = realized === null ? 'no arrivals recorded' : `${realized.toFixed(2)} realized wHPPV`;
-  // Nurse-hour and arrivals curves are fractional (allocation shares, arrival-rate averages),
-  // not integers — round consistently to 2dp everywhere in the tooltip rather than letting
-  // some fields print long floats and others print short ones.
-  let base = `${DAY_LABELS[cell.day]} ${cell.hour.toString().padStart(2, '0')}:00 — ${cell.onDuty.toFixed(2)}/${cell.requirement.toFixed(2)} on duty vs. required, ${whppvPart}, ${cell.arrivals.toFixed(2)} arrivals`;
+  const whppvPart = realized === null ? 'no arrivals recorded' : `${realized.toFixed(2)} realized WHPPV`;
+  // onDuty is a headcount — always a whole number of nurses, never fractional, so it's never
+  // toFixed'd. demandRaw/arrivals are fractional (allocation shares, arrival-rate averages),
+  // rounded consistently to 2dp so they don't print long floats.
+  let base = `${DAY_LABELS[cell.day]} ${cell.hour.toString().padStart(2, '0')}:00 — ${cell.onDuty}/${cell.demandRaw.toFixed(2)} on duty vs. demand, ${whppvPart}, ${cell.arrivals.toFixed(2)} arrivals`;
   // §7 — put the total plus a labeled per-shift breakdown in the tooltip so nothing is lost
   // even when the cell text itself just shows the split ("7+4"), not each shift's label.
   if (cell.perShift && cell.perShift.length > 1) {
-    const breakdown = cell.perShift.map((s) => `${s.label}: ${s.headcount.toFixed(2)}`).join(', ');
-    base += `\n${cell.onDuty.toFixed(2)} total (${breakdown})`;
+    const breakdown = cell.perShift.map((s) => `${s.label}: ${s.headcount}`).join(', ');
+    base += `\n${cell.onDuty} total (${breakdown})`;
   }
   return cell.riskReasons.length > 0 ? `${base}\n⚠ ${cell.riskReasons.join('; ')}` : base;
 }
@@ -122,7 +127,7 @@ export function WhppvHeatmap({
 }: {
   cells: WhppvHeatmapCell[];
   shiftMenu: ShiftDef[];
-  /** The ED's own single peer-typical wHPPV band (25th-75th percentile for its volume,
+  /** The ED's own single peer-typical WHPPV band (25th-75th percentile for its volume,
    * widened to include its own target — see whppvColorDomain.ts) — SAME reference for every
    * cell regardless of hour. Computed once per panel via `computeColorDomain`, not per cell. */
   whppvBand: WhppvColorDomain;
@@ -186,12 +191,12 @@ export function WhppvHeatmap({
         </div>
         <div className="heat-legend-line">
           <span className="heat-legend-swatch-inline heat-legend-swatch-lean" />
-          Red = this hour's realized wHPPV falls below your peer-typical range.
+          Red = this hour's realized WHPPV falls below your peer-typical range.
           <span className="heat-legend-swatch-inline heat-legend-swatch-rich" />
           Blue = above it.
         </div>
         <div className="heat-legend-line">
-          Peer-typical range: <strong>{whppvBand.low.toFixed(2)}–{whppvBand.high.toFixed(2)} wHPPV</strong> (25th–75th
+          Peer-typical range: <strong>{whppvBand.low.toFixed(2)}–{whppvBand.high.toFixed(2)} WHPPV</strong> (25th–75th
           percentile for EDs your size).
         </div>
         {cells.some((c) => c.belowFloor) && (

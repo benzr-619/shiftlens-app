@@ -16,7 +16,7 @@
 // rationale — the old model's `stretch = max(0, bandCeiling - capacity)` was backwards: it
 // assumed the WORSE an hour was staffed, the MORE backlog-clearing throughput was available).
 // `computeBacklog` now takes `arrivals168` (raw visit counts) + `floorWhppv` (a single flat
-// department-level p25-wHPPV scalar, `lookupWhppvBand(annualVisits).p25Whppv`) in place of
+// department-level p25-WHPPV scalar, `lookupWhppvBand(annualVisits).p25Whppv`) in place of
 // `bandCeilingHourly`. `hourlyRequirement168` STAYS as a parameter — it's still needed for
 // severity normalization and the caught-up threshold (both unrelated to which recurrence
 // generates the backlog curve).
@@ -136,7 +136,7 @@ export interface BacklogResult {
  *   normalization and the caught-up threshold, unrelated to which recurrence produced the
  *   backlog curve itself. For a no-compression call, this is typically the SAME array as
  *   `arrivals168`.
- * @param floorWhppv the single flat department-level p25 wHPPV (or `NO_COMPRESSION_FLOOR_WHPPV`
+ * @param floorWhppv the single flat department-level p25 WHPPV (or `NO_COMPRESSION_FLOOR_WHPPV`
  *   = 1 for a curve with no real visits concept).
  */
 export function computeBacklog(

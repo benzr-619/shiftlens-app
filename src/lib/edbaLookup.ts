@@ -1,9 +1,9 @@
 // EDBA-cohort aggregate benchmark, keyed by annual volume band. This is a small shipped
 // lookup table, NOT ED-specific seeding — it is a cross-ED aggregate used only to pre-fill
-// the wHPPV target, always user-editable and always framed as "what similar EDs run at,"
-// never presented as a mandated target. Source: EDBA cohort median_wHPPV_adjusted.
+// the WHPPV target, always user-editable and always framed as "what similar EDs run at,"
+// never presented as a mandated target. Source: EDBA cohort median_WHPPV_adjusted.
 //
-// p25Whppv/p75Whppv come from the cohort's unadjusted p25_wHPPV/p75_wHPPV columns — they
+// p25Whppv/p75Whppv come from the cohort's unadjusted p25_WHPPV/p75_WHPPV columns — they
 // are NOT a centered interval around medianWhppv (which is the adjusted median). Present
 // them as an approximate typical range for the band, not a precise CI around the displayed
 // median — see Step 2 of the setup wizard (VolumeStep.tsx).

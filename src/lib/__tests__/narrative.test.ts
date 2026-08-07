@@ -44,8 +44,8 @@ describe('narrative.ts — pure headline functions', () => {
     const s = whppvRangeSentence(1.1, { day: 6, hour: 7 }, 2.3, { day: 1, hour: 19 }, 1.5);
     expect(s).toContain('Sat 07:00');
     expect(s).toContain('Mon 19:00');
-    expect(s).toContain('1.10 wHPPV');
-    expect(s).toContain('2.30 wHPPV');
+    expect(s).toContain('1.10 WHPPV');
+    expect(s).toContain('2.30 WHPPV');
   });
 
   it('comparisonHeadlineSentence: all four gapKind branches produce distinct, non-empty text', () => {
@@ -82,14 +82,16 @@ describe('narrative.ts — pure headline functions', () => {
   });
 
   it('shiftDiagnosticSentence: sign-aware net = staffed - arrivalDemand - boardingDemand, singular/plural, boarding-absent, and both surplus branches (2026-08-05 boarding-capacity-fix)', () => {
+    // staffedHours/requiredHours/boardingNeedHours are weekly totals (see hiddenBoarding.ts);
+    // scaled x7 here so the sentence's /7 daily-average conversion reproduces clean numbers.
     const understaffedSingle: ShiftDiagnosticGroup = {
       shiftIds: ['night'],
       labels: ['Night'],
       arrivalsStatus: 'understaffed',
-      staffedHours: 400,
-      requiredHours: 567,
+      staffedHours: 2800,
+      requiredHours: 3969,
       surplus: 0,
-      boardingNeedHours: 283,
+      boardingNeedHours: 1981,
       boardingCovered: false,
     };
     const s1 = shiftDiagnosticSentence(understaffedSingle);
@@ -106,10 +108,10 @@ describe('narrative.ts — pure headline functions', () => {
       shiftIds: ['day', 'evening'],
       labels: ['Day', 'Evening'],
       arrivalsStatus: 'overstaffed',
-      staffedHours: 900,
-      requiredHours: 700,
-      surplus: 200,
-      boardingNeedHours: 350,
+      staffedHours: 6300,
+      requiredHours: 4900,
+      surplus: 1400,
+      boardingNeedHours: 2450,
       boardingCovered: false,
     };
     const s3 = shiftDiagnosticSentence(overstaffedPluralNotCovered);
@@ -118,7 +120,7 @@ describe('narrative.ts — pure headline functions', () => {
     );
 
     // Same arrivalsNet, smaller boarding claim -> leaves a cushion instead.
-    const overstaffedCovered: ShiftDiagnosticGroup = { ...overstaffedPluralNotCovered, boardingNeedHours: 50, boardingCovered: true };
+    const overstaffedCovered: ShiftDiagnosticGroup = { ...overstaffedPluralNotCovered, boardingNeedHours: 350, boardingCovered: true };
     const s4 = shiftDiagnosticSentence(overstaffedCovered);
     expect(s4).toBe(
       'On average, Day and Evening shifts run 200 nursing hours ahead of arrivals demand alone. Boarding claims 50 of that surplus first, leaving 150 hours of cushion.'

@@ -28,7 +28,7 @@ function currentGrid(): Grid {
   return grid;
 }
 
-describe('PR H — PPTX export (RESULTS_PAGE_V2_SPEC_2026-07-27.md §7, R12 scope narrowing)', () => {
+describe('PR H/R13 — PPTX export (fixed 10-slide deck)', () => {
   let writeFileSpy: ReturnType<typeof vi.spyOn>;
   let addSlideSpy: ReturnType<typeof vi.spyOn>;
 
@@ -42,7 +42,7 @@ describe('PR H — PPTX export (RESULTS_PAGE_V2_SPEC_2026-07-27.md §7, R12 scop
     addSlideSpy.mockRestore();
   });
 
-  it('exports a full dataset (arrivals + boarding + current staffing) without throwing, includes boarding slides', async () => {
+  it('exports exactly 10 slides for a full dataset (arrivals + boarding + current staffing)', async () => {
     const inputs = baseInputs({ admitRate: 0.2, boardingDuration: 5 });
     const result = compute(inputs);
     await exportResultsToPptx({
@@ -54,10 +54,10 @@ describe('PR H — PPTX export (RESULTS_PAGE_V2_SPEC_2026-07-27.md §7, R12 scop
       shiftMenu: dayNight,
     });
     expect(writeFileSpy).toHaveBeenCalledWith({ fileName: 'ShiftLens-Results.pptx' });
-    expect(addSlideSpy.mock.calls.length).toBeGreaterThan(0);
+    expect(addSlideSpy.mock.calls.length).toBe(10);
   });
 
-  it('exports an arrivals-only dataset (boarding absent) with FEWER slides, but still includes Method & Limitations', async () => {
+  it('exports exactly 10 slides for an arrivals-only dataset (boarding absent)', async () => {
     const inputs = baseInputs(); // no admitRate/boardingDuration -> boarding absent
     const result = compute(inputs);
     expect(result.boarding).toBeNull();
@@ -70,49 +70,20 @@ describe('PR H — PPTX export (RESULTS_PAGE_V2_SPEC_2026-07-27.md §7, R12 scop
       shiftMenu: dayNight,
     });
     expect(writeFileSpy).toHaveBeenCalled();
-    expect(addSlideSpy.mock.calls.length).toBeGreaterThan(0);
+    expect(addSlideSpy.mock.calls.length).toBe(10);
   });
 
-  it('a full dataset produces MORE slides than an arrivals-only one (boarding slide included)', async () => {
-    const fullInputs = baseInputs({ admitRate: 0.2, boardingDuration: 5 });
-    const fullResult = compute(fullInputs);
-    await exportResultsToPptx({
-      result: fullResult,
-      inputs: fullInputs,
-      currentStaffingGrid: currentGrid(),
-      wHppvTarget: 1.5,
-      arrivals: fullInputs.arrivals,
-      shiftMenu: dayNight,
-    });
-    const fullCount = addSlideSpy.mock.calls.length;
-
-    addSlideSpy.mockClear();
-
-    const arrivalsOnlyInputs = baseInputs();
-    const arrivalsOnlyResult = compute(arrivalsOnlyInputs);
-    await exportResultsToPptx({
-      result: arrivalsOnlyResult,
-      inputs: arrivalsOnlyInputs,
-      currentStaffingGrid: currentGrid(),
-      wHppvTarget: 1.5,
-      arrivals: arrivalsOnlyInputs.arrivals,
-      shiftMenu: dayNight,
-    });
-    const arrivalsOnlyCount = addSlideSpy.mock.calls.length;
-
-    expect(fullCount).toBeGreaterThan(arrivalsOnlyCount);
-  });
-
-  it('handles no current staffing gracefully (does not throw), still includes Method & Limitations', async () => {
+  it('handles no current staffing gracefully (does not throw), still exports 10 slides', async () => {
     const inputs = baseInputs({ admitRate: 0.2, boardingDuration: 5 });
     const result = compute(inputs);
     await expect(
       exportResultsToPptx({ result, inputs, currentStaffingGrid: {}, wHppvTarget: 1.5, arrivals: inputs.arrivals, shiftMenu: dayNight })
     ).resolves.not.toThrow();
     expect(writeFileSpy).toHaveBeenCalled();
+    expect(addSlideSpy.mock.calls.length).toBe(10);
   });
 
-  it('R12: an untouched sandbox (no sandboxEdGrid/sandboxHoldGrid) exports without throwing, prefilled with the recommendation', async () => {
+  it('an untouched sandbox (no sandboxEdGrid/sandboxHoldGrid) exports without throwing, prefilled with the recommendation', async () => {
     const inputs = baseInputs({ admitRate: 0.2, boardingDuration: 5 });
     const result = compute(inputs);
     await expect(
@@ -128,9 +99,10 @@ describe('PR H — PPTX export (RESULTS_PAGE_V2_SPEC_2026-07-27.md §7, R12 scop
       })
     ).resolves.not.toThrow();
     expect(writeFileSpy).toHaveBeenCalled();
+    expect(addSlideSpy.mock.calls.length).toBe(10);
   });
 
-  it('R12: a real sandbox scenario (ED + hold grids provided) exports without throwing', async () => {
+  it('a real sandbox scenario (ED + hold grids provided) exports without throwing', async () => {
     const inputs = baseInputs({ admitRate: 0.2, boardingDuration: 5 });
     const result = compute(inputs);
     const edGrid: Grid = {};
@@ -152,5 +124,7 @@ describe('PR H — PPTX export (RESULTS_PAGE_V2_SPEC_2026-07-27.md §7, R12 scop
       })
     ).resolves.not.toThrow();
     expect(writeFileSpy).toHaveBeenCalled();
+    expect(addSlideSpy.mock.calls.length).toBe(10);
   });
+
 });

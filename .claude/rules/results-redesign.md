@@ -1,10 +1,10 @@
 # Results page & UI — current state
 
 Live behavior only. **Full history: `docs/archive/rules/results-redesign.md`** (~184 KB — three
-successive page architectures, twelve numbered reversals, and every flagged judgment call). Read
-the archive before reversing anything listed under "Load-bearing history" below.
+page architectures, twelve numbered reversals, and every flagged judgment call). Read the
+archive before reversing anything listed under "Load-bearing history" below.
 
-Filename kept as `results-redesign.md` because ~20 source comments reference it.
+Filename kept as `results-redesign.md` — ~20 source comments reference it.
 
 ---
 
@@ -20,7 +20,7 @@ No router, no tabs, no sidebar.
 | 2 | Could moving hours fix it? | `computeScenarioB`, `computeCombinedReallocation` |
 | 3 | What would it take to fully cover the department? | `fullCoverageCombined` (PR B) |
 | 4 | ShiftLens Solver staffing | `result.grid`, `searchFlexibleMenus`, `solveFullCoverageWeekWithTrajectory` |
-| 5 | Test it yourself (sandbox) | `computeSandbox`, `computeBacklogFromCapacity`, `solveEdHoldJointCoverage`, `bestUnitToAdd/Remove` |
+| 5 | Test it yourself (sandbox) | `computeSandbox`, `computeBacklogFromCapacity`, `bestUnitToAdd/Remove` |
 
 2026-08-05: `computePerShiftDiagnostic`/`shiftDiagnosticSentence` (row 1) is now also called by
 Panels 2, 4, and 5, each against its own active-toggle grid — see the Panel 5 section below.
@@ -28,9 +28,9 @@ Panels 2, 4, and 5, each against its own active-toggle grid — see the Panel 5 
 **Deleted, do not resurrect:** `CoreGridTab`, `CurrentStaffingAnalysis`, `ScenarioBSection`,
 `HiddenBoardingSection`, `BoardingTransition`, `ConstrainedReallocationSection`,
 `FundingAskSection`, `FinancePartnerWorksheet`, `SynthesisSection`, `BoardingCoverageSection`,
-`ShiftMenuFlexibilitySection`, `ChapterRail`, `CompareTab`, `EvidenceSurfaceSection`.
-Their content was absorbed into the five panels (or, for the evidence surface, removed from the
-UI entirely on 2026-08-05 — `lib/constantsMetadata.ts` survives, consumed only by `pptxExport`).
+`ShiftMenuFlexibilitySection`, `ChapterRail`, `CompareTab`, `EvidenceSurfaceSection`. Content was
+absorbed into the five panels (evidence surface removed 2026-08-05 — `lib/constantsMetadata.ts`
+now unused, since PPTX export dropped its Method & Limitations slide; see below).
 
 ## `VisualFrame` — the one shared visual, reused by all five panels
 
@@ -61,18 +61,15 @@ day**, 24 points; full week is an expand toggle) + queue-depth strip + `WhppvHea
   realized wHPPV (`onDuty/arrivals`, `null`/no ink when `arrivals` is 0) against ONE
   `computeColorDomain(annualVisits, wHppvTarget)` result (`lib/whppvColorDomain.ts`), normalized
   by `domain.target` so `ratioVisual`'s asymmetric-ramp constants apply the same way regardless
-  of which panel's wHppvTarget is in play. `WhppvHeatmap` now takes a `whppvBand: WhppvColorDomain`
-  prop (computed once per panel, passed through `VisualFrame`'s own `whppvBand` prop — same value
-  for every toggle in that frame, since realized wHPPV doesn't change by which demand curve is
-  being displayed). Read the load-bearing history entry below before reversing this again — this
-  is the SECOND reversal, undoing the 2026-07-26 per-hour-band change (`docs/archive/rules/
-  results-redesign.md`'s "Change 4 — heatmap: SECOND reversal" section), because the per-hour
-  band, while the same underlying peer band, is necessarily rescaled by each hour's own volume —
-  an hour named as the week's real wHPPV extreme in the panel's own prose (`hourlyWhppvRange`)
-  could still land inside its own volume-scaled band and render uncolored, a direct
-  prose-vs-heatmap mismatch that was the actual complaint. `EngineResult.bandFloorHourly` /
-  `bandCeilingHourly` still exist and still drive `computePerShiftDiagnostic` (Panel 1) and the
-  solver's own floor/ceiling reporting — unrelated to heatmap color now.
+  of which panel's wHppvTarget is in play. `WhppvHeatmap` takes a `whppvBand: WhppvColorDomain`
+  prop (computed once per panel, passed through `VisualFrame`'s own `whppvBand` prop). Read the
+  load-bearing history entry below before reversing this again — this is the SECOND reversal,
+  undoing the 2026-07-26 per-hour-band change, because a per-hour band, while the same
+  underlying peer band, is rescaled by each hour's own volume — an hour named as the week's
+  real wHPPV extreme in the panel's own prose (`hourlyWhppvRange`) could still land inside its
+  own volume-scaled band and render uncolored, a direct prose-vs-heatmap mismatch. `EngineResult
+  .bandFloorHourly`/`bandCeilingHourly` still drive `computePerShiftDiagnostic` and the solver's
+  floor/ceiling reporting — unrelated to heatmap color now.
 - **Asymmetric ramp:** lean saturates fast (a small dip reads alarming), rich ramps slowly and
   clamps ~2x. Both gamma-eased. `RICHER_RGB` is **saturated** blue, not muted — a real
   8-nurses-against-4 hour rendered pale gray was the single most actionable finding on a real
@@ -85,8 +82,8 @@ day**, 24 points; full week is an expand toggle) + queue-depth strip + `WhppvHea
   restored, since there's a single range again to show.
 - **Tooltips** — heatmap cells and the marginal-curve markers (`MarginalReturnsCurve.tsx`) both
   render through a shared JS-driven tooltip (`components/HoverTooltip.tsx` +
-  `lib/useHoverTooltip.ts`), not native `title`/SVG `<title>` — those turned out not to fire
-  reliably in practice. Don't reintroduce native title attributes for either without checking.
+  `lib/useHoverTooltip.ts`), not native `title`/SVG `<title>` — those didn't fire reliably in
+  practice. Don't reintroduce native title attributes for either without checking.
 
 ## Conventions
 
@@ -114,12 +111,18 @@ three separate times — it works, keep it.
 
 ## PPTX export (`lib/pptxExport.ts`)
 
-Scope: title -> current-staffing analysis (Panel 1) -> the user's sandbox scenario (Panel 5, or
-the recommendation if `sandboxEdGrid`/`sandboxHoldGrid` are still `null`) -> the delta -> Method
-& Limitations (always included). **Panels 2/3/4 are not exported.** Everything native — grids as
-PPTX tables, charts via `addChart`, brand mark as a native shape. No images. Loaded via dynamic
-`import()` so `pptxgenjs` stays out of the main bundle. Slide titles come from `lib/narrative.ts`,
-never a second hand-written set.
+R13 (2026-08-07): **fixed 10-slide deck**, replacing R12's title -> current-staffing -> sandbox
+-> delta -> Method & Limitations (dropped entirely). Panels 1/3/5 all feed it now: title;
+current staffing (P1) + grid; WHPPV range + full-week arrivals chart; boarding impact +
+full-week arrivals+boarding chart; peak lag/weekday backlog + avg-day backlog chart;
+full-coverage ask (P3's `fullCoverage`/`fullCoverageCombined`) + full-week chart at full
+coverage; the sandbox scenario (P5, recommendation if `sandboxEdGrid`/`sandboxHoldGrid` are
+`null`) — ED(+hold) tables; comparison to current staffing + `MarginalReturnsCurve`'s coverage
+curve as a native chart; P5's two full-week demand-vs-capacity views (arrivals; +boarding).
+
+Everything native (tables, `addChart` line charts, brand mark as a shape), no images, dynamic
+`import()`. Prose comes from de-personalized `lib/narrative.ts` functions (no "your"), never a
+second hand-written set; static titles/labels stay literals in `pptxExport.ts`.
 
 ## Three distinct grid concepts — don't merge them
 
@@ -129,34 +132,35 @@ never a second hand-written set.
 | `currentStaffingGrid` | "What you actually staff today." Independent, starts blank, **never** seeded from `result.grid`. Written by both setup and results. |
 | `sandboxEdGrid` / `sandboxHoldGrid` | Panel 5's ephemeral what-if. `null` = untouched. In the store only so `pptxExport` can read it. |
 
-## Panel 5 (2026-08-05 redesign) — starting-point cards, `activeStrategy`, joint +/- control
+## Panel 5 — mechanism x target matrix, `activeStrategy`, joint +/- control
 
-Replaces the flat `.button-row` of starting-point buttons and the separate ED/hold add/remove
-button rows. Builds on the queue-depth fix above — the marginal curve/queue strip needed correct
-numbers before the +/- control could be judged against them.
+2026-08-06: replaced 2026-08-05's stacked cards, which changed OFFERED cards with the page toggle
+— Panels 2/3 behavior, not Panel 1's (toggle = lens on one selection). Mechanism and target are
+now separate axes.
 
-- **Stacked starting-point cards** (title + description, "still editable after") replace the
-  button row. "Re-allocated Current Staffing" has different copy per toggle — `computeScenarioB`
-  vs. `computeCombinedReallocation`. A new "Mixed ED + Hold" card (combined only) wires up
-  `solveEdHoldJointCoverage` — previously unused by any Panel 5 button, see engine-solver.md;
-  its total won't match "All ED Nurses"/"Hold Nurses for Boarding," flagged in its own copy.
-- **`activeStrategy`** (`'current' | 'reallocated' | 'allEd' | 'holdSplit' | 'mixed'`) tracks the
-  last-clicked card. Resets to `'current'` on toggle change; a manual grid edit never touches it.
-- **The +/- control** moved to a single up/down next to `MarginalReturnsCurve`'s "Your scenario"
-  marker. Under Arrivals, or `activeStrategy === 'allEd'`, it operates on ED alone. Otherwise it
-  jointly picks ED vs. hold via `bestUnitToAdd`/`Remove` scored against `edResidualDemand168`/
-  `holdCandidateDemand168` on hours of deficit/slack — JUDGMENT CALL, flagged in `Panel5.tsx`:
-  not cost-normalized, can favor the pool with the longer best shift.
-- **ED `GridEditor` delta**: each cell shows a live `(+N)/(-N)` vs. `currentStaffingGrid`. Not on
-  the hold table — no baseline exists there.
-- **Per-shift diagnostic** (Panel 1's, see table above) replaces "Hours below need this week."
+- **`strategyMatrix`**: one row per mechanism (Current Staffing; Re-allocated; All ED Nurses;
+  Hold Nurses for Boarding), "Choose"/"Selected" per target column. The hold row is
+  combined-only BY DEFINITION — arrivals column left blank, not disabled. Every row/cell is
+  reachable regardless of `toggle`. A "Mixed ED + Hold" row was built and removed same-day — see
+  engine-solver.md's load-bearing history for why it can't work under this model.
+- **`activeStrategy`** (`'current' | 'reallocated-arrivals' | 'reallocated-combined' |
+  'allEd-arrivals' | 'allEd-combined' | 'holdSplit'`) encodes mechanism+target. `changeToggle`
+  NEVER touches it or either sandbox grid — it only re-scores the selected grid against a
+  different demand curve (mirroring Panel 1). A manual `GridEditor` edit also never touches it.
+- **"Which shifts can hold nurses work?"** renders ABOVE the matrix, unconditionally —
+  `holdSplit` reads it at click time, so intent must be set first.
+- **The +/- control**: single up/down by `MarginalReturnsCurve`'s "Your scenario" marker. ED
+  alone under Arrivals or "All ED Nurses"; else jointly ED vs. hold via `bestUnitToAdd`/`Remove`
+  — JUDGMENT CALL, not cost-normalized.
+- **ED `GridEditor` delta**: `(+N)/(-N)` vs. `currentStaffingGrid`. Not on the hold table.
+- **Per-shift diagnostic** (Panel 1's) replaces the old aggregate.
 
 ## Live inconsistency, flagged not fixed
 
 Panel 4's "each additional shift removes roughly X hours" prose is driven by the **trim-based**
 severity curve (`marginalCurve`/`marginalKneePoint`), while the chart below it is driven by the
 **fill-up-from-zero** hours-covered curve (`solveFullCoverageWeekWithTrajectory`). Two different
-engine computations answering adjacent questions. Not reconciled.
+computations answering adjacent questions. Not reconciled.
 
 ## Load-bearing history — read the archive first
 
@@ -176,4 +180,4 @@ engine computations answering adjacent questions. Not reconciled.
   nothing in between.
 - Desktop viewport only — no mobile/responsive layout.
 - `e2e/panel1-2.spec.ts`'s Panel 2 spec references a "Current" toggle tab that no longer exists.
-  Pre-existing failure, unrelated to any recent change.
+  Pre-existing failure, unrelated to recent changes.

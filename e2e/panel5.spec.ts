@@ -2,35 +2,44 @@ import { test, expect } from '@playwright/test';
 import { NAMED_DEPARTMENT_PARAMS } from '../src/lib/__fixtures__/namedDepartments';
 import { seedAndGoToResults } from './seed';
 
-// Panel 5 redesign (2026-08-05) — an Arrivals / Arrivals + Boarding toggle now drives every
-// stat/curve/starting-point/grid on the panel; the hold-nurse grid and its shift-restriction
-// checkboxes only exist under Arrivals + Boarding.
+// Panel 5 redesign (2026-08-06) — the mechanism (starting grid) x target (which demand it was
+// built against) matrix is fully rendered regardless of the page's Arrivals / Arrivals +
+// Boarding toggle; the toggle only changes which demand curve scores the currently-selected
+// grid. "Which shifts can hold nurses work?" renders ABOVE the matrix, unconditionally — the
+// "Hold Nurses for Boarding" mechanism reads it at click time, so it must already reflect
+// intent before that click. The hold-nurse GRID (table) is always mounted, even under the
+// Arrivals-only toggle — hold nurses just don't cover arrivals demand, so adding them doesn't
+// change that toggle's visuals. (A "Mixed ED + Hold" mechanism was built and removed same-day —
+// see .claude/rules/engine-solver.md's load-bearing history.)
 
-test('Panel 5 defaults to Arrivals — only the ED grid is mounted, hold grid absent', async ({ page }) => {
+test('Panel 5 renders the full mechanism x target matrix regardless of toggle, hold grid visible by default', async ({ page }) => {
   const profile = NAMED_DEPARTMENT_PARAMS.underTargetDayShort;
   await seedAndGoToResults(page, profile);
   const panel5 = page.locator('#ch-sandbox');
   await expect(panel5).toBeVisible();
 
-  await expect(panel5.locator('.sandbox-grid')).toHaveCount(1);
+  await expect(panel5.locator('.sandbox-grid')).toHaveCount(2);
+  await expect(panel5.getByText('Which shifts can hold nurses work?')).toBeVisible();
   await expect(panel5.getByRole('button', { name: 'Current Staffing', exact: true })).toBeVisible();
-  await expect(panel5.getByRole('button', { name: 'Re-allocated Current Staffing' })).toBeVisible();
-  await expect(panel5.getByRole('button', { name: 'ShiftLens Solver Staffing', exact: true })).toBeVisible();
-  await expect(panel5.getByText('Which shifts can hold nurses work?')).toHaveCount(0);
+  await expect(panel5.getByRole('button', { name: 'Re-allocated Current Staffing — Arrivals only' })).toBeVisible();
+  await expect(panel5.getByRole('button', { name: 'Re-allocated Current Staffing — Arrivals + Boarding' })).toBeVisible();
+  await expect(panel5.getByRole('button', { name: 'ShiftLens Solver — All ED Nurses — Arrivals only' })).toBeVisible();
+  await expect(panel5.getByRole('button', { name: 'ShiftLens Solver — All ED Nurses — Arrivals + Boarding' })).toBeVisible();
+  await expect(panel5.getByRole('button', { name: 'ShiftLens Solver — Hold Nurses for Boarding', exact: true })).toBeVisible();
 });
 
-test('switching to Arrivals + Boarding mounts the hold grid, checkboxes, and hold-specific starting points', async ({ page }) => {
+test('the hold grid stays mounted across both toggle states', async ({ page }) => {
   const profile = NAMED_DEPARTMENT_PARAMS.measuredBoardingCensus;
   await seedAndGoToResults(page, profile);
   const panel5 = page.locator('#ch-sandbox');
   await expect(panel5).toBeVisible();
+  await expect(panel5.locator('.sandbox-grid')).toHaveCount(2);
 
   await panel5.getByRole('tab', { name: 'Arrivals + Boarding' }).click();
-
   await expect(panel5.locator('.sandbox-grid')).toHaveCount(2);
-  await expect(panel5.getByText('Which shifts can hold nurses work?')).toBeVisible();
-  await expect(panel5.getByRole('button', { name: 'ShiftLens Solver Staffing (All ED Nurses)' })).toBeVisible();
-  await expect(panel5.getByRole('button', { name: 'ShiftLens Solver Staffing (Hold Nurses for Boarding)' })).toBeVisible();
+
+  await panel5.getByRole('tab', { name: 'Arrivals', exact: true }).click();
+  await expect(panel5.locator('.sandbox-grid')).toHaveCount(2);
 });
 
 test('prefill buttons populate the ED nurses grid under Arrivals', async ({ page }) => {
@@ -42,7 +51,7 @@ test('prefill buttons populate the ED nurses grid under Arrivals', async ({ page
   const firstEdInput = panel5.locator('.sandbox-grid').first().locator('input').first();
   await expect(firstEdInput).toHaveValue('0');
 
-  await panel5.getByRole('button', { name: 'ShiftLens Solver Staffing', exact: true }).click();
+  await panel5.getByRole('button', { name: 'ShiftLens Solver — All ED Nurses — Arrivals only' }).click();
   const values = await panel5
     .locator('.sandbox-grid')
     .first()
@@ -70,22 +79,6 @@ test('unchecking a hold-shift checkbox disables that column in the hold grid', a
   }
 });
 
-test('hold-nurse surplus appears when hold nurses exceed medical boarding demand', async ({ page }) => {
-  const profile = NAMED_DEPARTMENT_PARAMS.measuredBoardingCensus; // has boarding data
-  await seedAndGoToResults(page, profile);
-  const panel5 = page.locator('#ch-sandbox');
-  await panel5.getByRole('tab', { name: 'Arrivals + Boarding' }).click();
-
-  await panel5.getByRole('button', { name: 'ShiftLens Solver Staffing (Hold Nurses for Boarding)' }).click();
-  // Manually push hold nurses far above what's needed by editing every visible (enabled) hold cell.
-  const holdInputs = panel5.locator('.sandbox-grid').nth(1).locator('input:not([disabled])');
-  const count = await holdInputs.count();
-  for (let i = 0; i < count; i++) {
-    await holdInputs.nth(i).fill('50');
-  }
-  await expect(panel5.getByText(/Hold-nurse surplus/)).toBeVisible();
-});
-
 test('the live % demand covered curve renders and reflects the current scenario', async ({ page }) => {
   const profile = NAMED_DEPARTMENT_PARAMS.underTargetDayShort;
   await seedAndGoToResults(page, profile);
@@ -94,7 +87,7 @@ test('the live % demand covered curve renders and reflects the current scenario'
   // A live dot exists (the marker circle), labeled "Your scenario" in the legend.
   await expect(panel5.locator('.marginal-curve-legend').getByText('Your scenario', { exact: true })).toBeVisible();
 
-  await panel5.getByRole('button', { name: 'ShiftLens Solver Staffing', exact: true }).click();
+  await panel5.getByRole('button', { name: 'ShiftLens Solver — All ED Nurses — Arrivals only' }).click();
   // 2026-08-05: the old "Hours below need this week" aggregate was replaced by the same
   // per-shift diagnostic Panel 1/2/4 show (shiftDiagnosticSentence) — assert one of its two
   // sentence shapes renders instead.
@@ -111,7 +104,7 @@ test('a heavy-BH profile shows a real, finite per-shift diagnostic in both toggl
   const before = await diagnosticText();
 
   await panel5.getByRole('tab', { name: 'Arrivals + Boarding' }).click();
-  await panel5.getByRole('button', { name: 'ShiftLens Solver Staffing (Hold Nurses for Boarding)' }).click();
+  await panel5.getByRole('button', { name: 'ShiftLens Solver — Hold Nurses for Boarding', exact: true }).click();
   const after = await diagnosticText();
 
   // Both states render real, finite per-shift sentences — the specific claim (hold nurses
@@ -156,11 +149,11 @@ test('"All ED Nurses" is exactly Panel 4\'s two tables added together; "Hold Nur
   const panel5 = page.locator('#ch-sandbox');
   await panel5.getByRole('tab', { name: 'Arrivals + Boarding' }).click();
 
-  await panel5.getByRole('button', { name: 'ShiftLens Solver Staffing (All ED Nurses)' }).click();
+  await panel5.getByRole('button', { name: 'ShiftLens Solver — All ED Nurses — Arrivals + Boarding' }).click();
   const allEdTotal = await sumSandboxGrid(panel5, 0);
   expect(allEdTotal).toBe(arrivalsTotal + boardingTotal);
 
-  await panel5.getByRole('button', { name: 'ShiftLens Solver Staffing (Hold Nurses for Boarding)' }).click();
+  await panel5.getByRole('button', { name: 'ShiftLens Solver — Hold Nurses for Boarding', exact: true }).click();
   const edTotal = await sumSandboxGrid(panel5, 0);
   const holdTotal = await sumSandboxGrid(panel5, 1);
   expect(edTotal).toBe(arrivalsTotal);

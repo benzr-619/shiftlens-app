@@ -39,7 +39,7 @@ export function MarginalReturnsCurve({
         viewBox={`0 0 ${width} ${height}`}
         className="marginal-curve-chart"
         role="img"
-        aria-label="Percent of demand covered as total scheduled shifts increase, with a shaded band for the peer-typical wHPPV range and points for current staffing and the ShiftLens Solver result"
+        aria-label="Percent of demand covered as total scheduled shifts increase, with a shaded band for the peer-typical WHPPV range and points for current staffing and the ShiftLens Solver result"
       >
         {band && (
           <rect

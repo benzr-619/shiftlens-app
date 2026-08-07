@@ -2,12 +2,11 @@ import { useState } from 'react';
 import { useStore } from '../../store';
 import type { ShiftDef } from '../../engine/types';
 import { DEFAULTS, DAY_LABELS } from '../../engine/types';
-import { searchFlexibleMenus, computePerShiftDiagnostic } from '../../engine';
+import { computePerShiftDiagnostic } from '../../engine';
 import { recommendWeeklyBoardingGrid, weeklyArrivalsSpareByCell } from '../../engine/boarding';
 import { lookupWhppvBand } from '../../lib/edbaLookup';
 import { computeColorDomain } from '../../lib/whppvColorDomain';
 import { fullWeekCapacity, solveFullCoverageWeekWithTrajectory } from '../../engine/solver';
-import { FlexAxesToggles } from '../../components/FlexAxesToggles';
 import { MarginalReturnsCurve } from '../../components/MarginalReturnsCurve';
 import { VisualFrame, type VisualFrameView } from '../../components/VisualFrame';
 import type { WhppvHeatmapCell } from '../../components/WhppvHeatmap';
@@ -38,12 +37,12 @@ function hourlyWhppvRange(capacity168: number[], arrivals168: number[]): { min: 
   return { min, max };
 }
 
-/** % of hours (arrivals > 0 only, same denominator as hourlyWhppvRange) whose realized wHPPV
+/** % of hours (arrivals > 0 only, same denominator as hourlyWhppvRange) whose realized WHPPV
  * falls below the peer cohort's p25 floor — deliberately one-sided (2026-08-05): the solver
  * optimizes for minimizing queue cost, not for hugging the peer-typical band, so it can
  * legitimately push some hours ABOVE p75 (whole shift blocks overshooting a quiet hour while
  * fixing a worse one elsewhere) — that's not a problem this stat should flag. Same formula
- * Panel 1/Panel 2 use for their own "X% of hours fall below your peer-typical floor" line. */
+ * Panel 1/Panel 2 use for their own "X% of hours fall below your peer-typical range" line. */
 function pctHoursBelowFloor(capacity168: number[], arrivals168: number[], p25: number): number {
   let total = 0;
   let below = 0;
@@ -92,7 +91,12 @@ function curveValueAt(points: { x: number; y: number }[], x: number): number {
 // redesign) so Panel5.tsx's own "% demand covered vs. shifts/week" curve (§9) can reuse the
 // exact same chart instead of duplicating the SVG — see that file's own header.
 
-function buildCells(onDuty168: number[], requirement168: number[], arrivals168: number[]): WhppvHeatmapCell[] {
+function buildCells(
+  onDuty168: number[],
+  requirement168: number[],
+  demandRaw168: number[],
+  arrivals168: number[]
+): WhppvHeatmapCell[] {
   const cells: WhppvHeatmapCell[] = [];
   for (let day = 0; day < 7; day++) {
     for (let hour = 0; hour < 24; hour++) {
@@ -102,6 +106,7 @@ function buildCells(onDuty168: number[], requirement168: number[], arrivals168: 
         hour,
         onDuty: onDuty168[g] ?? 0,
         requirement: requirement168[g] ?? 0,
+        demandRaw: demandRaw168[g] ?? 0,
         arrivals: arrivals168[g] ?? 0,
         belowFloor: false,
         riskReasons: [],
@@ -127,12 +132,11 @@ function buildCells(onDuty168: number[], requirement168: number[], arrivals168: 
  * approximation nonetheless.
  */
 export function Panel4() {
-  const { shiftMenu, arrivals, currentStaffingGrid, flexAxes, buildEngineInputs, getResult } = useStore();
+  const { shiftMenu, arrivals, currentStaffingGrid, buildEngineInputs, getResult } = useStore();
   const result = getResult();
   const sortedShiftMenu = sortByStartHour(shiftMenu);
   const inputs = buildEngineInputs();
   const hoursPerFteAnnual = inputs.hoursPerFteAnnual ?? DEFAULTS.hoursPerFteAnnual;
-  const [flexOpen, setFlexOpen] = useState(false);
   const [active, setActive] = useState<'arrivals' | 'combined'>('arrivals');
 
   const currentGrid = currentStaffingGrid ?? {};
@@ -191,12 +195,14 @@ export function Panel4() {
   const combinedCapacity = fullWeekCapacity(combinedGrid, sortedShiftMenu);
   const boardingCurve = boarding?.cellBoardingRnHours ?? null;
   const combinedRequirement = result.hourlyRequirement.map((v, i) => v + (boardingCurve ? boardingCurve[i] : 0));
+  // Tooltip-only fractional counterpart, pre-`Math.ceil` — see WhppvHeatmapCell.demandRaw.
+  const combinedRequirementRaw = result.cellCoreHoursSmoothed.map((v, i) => v + (boardingCurve ? boardingCurve[i] : 0));
   const combinedWeeklyHours = sortedShiftMenu.reduce(
     (acc, s) => acc + Object.keys(combinedGrid).reduce((a, d) => a + (combinedGrid[Number(d)]?.[s.id] ?? 0) * s.lengthHours, 0),
     0
   );
 
-  // This staffing's average + hour-to-hour realized wHPPV for the active toggle — same
+  // This staffing's average + hour-to-hour realized WHPPV for the active toggle — same
   // computation Panel 1/Panel 3 use (realizedWHppv = weeklyHours*52/annualVisits; min/max is
   // a direct per-cell capacity/arrivals ratio, zero-arrival cells skipped).
   const activeCapacity = active === 'arrivals' ? arrivalsCapacity : combinedCapacity;
@@ -204,6 +210,10 @@ export function Panel4() {
   const avgWhppv = (activeWeeklyHours * 52) / result.annualVisits;
   const { min: minHourlyWhppv, max: maxHourlyWhppv } = hourlyWhppvRange(activeCapacity, arrivals);
   const pctBelowFloor = pctHoursBelowFloor(activeCapacity, arrivals, band.p25Whppv);
+  // Same relative-FTE framing Panel 3 uses (fteDelta = hours gap * 52 / hoursPerFteAnnual), but
+  // signed both ways — Panel 3's ceiling is guaranteed >= current staffing, this recommendation
+  // isn't.
+  const fteDelta = ((activeWeeklyHours - currentWeeklyHours) * 52) / hoursPerFteAnnual;
 
   // Same per-shift diagnostic Panel 1 shows for current staffing (§4, engine/hiddenBoarding.ts),
   // scored against THIS toggle's own recommended grid — boarding only folds in under 'combined',
@@ -243,18 +253,18 @@ export function Panel4() {
           })),
         ]
       : [];
-  // Peer-typical wHPPV range (p25-p75), converted to a shift-count SPAN — replaces a single
+  // Peer-typical WHPPV range (p25-p75), converted to a shift-count SPAN — replaces a single
   // "target-implied hours" line, since the target is a policy choice with no grid shape of its
   // own, while a peer range reads as "what a typical department would need" (see
   // MarginalReturnsCurve's own header comment). weeklyVisits = annualVisits/52 (this ED's own
-  // representative week); wHppv × weeklyVisits = the weekly hours that wHPPV implies.
+  // representative week); wHppv × weeklyVisits = the weekly hours that WHPPV implies.
   const weeklyVisits = result.annualVisits / 52;
   const marginalCurveBand =
     totalDemandHours > 0
       ? {
           xMin: totalShiftsAt(band.p25Whppv * weeklyVisits),
           xMax: totalShiftsAt(band.p75Whppv * weeklyVisits),
-          label: 'Peer-typical range (p25–p75 wHPPV)',
+          label: 'Peer-typical range (p25–p75 WHPPV)',
         }
       : null;
 
@@ -296,7 +306,7 @@ export function Panel4() {
       capacity168: arrivalsCapacity,
       queueDepth168: null,
       structuralFloor: null,
-      heatmapCells: buildCells(arrivalsCapacity, result.hourlyRequirement, arrivals),
+      heatmapCells: buildCells(arrivalsCapacity, result.hourlyRequirement, result.cellCoreHoursSmoothed, arrivals),
     },
     ...(boarding
       ? [
@@ -307,32 +317,11 @@ export function Panel4() {
             capacity168: combinedCapacity,
             queueDepth168: null,
             structuralFloor: null,
-            heatmapCells: buildCells(combinedCapacity, combinedRequirement, arrivals),
+            heatmapCells: buildCells(combinedCapacity, combinedRequirement, combinedRequirementRaw, arrivals),
           } satisfies VisualFrameView,
         ]
       : []),
   ];
-
-  const searchResults =
-    flexAxes.startTimes || flexAxes.shiftCount || flexAxes.shiftLengths
-      ? searchFlexibleMenus(
-          result.hourlyRequirement,
-          result.protectedFloorHourly,
-          result.demandVolatilityHourly,
-          arrivals,
-          result.floorWhppv,
-          sortedShiftMenu,
-          flexAxes,
-          result.weeklyBudgetHours,
-          inputs.hoursBudgetTolerance ?? DEFAULTS.hoursBudgetTolerance,
-          inputs.enaFloor ?? DEFAULTS.enaFloor
-        )
-      : [];
-  const bestCandidate = searchResults.length > 0 ? searchResults.reduce((a, b) => (b.totalShortfall < a.totalShortfall ? b : a)) : null;
-  const bestCandidateSortedMenu = bestCandidate ? sortByStartHour(bestCandidate.menu) : [];
-  const bestCandidatePctBelowFloor = bestCandidate
-    ? pctHoursBelowFloor(fullWeekCapacity(bestCandidate.solve.grid, bestCandidate.menu), arrivals, band.p25Whppv)
-    : 0;
 
   return (
     <section className="panel panel-4" id="ch-recommended">
@@ -340,8 +329,14 @@ export function Panel4() {
         <div className="panel-words">
           <h2>ShiftLens Solver Staffing</h2>
 
+          <p className="panel4-intro">
+            Here ShiftLens Solver produces a staffing grid aiming to land near the median for your peer-typical
+            WHPPV. Toggling to "Arrivals + Boarding" adds a separate grid of additional nurses to cover boarding
+            demand.
+          </p>
+
           <details className="why-toggle-wrap">
-            <summary className="btn-link why-toggle">How does the solver decide this?</summary>
+            <summary className="btn-link why-toggle">How does the solver decide?</summary>
             <div className="why-explainer">
               <p>
                 Nursing work lands mostly right when a patient arrives, so hourly nurse-need is worked out by
@@ -360,7 +355,7 @@ export function Panel4() {
                 menu, then trims back wherever cutting is safest — always staying above a peer-benchmark floor
                 (
                 <strong>
-                  {band.p25Whppv.toFixed(2)}–{band.p75Whppv.toFixed(2)} wHPPV
+                  {band.p25Whppv.toFixed(2)}–{band.p75Whppv.toFixed(2)} WHPPV
                 </strong>
                 , the 25th–75th percentile reported by EDs of a similar annual volume to yours).
               </p>
@@ -374,49 +369,6 @@ export function Panel4() {
             </div>
           </details>
 
-          <p className="comparison-headline">
-            This staffing realizes <strong>{avgWhppv.toFixed(2)} wHPPV</strong> at{' '}
-            <strong>{activeWeeklyHours.toFixed(0)} hours/week</strong>.
-          </p>
-
-          {minHourlyWhppv && maxHourlyWhppv && (
-            <p>
-              Hour to hour, wHPPV ranges from <strong>{minHourlyWhppv.value.toFixed(2)}</strong> (
-              {DAY_LABELS[minHourlyWhppv.day]} {fmtHour(minHourlyWhppv.hour)}) up to{' '}
-              <strong>{maxHourlyWhppv.value.toFixed(2)}</strong> ({DAY_LABELS[maxHourlyWhppv.day]}{' '}
-              {fmtHour(maxHourlyWhppv.hour)}). <strong>{pctBelowFloor.toFixed(0)}%</strong> of hours fall
-              below your peer-typical floor.
-            </p>
-          )}
-
-          {perShiftDiagnostic.groups.map((group) => (
-            <p key={group.shiftIds.join('-')}>{shiftDiagnosticSentence(group)}</p>
-          ))}
-
-          {hasMeaningfulMarginalCurve ? (
-            <>
-              {marginalCurvePoints.length >= 2 && (
-                <div className="marginal-curve-wrap">
-                  <MarginalReturnsCurve points={marginalCurvePoints} band={marginalCurveBand} markerPoints={marginalCurveMarkerPoints} />
-                  {showRecommendedGapDisclosure && (
-                    <p className="stat-muted">
-                      The ShiftLens Solver result sits {recommendedGapPct > 0 ? 'below' : 'above'} this curve at its
-                      own shift count — it optimizes for reducing the worst backlog, not maximizing raw hours covered,
-                      so it can look {recommendedGapPct > 0 ? 'less' : 'more'} efficient here while doing better on
-                      the metric that actually matters.
-                    </p>
-                  )}
-                </div>
-              )}
-            </>
-          ) : (
-            <p>
-              This recommendation already sits close to full coverage of arrivals demand at your target-implied
-              hours — there isn't a meaningful additional-shift curve to trace here.
-            </p>
-          )}
-
-          <h3>Where the extra hours land</h3>
           {active === 'combined' && <h3 className="staffing-table-label">Nurses for Arrivals</h3>}
           <table className="staffing-grid diff-grid">
             <thead>
@@ -491,43 +443,63 @@ export function Panel4() {
             </div>
           </details>
 
-          <details className="why-toggle-wrap" open={flexOpen} onToggle={(e) => setFlexOpen((e.target as HTMLDetailsElement).open)}>
-            <summary className="btn-link why-toggle">Could different shifts be more efficient?</summary>
-            <div className="why-explainer">
-              <FlexAxesToggles />
-              {bestCandidate && bestCandidate.totalShortfall < result.shortfall.reduce((a, s) => a + s.deficit, 0) ? (
-                <>
-                  <p>
-                    A menu of {bestCandidate.menu.length} shifts ({bestCandidate.menu.map((m) => `${m.lengthHours}h`).join('/')})
-                    leaves <strong>{bestCandidatePctBelowFloor.toFixed(0)}%</strong> of hours below your peer-typical floor, for{' '}
-                    {bestCandidate.weeklyScheduledHours.toFixed(0)} hours/week.
-                  </p>
-                  <table className="staffing-grid diff-grid">
-                    <thead>
-                      <tr>
-                        <th className="hour-col">Shift</th>
-                        {DISPLAY_DAY_LABELS.map((d) => (
-                          <th key={d}>{d}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {bestCandidateSortedMenu.map((s) => (
-                        <tr key={s.id}>
-                          <td className="hour-col">{s.label || s.id}</td>
-                          {DISPLAY_DAY_ORDER.map((day) => (
-                            <td key={day}>{bestCandidate.solve.grid[day]?.[s.id] ?? 0}</td>
-                          ))}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </>
+          <p className="comparison-headline">
+            This staffing realizes <strong>{avgWhppv.toFixed(2)} WHPPV</strong> at{' '}
+            <strong>{activeWeeklyHours.toFixed(0)} hours/week</strong>.
+            {currentWeeklyHours > 0 &&
+              (Math.abs(fteDelta) < 0.05 ? (
+                ' — the same FTE as you staff today.'
               ) : (
-                <p>Your current shift menu is already about as efficient as the bounded search can find.</p>
+                <>
+                  {' '}
+                  — <strong>{Math.abs(fteDelta).toFixed(1)} FTE</strong> {fteDelta >= 0 ? 'above' : 'below'} what you
+                  staff today.
+                </>
+              ))}
+          </p>
+
+          {minHourlyWhppv && maxHourlyWhppv && (
+            <p>
+              Hour to hour, WHPPV ranges from <strong>{minHourlyWhppv.value.toFixed(2)}</strong> (
+              {DAY_LABELS[minHourlyWhppv.day]} {fmtHour(minHourlyWhppv.hour)}) up to{' '}
+              <strong>{maxHourlyWhppv.value.toFixed(2)}</strong> ({DAY_LABELS[maxHourlyWhppv.day]}{' '}
+              {fmtHour(maxHourlyWhppv.hour)}). <strong>{pctBelowFloor.toFixed(0)}%</strong> of hours fall
+              below your peer-typical range.
+            </p>
+          )}
+
+          {perShiftDiagnostic.groups.map((group) => (
+            <p key={group.shiftIds.join('-')}>{shiftDiagnosticSentence(group)}</p>
+          ))}
+
+          {hasMeaningfulMarginalCurve ? (
+            <>
+              {marginalCurvePoints.length >= 2 && (
+                <div className="marginal-curve-wrap">
+                  <MarginalReturnsCurve points={marginalCurvePoints} band={marginalCurveBand} markerPoints={marginalCurveMarkerPoints} />
+                  {showRecommendedGapDisclosure && (
+                    <p className="stat-muted">
+                      The ShiftLens Solver result sits {recommendedGapPct > 0 ? 'below' : 'above'} this curve at its
+                      own shift count — it optimizes for reducing the worst backlog, not maximizing raw hours covered,
+                      so it can look {recommendedGapPct > 0 ? 'less' : 'more'} efficient here while doing better on
+                      the metric that actually matters.
+                    </p>
+                  )}
+                </div>
               )}
-            </div>
-          </details>
+            </>
+          ) : (
+            <p>
+              This recommendation already sits close to full coverage of arrivals demand at your target-implied
+              hours — there isn't a meaningful additional-shift curve to trace here.
+            </p>
+          )}
+
+          {/* "Could different shifts be more efficient?" (bounded flex-menu search) removed
+              2026-08-06 — extraneous to Panel 4's narrative flow. The backend is untouched and
+              may come back: FlexAxesToggles.tsx, engine/flexMenu.ts's searchFlexibleMenus, and
+              the store's flexAxes state all still exist; see git history for the removed
+              rendering (bestCandidate/searchResults computation + this details block). */}
         </div>
         <div className="panel-frame">
           <VisualFrame

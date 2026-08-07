@@ -38,7 +38,7 @@ export interface EngineInputs {
   // 2026-07-25.md): the p75 (busy-hour) arrivals count per cell, alongside the required mean
   // `arrivals`. All-or-nothing optional, same convention as ESI mix. Deliberately does NOT
   // touch `annualVisits`/`annualCoreRnHoursBudget`/`hourlyRequirement` (those stay mean-only,
-  // preserving wHPPV's own definition and the reconciliation invariant) — it only feeds
+  // preserving WHPPV's own definition and the reconciliation invariant) — it only feeds
   // `demandVolatilityHourly`, which raises `protectedFloorHourly` (PR C: solver-facing,
   // unclamped — see below) and the Step 3 trim's marginal severity cost at high-variance
   // hours. See engine/demandBand.ts and .claude/rules/engine-solver.md's "Budget-capped
@@ -146,7 +146,7 @@ export interface BoardingResult {
   censusSource: 'measured' | 'derived';
 }
 
-// Productivity Target Buffer method: wHPPV consumed by boarding vs. left over for ED care.
+// Productivity Target Buffer method: WHPPV consumed by boarding vs. left over for ED care.
 export interface LostProductivity {
   wHppvConsumedByBoarding: number;
   wHppvAvailableForEdCare: number;
@@ -201,7 +201,7 @@ export interface EngineResult {
 
   // 2026-07-28 (ninth shape of the backlog-recurrence history, BACKLOG_MODEL_VISITS_BASED_
   // SPEC_2026-07-28.md — see .claude/rules/engine-solver.md's dated section) — the single
-  // FLAT department-level peer-cohort p25 wHPPV (`lookupWhppvBand(annualVisits).p25Whppv`,
+  // FLAT department-level peer-cohort p25 WHPPV (`lookupWhppvBand(annualVisits).p25Whppv`,
   // computed once here). This is the "floor pace" the visits-based backlog recurrence assumes
   // nurses can compress down to, but never past — the ceiling on how fast anyone can
   // defensibly go. Deliberately a single scalar, not an hourly curve (confirmed with Ben —
@@ -236,7 +236,7 @@ export interface EngineResult {
   // away (an intermediate upper bound feeding the trim, never surfaced). `fullCoverage` exposes
   // it directly: what covering every hour, no shortfall anywhere, would actually cost.
   // `fteDelta = (fullCoverage.weeklyHours - capHours) * 52 / hoursPerFteAnnual` — can be <= 0 when a
-  // generous wHPPV target already funds full coverage (a real, not-hypothetical edge case in a
+  // generous WHPPV target already funds full coverage (a real, not-hypothetical edge case in a
   // low-volume ED); UI must handle that explicitly rather than rendering a negative ask.
   // 2026-07-30: `grid` added — Panel 3 gained an "Arrivals" toggle alongside its existing
   // "Arrivals + Boarding" one, and needs this arrivals-only full-coverage grid to build that

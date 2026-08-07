@@ -93,13 +93,17 @@ export function DashboardScreen() {
           <h2>Your ShiftLens Results</h2>
         </div>
         <p>
-          ShiftLens splits nurse staffing into two separate budgets: one for ED patients, one for boarding
-          patients. For ED patients, most of a nurse's workload lands upfront at arrival. For boarders, workload
-          is budgeted using inpatient nursing ratios instead. We believe this split gives a clearer picture of how
-          nursing time is actually being consumed, and makes it easier to communicate when and why your staffing
-          falls short. Your ED might normally lump these together — if so, the arrivals-only schedule below may
-          look leaner than you're expecting. Boarding gets its own coverage plan further down the page, and the
-          two are added back together at the end.
+          ShiftLens lets you view your ED staffing two ways: an arrivals-only view, or one that also accounts for
+          the nursing hours boarding patients demand. For ED patients, most of a nurse's workload lands upfront at
+          arrival. For boarders, workload is budgeted using inpatient nursing ratios instead. Philosophically, we
+          believe EDs should first be staffed to care for arrivals — the added demand from boarding should be
+          budgeted separately from direct ED care. This split gives a clearer picture of how nursing time is
+          actually being consumed, and makes it easier to communicate when and why your staffing falls short. Your
+          ED might normally lump these together — if so, the arrivals-only staffing schedule below may look leaner
+          than you're expecting. Throughout the page, a toggle lets you see that same schedule measured against
+          arrivals alone or against arrivals plus boarding's added demand — so you can see exactly how much
+          boarding is costing you on top of what you already staff. The last section lets you build ED and
+          boarding staffing out separately yourself.
         </p>
       </section>
 

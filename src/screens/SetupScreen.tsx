@@ -18,7 +18,7 @@ export function SetupScreen() {
   // Per-step gating: each step's own required condition, not the full-wizard gate.
   const stepBlockedReason: (string | null)[] = [
     hasArrivalsData ? null : 'Upload or enter your arrivals data to continue.',
-    wHppvTarget > 0 ? null : 'Set a wHPPV target to continue.',
+    wHppvTarget > 0 ? null : 'Set a WHPPV target to continue.',
     shiftMenu.length > 0 ? null : 'Add at least one shift to continue.',
     null, // review — final gate is canContinue, checked separately
   ];
@@ -81,7 +81,7 @@ export function SetupScreen() {
           )}
           {blockedReason && <span className="degrade-note">{blockedReason}</span>}
           {setupStep === LAST_STEP && !canContinue && (
-            <span className="degrade-note">Need arrivals data, a wHPPV target, and at least one shift.</span>
+            <span className="degrade-note">Need arrivals data, a WHPPV target, and at least one shift.</span>
           )}
         </div>
       )}

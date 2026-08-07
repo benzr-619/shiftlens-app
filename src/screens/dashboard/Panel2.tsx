@@ -33,6 +33,7 @@ function sortByStartHour(shifts: ShiftDef[]): ShiftDef[] {
 function buildCells(
   onDuty168: number[],
   requirement168: number[],
+  demandRaw168: number[],
   arrivals168: number[],
   perShiftBreakdown168?: Array<Array<{ label: string; headcount: number }>>
 ): WhppvHeatmapCell[] {
@@ -46,6 +47,7 @@ function buildCells(
         hour,
         onDuty: onDuty168[g] ?? 0,
         requirement: requirement168[g] ?? 0,
+        demandRaw: demandRaw168[g] ?? 0,
         arrivals: arrivals168[g] ?? 0,
         belowFloor: false,
         riskReasons: [],
@@ -76,8 +78,8 @@ interface HourlyWhppvExtreme {
   hour: number;
 }
 
-/** Hour-to-hour realized wHPPV range — direct per-cell nurse-hours ÷ arrivals, same formula
- * Panel 1 uses for its own realized-wHPPV range (see Panel1.tsx). Zero-arrival cells are
+/** Hour-to-hour realized WHPPV range — direct per-cell nurse-hours ÷ arrivals, same formula
+ * Panel 1 uses for its own realized-WHPPV range (see Panel1.tsx). Zero-arrival cells are
  * skipped (no meaningful per-visit ratio there). */
 function hourlyWhppvRange(
   capacity168: number[],
@@ -97,12 +99,12 @@ function hourlyWhppvRange(
   return { min, max };
 }
 
-/** % of hours (arrivals > 0 only, same denominator as hourlyWhppvRange) whose realized wHPPV
+/** % of hours (arrivals > 0 only, same denominator as hourlyWhppvRange) whose realized WHPPV
  * falls below the peer cohort's p25 floor — deliberately one-sided (2026-08-05): the solver
  * optimizes for minimizing queue cost, not for hugging the peer-typical band, so it can
  * legitimately push some hours ABOVE p75 (whole shift blocks overshooting a quiet hour while
  * fixing a worse one elsewhere) — that's not a problem this stat should flag. Same formula
- * Panel 1/Panel 4 use for their own "X% of hours fall below your peer-typical floor" line. */
+ * Panel 1/Panel 4 use for their own "X% of hours fall below your peer-typical range" line. */
 function pctHoursBelowFloor(capacity168: number[], arrivals168: number[], p25: number): number {
   let total = 0;
   let below = 0;
@@ -121,10 +123,10 @@ function pctHoursBelowFloor(capacity168: number[], arrivals168: number[], p25: n
  * Reuses `computeScenarioB` (arrivals only) and `computeCombinedReallocation` (arrivals +
  * boarding) UNCHANGED — no new engine work. Two toggles only ("Current" is dropped — Panel 1
  * already shows current staffing). Below the toggle: a shift-change diff grid (each cell shows
- * the reallocated headcount with the +/- delta in parentheses), a whole-schedule wHPPV mirror
- * of Panel 1's own current-staffing framing (still X wHPPV at X hours/week — necessarily
+ * the reallocated headcount with the +/- delta in parentheses), a whole-schedule WHPPV mirror
+ * of Panel 1's own current-staffing framing (still X WHPPV at X hours/week — necessarily
  * unchanged, since `reallocateHoursExact` only ever trades hours, never adds/removes them —
- * plus the hour-to-hour realized-wHPPV range and how its variance compares to today's), and a
+ * plus the hour-to-hour realized-WHPPV range and how its variance compares to today's), and a
  * backlog build/peak/clear stat (reusing Panel 1's shared `lib/queuePattern.ts` helpers) — all
  * vocabulary Panel 1 already introduced, rather than inventing new stats.
  */
@@ -152,6 +154,8 @@ export function Panel2() {
   const combinedRealloc = computeCombinedReallocation(result, inputs, grid);
   const boardingCurve = result.boarding?.cellBoardingRnHours ?? null;
   const combinedRequirement = result.hourlyRequirement.map((v, i) => v + (boardingCurve ? boardingCurve[i] : 0));
+  // Tooltip-only fractional counterpart, pre-`Math.ceil` — see WhppvHeatmapCell.demandRaw.
+  const combinedRequirementRaw = result.cellCoreHoursSmoothed.map((v, i) => v + (boardingCurve ? boardingCurve[i] : 0));
 
   const currentCapacity = fullWeekCapacity(grid, sortedShiftMenu);
   const arrivalsCapacity = scenarioB ? fullWeekCapacity(scenarioB.grid, sortedShiftMenu) : currentCapacity;
@@ -164,11 +168,13 @@ export function Panel2() {
     key === 'arrivals'
       ? {
           demand: result.hourlyRequirement,
+          demandRaw: result.cellCoreHoursSmoothed,
           capacity: arrivalsCapacity,
           reallocatedGrid: arrivalsReallocatedGrid,
         }
       : {
           demand: combinedRequirement,
+          demandRaw: combinedRequirementRaw,
           capacity: combinedCapacity,
           reallocatedGrid: combinedReallocatedGrid,
         };
@@ -207,8 +213,8 @@ export function Panel2() {
   const rampGapAfter = (peakCapacityHourAfter - peakDemandHour + 24) % 24;
   const rampGapBefore = (peakCapacityHourBefore - peakDemandHour + 24) % 24;
 
-  // Reallocated-grid wHPPV: total hours/week (conserved EXACTLY by `reallocateHoursExact` —
-  // see engine/exactReallocation.ts — hence "no change") and the hour-to-hour realized-wHPPV
+  // Reallocated-grid WHPPV: total hours/week (conserved EXACTLY by `reallocateHoursExact` —
+  // see engine/exactReallocation.ts — hence "no change") and the hour-to-hour realized-WHPPV
   // range, compared against the same range computed on today's actual grid.
   const reallocatedWeeklyHours = weeklyScheduledHoursOf(activeState.reallocatedGrid, sortedShiftMenu);
   const reallocatedRealizedWhppv = result.annualVisits > 0 ? (reallocatedWeeklyHours * 52) / result.annualVisits : 0;
@@ -254,7 +260,7 @@ export function Panel2() {
         capacity168: s.capacity,
         queueDepth168: b.cyclicalBacklog,
         structuralFloor: b.structuralFloorMin,
-        heatmapCells: buildCells(s.capacity, s.demand, arrivals, perShiftBreakdown),
+        heatmapCells: buildCells(s.capacity, s.demand, s.demandRaw, arrivals, perShiftBreakdown),
       } satisfies VisualFrameView;
     });
 
@@ -264,8 +270,9 @@ export function Panel2() {
         <div className="panel-words">
           <h2>What can moving hours fix?</h2>
           <p>
-            Holding your total hours flat, this solver re-distributes them to try and better match demand. Toggle
-            to test focusing solely on arrivals, or stretching the same hours to also cover boarding.
+            Holding your total hours flat, toggling between "Arrivals" and "Arrivals + Boarding" shows how the
+            solver would redistribute shifts to better match demand — either focusing on arrivals or stretching to
+            also cover boarding.
           </p>
 
           <table className="staffing-grid diff-grid">
@@ -308,18 +315,18 @@ export function Panel2() {
           </details>
 
           <p>
-            Staffing still realizes <strong>{reallocatedRealizedWhppv.toFixed(2)} wHPPV</strong> at{' '}
+            Staffing still realizes <strong>{reallocatedRealizedWhppv.toFixed(2)} WHPPV</strong> at{' '}
             <strong>{reallocatedWeeklyHours.toFixed(0)} hours/week</strong>, no change.
           </p>
 
           {reallocatedWhppvRange.min && reallocatedWhppvRange.max && (
             <>
               <p>
-                Hour to hour, wHPPV now ranges from <strong>{reallocatedWhppvRange.min.value.toFixed(2)}</strong> (
+                Hour to hour, WHPPV now ranges from <strong>{reallocatedWhppvRange.min.value.toFixed(2)}</strong> (
                 {DAY_LABELS[reallocatedWhppvRange.min.day]} {fmtHour(reallocatedWhppvRange.min.hour)}) up to{' '}
                 <strong>{reallocatedWhppvRange.max.value.toFixed(2)}</strong> ({DAY_LABELS[reallocatedWhppvRange.max.day]}{' '}
                 {fmtHour(reallocatedWhppvRange.max.hour)}). <strong>{pctBelowFloor.toFixed(0)}%</strong> of hours fall
-                below your peer-typical floor.
+                below your peer-typical range.
               </p>
               <details className="why-toggle-wrap">
                 <summary className="btn-link why-toggle">What is my peer-typical range?</summary>
@@ -327,9 +334,9 @@ export function Panel2() {
                   <p>
                     Your peer-typical range is{' '}
                     <strong>
-                      {band.p25Whppv.toFixed(2)}–{band.p75Whppv.toFixed(2)} wHPPV
+                      {band.p25Whppv.toFixed(2)}–{band.p75Whppv.toFixed(2)} WHPPV
                     </strong>{' '}
-                    — the 25th–75th percentile wHPPV reported by EDs of a similar annual volume to yours,
+                    — the 25th–75th percentile WHPPV reported by EDs of a similar annual volume to yours,
                     each measured as a single year-round average, not hour by hour. It's normal for individual
                     hours to fall outside this range even when your average staffing is appropriate — that's
                     expected, not a problem on its own. Think of it as a rough gauge of how over- or

@@ -60,7 +60,7 @@ export function ReviewStep({ onEdit }: { onEdit: (step: number) => void }) {
       </div>
 
       <div className="review-row">
-        <div className="review-label">wHPPV target</div>
+        <div className="review-label">WHPPV target</div>
         <div className="review-value">
           {wHppvTarget} <span className="review-sub">(similar-volume benchmark median: {band.medianWhppv})</span>
         </div>
@@ -186,7 +186,7 @@ export function ReviewStep({ onEdit }: { onEdit: (step: number) => void }) {
           staffing grid, and per-dataset setup decisions (boarding path, headcount semantics,
           flex axes, and — 2026-07-28, Ben's direct ask — the two boarding nursing ratios, plus
           — 2026-07-30 — "hours per FTE"). Tool-wide POLICY that's NOT one of those fields
-          (wHPPV target, ENA floor) stays UI-only, set again on re-upload, never written here —
+          (WHPPV target, ENA floor) stays UI-only, set again on re-upload, never written here —
           see .claude/rules/template-parsing.md. */}
       <div className="review-export">
         <button

@@ -57,7 +57,7 @@ export function ConvexityDemo() {
           Total queue cost: <strong>{concentrated.total.toFixed(3)}</strong>
         </p>
       </div>
-      <p className="wHPPV-caveat">
+      <p className="WHPPV-caveat">
         Same 10 nurse-hours of shortfall, same 10 nurse-hour requirement baseline — spread across 4 hours vs.
         concentrated in 1. The concentrated version scores {(concentrated.total / Math.max(spread.total, 1e-9)).toFixed(1)}×
         higher on the same scale the Step 3 trim minimizes — which is why the solver protects a deep hole over

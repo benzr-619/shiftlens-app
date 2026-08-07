@@ -127,7 +127,7 @@ const SEASONALITY_HEADER_ALIASES: Record<string, string[]> = {
 // collision-avoidance convention — do not extend HEADER_ALIASES. NOTE: there is deliberately
 // no Settings tab / policy-value alias table here — a Settings tab was built and then
 // REMOVED (reversal, see .claude/rules/template-parsing.md): the uploaded file carries DATA,
-// policy values (wHPPV target, ratios, ENA floor) are set in the UI, never parsed
+// policy values (WHPPV target, ratios, ENA floor) are set in the UI, never parsed
 // from a workbook. Don't reintroduce a settings-values parse path without checking first.
 const BOARDING_CENSUS_HEADER_ALIASES: Record<string, string[]> = {
   day: ['day', 'dayofweek', 'weekday'],

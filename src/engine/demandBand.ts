@@ -3,7 +3,7 @@
 // one `bandFloorHourly` curve — kept as separate functions on purpose, not merged into one
 // opaque derivation, since they come from genuinely different data sources:
 //   - deriveCohortBandFloor: this ED's own point-target curve, re-derived against a cohort-
-//     wide p25/p75 wHPPV benchmark (lookupWhppvBand, OTHER EDs' aggregate data).
+//     wide p25/p75 WHPPV benchmark (lookupWhppvBand, OTHER EDs' aggregate data).
 //   - deriveDemandVolatilityHourly / applyVolatilityBuffer: THIS ED's own hourly arrivals
 //     variance (mean vs. p75-arrivals, if provided) — a completely different question
 //     ("how spiky is my own demand at this hour") from the cohort benchmark.

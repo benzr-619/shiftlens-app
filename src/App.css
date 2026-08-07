@@ -533,18 +533,18 @@ h1 {
   color: var(--text-muted);
 }
 
-.wHPPV-unit {
+.WHPPV-unit {
   border: 2px solid var(--accent);
 }
 
-.wHPPV-stats {
+.WHPPV-stats {
   display: flex;
   gap: 24px;
   flex-wrap: wrap;
   margin: 12px 0;
 }
 
-.wHPPV-stats.compact {
+.WHPPV-stats.compact {
   gap: 16px;
 }
 
@@ -577,10 +577,14 @@ h1 {
 .stat-negative { color: var(--error); }
 .stat-muted { color: var(--text-muted); }
 
-.wHPPV-caveat {
+.WHPPV-caveat {
   font-size: 13px;
   color: var(--text-muted);
   font-style: italic;
+}
+
+.hold-shift-caveat {
+  margin: 0 0 8px;
 }
 
 .grid-header-row {
@@ -691,7 +695,7 @@ h1 {
   margin-left: 6px;
 }
 
-/* Realized wHPPV heatmap (replaces the shift-type shortfall table) */
+/* Realized WHPPV heatmap (replaces the shift-type shortfall table) */
 .whppv-heatmap {
   border-collapse: collapse;
   width: 100%;
@@ -941,7 +945,7 @@ h1 {
   border: 2px solid var(--accent);
 }
 
-.current-analysis .why-explainer .wHPPV-caveat {
+.current-analysis .why-explainer .WHPPV-caveat {
   margin-bottom: 0;
 }
 
@@ -1309,6 +1313,20 @@ h1 {
   font-size: 20px;
 }
 
+.panel-words h3 {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 20px 0 4px;
+}
+
+.panel4-intro {
+  margin-bottom: 0;
+}
+
+.why-toggle-wrap + .staffing-grid {
+  margin-top: 16px;
+}
+
 .panel-columns {
   display: flex;
   gap: 32px;
@@ -1425,47 +1443,99 @@ h1 {
   font-size: 0.8em;
 }
 
-/* 2026-08-05 Panel 5 redesign, §3a — stacked starting-point cards, replacing the old flat
-   .button-row of starting-point buttons. */
-.strategy-cards {
+/* 2026-08-06 Panel 5 redesign — mechanism (row) x target (column) matrix, replacing the
+   2026-08-05 build's flat .strategy-cards stack whose OFFERED cards changed with the page
+   toggle, AND its own first cut, which repeated a full paragraph in every cell. Each row states
+   its explanation ONCE (`.strategy-matrix-row-description`); a cell is just a "Choose"/
+   "Selected" button. Rows with no target split (Current Staffing, the two hold-bearing solver
+   rows) span both option columns via `.strategy-matrix-cell-span` rather than rendering a
+   disabled arrivals-only cell. */
+.strategy-matrix {
   display: flex;
   flex-direction: column;
-  gap: 8px;
   margin: 12px 0;
-}
-.strategy-card {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 4px;
-  text-align: left;
-  cursor: pointer;
-  border-radius: 8px;
+  padding: 8px 10px;
   border: 1px solid var(--border);
-  background: transparent;
-  padding: 10px 14px;
-}
-.strategy-card:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-.strategy-card-active {
-  border-color: var(--accent);
+  border-radius: 10px;
   background: var(--bg-card-muted);
 }
-.strategy-card-title {
+.strategy-matrix-header,
+.strategy-matrix-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 1.4fr) 1fr 1fr;
+  gap: 8px;
+  align-items: center;
+}
+.strategy-matrix-header {
+  padding: 0 4px 6px;
+}
+.strategy-matrix-header span {
+  font-size: 11px;
   font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  text-align: center;
+  white-space: nowrap;
+}
+.strategy-matrix-row {
+  padding: 6px 4px;
+  border-bottom: 1px solid var(--border);
+}
+.strategy-matrix-row:last-child {
+  border-bottom: none;
+}
+.strategy-matrix-row-label {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.strategy-matrix-row-title {
+  font-weight: 600;
+  font-size: 13px;
   color: var(--text);
 }
-.strategy-card-description {
-  font-size: 13px;
-  color: var(--text-muted);
-  line-height: 1.4;
-}
-.strategy-cards-note {
+.strategy-matrix-row-description {
   font-size: 12px;
   color: var(--text-muted);
-  margin: 0 0 12px;
+  line-height: 1.25;
+}
+.strategy-matrix-cell {
+  display: flex;
+}
+.strategy-matrix-cell-span {
+  grid-column: 2 / span 2;
+}
+.strategy-cell {
+  flex: 1;
+  text-align: center;
+  cursor: pointer;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  padding: 6px 10px;
+  font-size: 13px;
+}
+.strategy-cell:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.strategy-cell-active {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--bg);
+  font-weight: 600;
+}
+/* 2026-08-07 — a cell whose grid has been hand-edited since it was chosen. Same accent hue as
+   `.strategy-cell-active`, outline instead of filled, so it still reads as "this is the one you
+   picked" without claiming the grid on screen still matches it exactly. Clicking re-applies the
+   original starting point (same handler as "Choose"/"Selected"). */
+.strategy-cell-dirty {
+  border-color: var(--accent);
+  background: transparent;
+  color: var(--accent);
+  font-weight: 600;
 }
 
 /* 2026-08-05 Panel 5 redesign, §3d — the single up/down control next to the "Your scenario"

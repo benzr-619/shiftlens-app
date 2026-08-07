@@ -33,24 +33,24 @@ export function VolumeStep() {
       </section>
 
       <section className="card">
-        <h2>wHPPV target <span className="required">Required</span></h2>
+        <h2>WHPPV target <span className="required">Required</span></h2>
         <p className="whppv-explainer">
-          <strong>wHPPV</strong> (worked hours per patient visit) is nursing hours per patient arrival, the
+          <strong>WHPPV</strong> (worked hours per patient visit) is nursing hours per patient arrival, the
           core productivity target this tool staffs to. Lower means leaner staffing, higher means more
           cushion.
         </p>
         <button className="btn-link why-toggle" onClick={() => setWhyOpen((v) => !v)}>
-          {whyOpen ? 'Hide' : 'Why wHPPV?'}
+          {whyOpen ? 'Hide' : 'Why WHPPV?'}
         </button>
         {whyOpen && (
           <div className="why-explainer">
             <p>
               It's a standard metric in emergency nursing budgets, but it's important to know it has
-              limitations. A department can be right at its wHPPV target and still be understaffed at
+              limitations. A department can be right at its WHPPV target and still be understaffed at
               specific hours, or run into trouble from higher acuity, throughput bottlenecks, or boarding.
-              The volume-band comparisons below are also limited: they reflect a department's typical wHPPV
+              The volume-band comparisons below are also limited: they reflect a department's typical WHPPV
               across the year, not how evenly those hours are spread across seasons, days of the week, or
-              hours of the day. Still, ShiftLens relies on wHPPV because it's the industry standard, backed
+              hours of the day. Still, ShiftLens relies on WHPPV because it's the industry standard, backed
               by ENA, cleaner than metrics like nurse-to-patient ratios that carry too much operational
               noise, and easier to understand and communicate than more complex predictive models.
             </p>
@@ -60,7 +60,7 @@ export function VolumeStep() {
           Pre-filled at the median for EDs of similar annual volume.
         </p>
         <label className="field-row">
-          wHPPV target
+          WHPPV target
           <input
             type="number"
             step="0.01"
@@ -73,9 +73,9 @@ export function VolumeStep() {
           <thead>
             <tr>
               <th>Annual visits</th>
-              <th>p25 wHPPV</th>
-              <th>Median wHPPV</th>
-              <th>p75 wHPPV</th>
+              <th>p25 WHPPV</th>
+              <th>Median WHPPV</th>
+              <th>p75 WHPPV</th>
             </tr>
           </thead>
           <tbody>
