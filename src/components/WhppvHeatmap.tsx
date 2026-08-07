@@ -17,6 +17,13 @@ export interface WhppvHeatmapCell {
    * genuinely fractional demand curve doesn't read as a suspiciously round number. */
   demandRaw: number;
   arrivals: number;
+  /** RN-hours boarding draws from this cell's `onDuty`, when the view is showing combined
+   * (arrivals+boarding) demand — undefined/0 on an arrivals-only view, which has nothing to
+   * net out. Netted out of `onDuty` before dividing by `arrivals` so the combined toggle's
+   * heatmap colors by hourly EFFECTIVE WHPPV (what's actually left for arrivals once boarding's
+   * claim on this hour's nurses is subtracted), not the same arrivals-only ratio the "Arrivals"
+   * toggle already shows — see `cellRealizedWhppv`. */
+  boardingRnHours?: number;
   belowFloor: boolean; // under the ENA on-duty floor — a safety check, red outline + "!"
   riskReasons: string[];
   // PANEL1_COPY_REVISION_SPEC_2026-07-28.md §7 — per-shift breakdown for hours covered by
@@ -27,10 +34,14 @@ export interface WhppvHeatmapCell {
   perShift?: Array<{ label: string; headcount: number }>;
 }
 
-/** Realized WHPPV for one cell — nurse-hours on duty ÷ arrivals that hour. `null` when there
- * were no arrivals (no meaningful per-visit ratio, renders neutral). */
+/** Realized (or, when `boardingRnHours` is present, EFFECTIVE) WHPPV for one cell — nurse-hours
+ * on duty, minus whatever boarding draws from that hour, ÷ arrivals that hour. `null` when there
+ * were no arrivals (no meaningful per-visit ratio, renders neutral). Mirrors the week-level
+ * `effectiveWhppv = realized - wHppvConsumedByBoarding` metric Panel 1 already shows, applied
+ * per hour instead of once for the week. */
 function cellRealizedWhppv(cell: WhppvHeatmapCell): number | null {
-  return cell.arrivals > 0 ? cell.onDuty / cell.arrivals : null;
+  if (cell.arrivals <= 0) return null;
+  return (cell.onDuty - (cell.boardingRnHours ?? 0)) / cell.arrivals;
 }
 
 /**
@@ -56,11 +67,13 @@ function cellVisual(cell: WhppvHeatmapCell, domain: WhppvColorDomain): CellVisua
 
 function cellTitle(cell: WhppvHeatmapCell): string {
   const realized = cellRealizedWhppv(cell);
-  const whppvPart = realized === null ? 'no arrivals recorded' : `${realized.toFixed(2)} realized WHPPV`;
+  const isEffective = (cell.boardingRnHours ?? 0) > 0;
+  const whppvPart = realized === null ? 'no arrivals recorded' : `${realized.toFixed(2)} ${isEffective ? 'effective' : 'realized'} WHPPV`;
   // onDuty is a headcount — always a whole number of nurses, never fractional, so it's never
   // toFixed'd. demandRaw/arrivals are fractional (allocation shares, arrival-rate averages),
   // rounded consistently to 2dp so they don't print long floats.
   let base = `${DAY_LABELS[cell.day]} ${cell.hour.toString().padStart(2, '0')}:00 — ${cell.onDuty}/${cell.demandRaw.toFixed(2)} on duty vs. demand, ${whppvPart}, ${cell.arrivals.toFixed(2)} arrivals`;
+  if (isEffective) base += ` (nets out ${cell.boardingRnHours!.toFixed(2)} boarding RN-hours)`;
   // §7 — put the total plus a labeled per-shift breakdown in the tooltip so nothing is lost
   // even when the cell text itself just shows the split ("7+4"), not each shift's label.
   if (cell.perShift && cell.perShift.length > 1) {
@@ -134,6 +147,7 @@ export function WhppvHeatmap({
 }) {
   const byDayHour = new Map(cells.map((c) => [`${c.day}-${c.hour}`, c]));
   const boundaries = shiftBoundariesByHour(shiftMenu);
+  const showsEffective = cells.some((c) => (c.boardingRnHours ?? 0) > 0);
   const { tooltip, showTooltip, moveTooltip, hideTooltip } = useHoverTooltip();
 
   return (
@@ -191,7 +205,7 @@ export function WhppvHeatmap({
         </div>
         <div className="heat-legend-line">
           <span className="heat-legend-swatch-inline heat-legend-swatch-lean" />
-          Red = this hour's realized WHPPV falls below your peer-typical range.
+          Red = this hour's {showsEffective ? 'effective' : 'realized'} WHPPV falls below your peer-typical range.
           <span className="heat-legend-swatch-inline heat-legend-swatch-rich" />
           Blue = above it.
         </div>
@@ -199,6 +213,12 @@ export function WhppvHeatmap({
           Peer-typical range: <strong>{whppvBand.low.toFixed(2)}–{whppvBand.high.toFixed(2)} WHPPV</strong> (25th–75th
           percentile for EDs your size).
         </div>
+        {showsEffective && (
+          <div className="heat-legend-line">
+            Effective WHPPV nets boarding's RN-hour draw out of on-duty staff before dividing by arrivals — what's
+            actually left to cover arrivals that hour.
+          </div>
+        )}
         {cells.some((c) => c.belowFloor) && (
           <div className="heat-legend-risk">
             <span className="heat-legend-risk-swatch">

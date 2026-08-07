@@ -35,7 +35,8 @@ function buildCells(
   requirement168: number[],
   demandRaw168: number[],
   arrivals168: number[],
-  perShiftBreakdown168?: Array<Array<{ label: string; headcount: number }>>
+  perShiftBreakdown168?: Array<Array<{ label: string; headcount: number }>>,
+  boardingCurve168?: number[] | null
 ): WhppvHeatmapCell[] {
   const cells: WhppvHeatmapCell[] = [];
   for (let day = 0; day < 7; day++) {
@@ -49,6 +50,7 @@ function buildCells(
         requirement: requirement168[g] ?? 0,
         demandRaw: demandRaw168[g] ?? 0,
         arrivals: arrivals168[g] ?? 0,
+        boardingRnHours: boardingCurve168 ? (boardingCurve168[g] ?? 0) : undefined,
         belowFloor: false,
         riskReasons: [],
         perShift,
@@ -260,7 +262,7 @@ export function Panel2() {
         capacity168: s.capacity,
         queueDepth168: b.cyclicalBacklog,
         structuralFloor: b.structuralFloorMin,
-        heatmapCells: buildCells(s.capacity, s.demand, s.demandRaw, arrivals, perShiftBreakdown),
+        heatmapCells: buildCells(s.capacity, s.demand, s.demandRaw, arrivals, perShiftBreakdown, key === 'combined' ? boardingCurve : null),
       } satisfies VisualFrameView;
     });
 

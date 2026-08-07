@@ -63,7 +63,8 @@ function buildCells(
   onDuty168: number[],
   requirement168: number[],
   demandRaw168: number[],
-  arrivals168: number[]
+  arrivals168: number[],
+  boardingCurve168?: number[] | null
 ): WhppvHeatmapCell[] {
   const cells: WhppvHeatmapCell[] = [];
   for (let day = 0; day < 7; day++) {
@@ -76,6 +77,7 @@ function buildCells(
         requirement: requirement168[g] ?? 0,
         demandRaw: demandRaw168[g] ?? 0,
         arrivals: arrivals168[g] ?? 0,
+        boardingRnHours: boardingCurve168 ? (boardingCurve168[g] ?? 0) : undefined,
         belowFloor: false,
         riskReasons: [],
       });
@@ -418,7 +420,7 @@ export function Panel5() {
   // capping convention, same as `computeSandbox`'s `holdApplied`).
   const combinedCapacity168 = useMemo(() => edCapacity.map((v, i) => v + sandbox.holdApplied[i]), [edCapacity, sandbox.holdApplied]);
 
-  const cells = buildCells(edCapacity, sandbox.residualDemand, residualDemandRaw, arrivals);
+  const cellsArrivals = buildCells(edCapacity, sandbox.residualDemand, residualDemandRaw, arrivals);
 
   // 2026-08-07 — boarding demand NET of what hold nurses actually absorb (`sandbox.holdApplied`,
   // capped at that hour's own medical boarding demand — same capping the rest of the sandbox
@@ -624,6 +626,15 @@ export function Panel5() {
     () => sandbox.residualDemand.map((r, i) => r - (result.hourlyRequirement[i] ?? 0)),
     [sandbox.residualDemand, result.hourlyRequirement]
   );
+  // Combined-toggle heatmap cells net boarding's claim on ED capacity out of `onDuty` before
+  // the WHPPV ratio, same reference shape as `combinedQueueDepth`'s own netting just below —
+  // hourly EFFECTIVE WHPPV (what's left for arrivals), not the same edCapacity/arrivals ratio
+  // the "Arrivals" toggle already shows. Clamped >=0: a negative claim (hold nurses absorbing
+  // more than this hour's unmet boarding) shouldn't inflate onDuty for the ratio.
+  const cellsCombined = useMemo(
+    () => buildCells(edCapacity, sandbox.residualDemand, residualDemandRaw, arrivals, boardingClaimOnEd168.map((v) => Math.max(0, v))),
+    [edCapacity, sandbox.residualDemand, residualDemandRaw, arrivals, boardingClaimOnEd168]
+  );
   const arrivalsQueueDepth = useMemo(
     () => computeBacklogFromCapacity(edCapacity, arrivals, result.hourlyRequirement, sortedShiftMenu, result.floorWhppv).backlog,
     [edCapacity, arrivals, result.hourlyRequirement, sortedShiftMenu, result.floorWhppv]
@@ -658,7 +669,7 @@ export function Panel5() {
       capacity168: edCapacity,
       queueDepth168: arrivalsQueueDepth,
       structuralFloor: null,
-      heatmapCells: cells,
+      heatmapCells: cellsArrivals,
     },
     {
       key: 'combined',
@@ -667,7 +678,7 @@ export function Panel5() {
       capacity168: combinedCapacity168,
       queueDepth168: combinedQueueDepth,
       structuralFloor: null,
-      heatmapCells: cells,
+      heatmapCells: cellsCombined,
     },
   ];
 

@@ -17,7 +17,8 @@ function buildCells(
   onDuty168: number[],
   requirement168: number[],
   demandRaw168: number[],
-  arrivals168: number[]
+  arrivals168: number[],
+  boardingCurve168?: number[] | null
 ): WhppvHeatmapCell[] {
   const cells: WhppvHeatmapCell[] = [];
   for (let day = 0; day < 7; day++) {
@@ -30,6 +31,7 @@ function buildCells(
         requirement: requirement168[g] ?? 0,
         demandRaw: demandRaw168[g] ?? 0,
         arrivals: arrivals168[g] ?? 0,
+        boardingRnHours: boardingCurve168 ? (boardingCurve168[g] ?? 0) : undefined,
         belowFloor: false,
         riskReasons: [],
       });
@@ -196,7 +198,7 @@ export function Panel3() {
       capacity168: capacity,
       queueDepth168: null,
       structuralFloor: null,
-      heatmapCells: buildCells(capacity, s.demand, s.demandRaw, arrivals),
+      heatmapCells: buildCells(capacity, s.demand, s.demandRaw, arrivals, key === 'combined' ? boardingCurve : null),
     } satisfies VisualFrameView;
   });
 

@@ -37,7 +37,8 @@ function buildCells(
   demandRaw168: number[],
   arrivals168: number[],
   belowFloorSet: Set<string>,
-  perShiftBreakdown168?: Array<Array<{ label: string; headcount: number }>>
+  perShiftBreakdown168?: Array<Array<{ label: string; headcount: number }>>,
+  boardingCurve168?: number[] | null
 ): WhppvHeatmapCell[] {
   const cells: WhppvHeatmapCell[] = [];
   for (let day = 0; day < 7; day++) {
@@ -52,6 +53,7 @@ function buildCells(
         requirement: requirement168[g] ?? 0,
         demandRaw: demandRaw168[g] ?? 0,
         arrivals: arrivals168[g] ?? 0,
+        boardingRnHours: boardingCurve168 ? (boardingCurve168[g] ?? 0) : undefined,
         belowFloor,
         riskReasons: belowFloor ? ['below the ENA on-duty floor'] : [],
         perShift,
@@ -222,7 +224,15 @@ export function Panel1() {
     enaFloorSet,
     perShiftBreakdown
   );
-  const combinedCells = buildCells(currentCapacity, combinedRequirement, combinedRequirementRaw, arrivals, enaFloorSet, perShiftBreakdown);
+  const combinedCells = buildCells(
+    currentCapacity,
+    combinedRequirement,
+    combinedRequirementRaw,
+    arrivals,
+    enaFloorSet,
+    perShiftBreakdown,
+    boardingCurve
+  );
 
   // §6 — the "Effective WHPPV" toggle is dropped entirely; the "Boarding" toggle was dropped
   // 2026-07-30 (Ben's ask) — two toggles remain (Arrivals, Arrivals + Boarding — renamed from
@@ -251,7 +261,7 @@ export function Panel1() {
       structuralFloor: backlogArrivals.structuralFloorMin,
       queueLabel: 'Arrivals backlog',
       heatmapCells: combinedCells,
-      heatmapSubLabel: 'Colored by realized WHPPV vs. your peer-typical range.',
+      heatmapSubLabel: 'Colored by hourly effective WHPPV (nets out boarding) vs. your peer-typical range.',
     },
   ];
 
